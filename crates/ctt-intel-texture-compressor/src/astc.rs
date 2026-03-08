@@ -1,3 +1,25 @@
+//! ASTC (Adaptive Scalable Texture Compression) block compression.
+//!
+//! # Input format
+//!
+//! Expects an [`RgbaSurface`] with **`R8 G8 B8 A8` interleaved** pixel data
+//! (4 bytes per pixel, little-endian RGBA). Whether alpha is encoded depends
+//! on [`EncodeSettings::channels`]: the `opaque_*` presets use `channels: 3`,
+//! while the `alpha_*` presets use `channels: 4`.
+//!
+//! # Output
+//!
+//! Each block is encoded into **16 bytes** (128 bits). The block dimensions
+//! are configurable via [`EncodeSettings::block_width`] and
+//! [`EncodeSettings::block_height`] (up to 8×8), giving a variable data rate.
+//! For example, 4×4 blocks yield 1 byte/pixel, while 8×8 blocks yield
+//! 0.25 bytes/pixel.
+//!
+//! # Limitations
+//!
+//! The `astc_encode` path is currently unimplemented — only the ranking /
+//! mode-selection pass (`astc_rank`) is functional.
+
 #![allow(dead_code)]
 #![allow(unused_variables)]
 
@@ -136,6 +158,16 @@ pub fn compress_blocks(settings: &EncodeSettings, surface: &RgbaSurface) -> Vec<
     output
 }
 
+/// Compresses an [`RgbaSurface`] into ASTC blocks.
+///
+/// The surface must contain `R8 G8 B8 A8` interleaved pixel data (4 bytes per
+/// pixel). Dimensions must be exact multiples of the configured block size.
+///
+/// # Panics
+///
+/// Panics if `blocks.len()` does not equal [`calc_output_size`], or if
+/// `surface.width` / `surface.height` are not multiples of the block
+/// dimensions.
 pub fn compress_blocks_into(settings: &EncodeSettings, surface: &RgbaSurface, blocks: &mut [u8]) {
     assert_eq!(surface.height % settings.block_height, 0);
     assert_eq!(surface.width % settings.block_width, 0);

@@ -1,3 +1,19 @@
+//! BC5 (RGTC2) block compression — two-channel (red + green).
+//!
+//! # Input format
+//!
+//! Expects an [`RgSurface`] with **`R8 G8` interleaved** pixel data (2 bytes
+//! per pixel). The byte sequence is `[R₀, G₀, R₁, G₁, …]`. The ISPC kernel
+//! reads 4 bytes at a time as a packed u32, de-interleaving two R and two G
+//! samples per read. Each channel is independently encoded into its own BC4
+//! block.
+//!
+//! # Output
+//!
+//! Each 4×4 texel block is encoded into **16 bytes** (1 byte/pixel):
+//! 8 bytes for the red channel block followed by 8 bytes for the green channel
+//! block.
+
 use crate::bindings::kernel;
 use crate::RgSurface;
 
@@ -16,6 +32,16 @@ pub fn compress_blocks(surface: &RgSurface) -> Vec<u8> {
     output
 }
 
+/// Compresses an [`RgSurface`] into BC5 blocks.
+///
+/// The surface must contain `R8 G8` interleaved pixel data (2 bytes per
+/// pixel). The R and G channels are independently encoded into separate BC4
+/// blocks.
+///
+/// # Panics
+///
+/// Panics if `blocks.len()` does not equal [`calc_output_size`] for the given
+/// surface dimensions.
 pub fn compress_blocks_into(surface: &RgSurface, blocks: &mut [u8]) {
     assert_eq!(
         blocks.len(),

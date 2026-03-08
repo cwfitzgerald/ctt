@@ -1,3 +1,16 @@
+//! BC4 (RGTC1) block compression — single-channel (red).
+//!
+//! # Input format
+//!
+//! Expects an [`RSurface`] with **`R8`** pixel data (1 byte per pixel). Each
+//! byte is an unsigned 8-bit value in `0..=255`. The ISPC kernel reads 4
+//! consecutive bytes at a time as a packed u32, extracting one R sample per
+//! byte.
+//!
+//! # Output
+//!
+//! Each 4×4 texel block is encoded into **8 bytes** (0.5 bytes/pixel).
+
 use crate::bindings::kernel;
 use crate::RSurface;
 
@@ -16,6 +29,15 @@ pub fn compress_blocks(surface: &RSurface) -> Vec<u8> {
     output
 }
 
+/// Compresses an [`RSurface`] into BC4 blocks.
+///
+/// The surface must contain `R8` pixel data (1 byte per pixel), where each
+/// byte is an unsigned 8-bit sample.
+///
+/// # Panics
+///
+/// Panics if `blocks.len()` does not equal [`calc_output_size`] for the given
+/// surface dimensions.
 pub fn compress_blocks_into(surface: &RSurface, blocks: &mut [u8]) {
     assert_eq!(
         blocks.len(),

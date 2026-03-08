@@ -1,3 +1,18 @@
+//! BC7 block compression — RGBA (high-quality).
+//!
+//! # Input format
+//!
+//! Expects an [`RgbaSurface`] with **`R8 G8 B8 A8` interleaved** pixel data
+//! (4 bytes per pixel, little-endian RGBA). Whether alpha is actually encoded
+//! depends on the [`EncodeSettings`]: the `opaque_*` presets set `channels: 3`
+//! (RGB only), while the `alpha_*` presets set `channels: 4` (full RGBA). In
+//! both cases the surface layout is the same 4-byte-per-pixel format.
+//!
+//! # Output
+//!
+//! Each 4×4 texel block is encoded into **16 bytes** (1 byte/pixel). BC7
+//! selects among 8 internal modes to balance color and alpha precision.
+
 use crate::bindings::kernel;
 use crate::RgbaSurface;
 
@@ -29,6 +44,16 @@ pub fn compress_blocks(settings: &EncodeSettings, surface: &RgbaSurface) -> Vec<
     output
 }
 
+/// Compresses an [`RgbaSurface`] into BC7 blocks.
+///
+/// The surface must contain `R8 G8 B8 A8` interleaved pixel data (4 bytes per
+/// pixel). Whether the encoder uses the alpha channel depends on
+/// `settings.channels` (3 = opaque, 4 = with alpha).
+///
+/// # Panics
+///
+/// Panics if `blocks.len()` does not equal [`calc_output_size`] for the given
+/// surface dimensions.
 pub fn compress_blocks_into(settings: &EncodeSettings, surface: &RgbaSurface, blocks: &mut [u8]) {
     assert_eq!(
         blocks.len(),

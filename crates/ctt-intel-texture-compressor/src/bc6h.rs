@@ -1,5 +1,29 @@
+//! BC6H block compression — RGB HDR (unsigned 16-bit).
+//!
+//! # Input format
+//!
+//! Expects an [`Rgba16Surface`] with **`R16 G16 B16 A16` interleaved** pixel
+//! data (8 bytes per pixel). Each channel is a **little-endian unsigned 16-bit
+//! integer** (u16) in the range `0..=65535`. The alpha channel is present in
+//! the layout but **ignored** by the encoder (it is set to zero internally).
+//!
+//! The ISPC kernel reads each channel with 2-byte offsets from the row base
+//! pointer and masks to 16 bits (`& 0xFFFF`). The quantization path normalizes
+//! against `65535` (`256² − 1`), confirming a full u16 value range.
+//!
+//! **Note:** despite the name "half-float" often associated with BC6H, this
+//! encoder takes raw u16 values, not IEEE 754 binary16 (half-precision)
+//! floats. Callers that have f16 data should transmute / bitcast their
+//! half-float bits into u16 before passing them in.
+//!
+//! # Output
+//!
+//! Each 4×4 texel block is encoded into **16 bytes** (1 byte/pixel). The
+//! format stores unsigned half-float endpoints; signed BC6H is not supported
+//! by this encoder.
+
 use crate::bindings::kernel;
-use crate::RgbaSurface;
+use crate::Rgba16Surface;
 
 #[derive(Debug, Copy, Clone)]
 pub struct EncodeSettings {
@@ -18,14 +42,24 @@ pub fn calc_output_size(width: u32, height: u32) -> usize {
 }
 
 #[must_use]
-pub fn compress_blocks(settings: &EncodeSettings, surface: &RgbaSurface) -> Vec<u8> {
+pub fn compress_blocks(settings: &EncodeSettings, surface: &Rgba16Surface) -> Vec<u8> {
     let output_size = calc_output_size(surface.width, surface.height);
     let mut output = vec![0u8; output_size];
     compress_blocks_into(settings, surface, &mut output);
     output
 }
 
-pub fn compress_blocks_into(settings: &EncodeSettings, surface: &RgbaSurface, blocks: &mut [u8]) {
+/// Compresses an [`Rgba16Surface`] into BC6H blocks.
+///
+/// The surface must contain `R16 G16 B16 A16` interleaved pixel data (8 bytes
+/// per pixel) where each channel is a little-endian u16. Only the R, G, and B
+/// channels are encoded; the alpha channel is ignored.
+///
+/// # Panics
+///
+/// Panics if `blocks.len()` does not equal [`calc_output_size`] for the given
+/// surface dimensions.
+pub fn compress_blocks_into(settings: &EncodeSettings, surface: &Rgba16Surface, blocks: &mut [u8]) {
     assert_eq!(
         blocks.len(),
         calc_output_size(surface.width, surface.height)

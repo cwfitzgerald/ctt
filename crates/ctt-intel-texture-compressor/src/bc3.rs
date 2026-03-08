@@ -1,3 +1,17 @@
+//! BC3 (DXT5) block compression — RGBA with interpolated alpha.
+//!
+//! # Input format
+//!
+//! Expects an [`RgbaSurface`] with **`R8 G8 B8 A8` interleaved** pixel data
+//! (4 bytes per pixel, little-endian RGBA). All four channels are read and
+//! encoded: RGB into a BC1-style color block, and alpha into a separate
+//! interpolated alpha block.
+//!
+//! # Output
+//!
+//! Each 4×4 texel block is encoded into **16 bytes** (1 byte/pixel):
+//! 8 bytes for the alpha block followed by 8 bytes for the color block.
+
 use crate::bindings::kernel;
 use crate::RgbaSurface;
 
@@ -16,6 +30,15 @@ pub fn compress_blocks(surface: &RgbaSurface) -> Vec<u8> {
     output
 }
 
+/// Compresses an [`RgbaSurface`] into BC3 blocks.
+///
+/// The surface must contain `R8 G8 B8 A8` interleaved pixel data (4 bytes per
+/// pixel). All four channels (R, G, B, A) are read and encoded.
+///
+/// # Panics
+///
+/// Panics if `blocks.len()` does not equal [`calc_output_size`] for the given
+/// surface dimensions.
 pub fn compress_blocks_into(surface: &RgbaSurface, blocks: &mut [u8]) {
     assert_eq!(
         blocks.len(),

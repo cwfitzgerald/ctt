@@ -1,3 +1,15 @@
+//! ETC1 (Ericsson Texture Compression 1) block compression — RGB, no alpha.
+//!
+//! # Input format
+//!
+//! Expects an [`RgbaSurface`] with **`R8 G8 B8 A8` interleaved** pixel data
+//! (4 bytes per pixel, little-endian RGBA). Only the **R, G, B** channels are
+//! used; the alpha channel is read but ignored.
+//!
+//! # Output
+//!
+//! Each 4×4 texel block is encoded into **8 bytes** (0.5 bytes/pixel).
+
 use crate::bindings::kernel;
 use crate::RgbaSurface;
 
@@ -21,6 +33,16 @@ pub fn compress_blocks(settings: &EncodeSettings, surface: &RgbaSurface) -> Vec<
     output
 }
 
+/// Compresses an [`RgbaSurface`] into ETC1 blocks.
+///
+/// The surface must contain `R8 G8 B8 A8` interleaved pixel data (4 bytes per
+/// pixel). Only the R, G, and B channels are read; the alpha byte is present
+/// in the layout but ignored by the encoder.
+///
+/// # Panics
+///
+/// Panics if `blocks.len()` does not equal [`calc_output_size`] for the given
+/// surface dimensions.
 pub fn compress_blocks_into(settings: &EncodeSettings, surface: &RgbaSurface, blocks: &mut [u8]) {
     assert_eq!(
         blocks.len(),

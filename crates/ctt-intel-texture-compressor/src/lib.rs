@@ -14,19 +14,41 @@ pub mod bc7;
 pub mod etc1;
 
 /// Describes a 2D image to block-compress.
+///
+/// `COMPONENTS` is the number of **bytes per pixel** in the source data. This
+/// determines the expected tightly-packed stride (`width * COMPONENTS`) and is
+/// used to validate that `data` is large enough. The actual channel layout
+/// depends on which encoder consumes the surface — see the individual format
+/// modules for details.
+///
+/// # Available surface type aliases
+///
+/// | Alias | `COMPONENTS` | Layout | Used by |
+/// |---|---|---|---|
+/// | [`RSurface`] | 1 | `R8` (1 byte/pixel) | [`bc4`] |
+/// | [`RgSurface`] | 2 | `R8 G8` interleaved (2 bytes/pixel) | [`bc5`] |
+/// | [`RgbaSurface`] | 4 | `R8 G8 B8 A8` interleaved (4 bytes/pixel) | [`bc1`], [`bc3`], [`bc7`], [`astc`], [`etc1`] |
+/// | [`Rgba16Surface`] | 8 | `R16 G16 B16 A16` interleaved (8 bytes/pixel) | [`bc6h`] |
 #[derive(Debug, Copy, Clone)]
 pub struct Surface<'a, const COMPONENTS: usize> {
-    /// The pixel data for the image.
-    /// The data does not need to be tightly packed, but if it isn't, stride must be different from `width * COMPONENTS`.
+    /// The raw pixel data for the image.
     ///
-    /// Expected to be at least `stride * height`.
+    /// The byte interpretation depends on the encoder that consumes this
+    /// surface. For most formats, each byte is one u8 channel sample. For
+    /// [`bc6h`], every two bytes form a little-endian u16 channel sample.
+    ///
+    /// The data does not need to be tightly packed, but if it isn't, `stride`
+    /// must differ from `width * COMPONENTS`.
+    ///
+    /// Expected to be at least `stride * height` bytes.
     pub data: &'a [u8],
     /// The width of the image in texels.
     pub width: u32,
     /// The height of the image in texels.
     pub height: u32,
-    /// The stride between the rows of the image, in bytes.
-    /// If `data` is tightly packed, this is expected to be `width * COMPONENTS`.
+    /// The stride between rows of the image, in bytes.
+    ///
+    /// For tightly-packed data this is `width * COMPONENTS`.
     pub stride: u32,
 }
 
@@ -67,6 +89,24 @@ impl<'a, const COMPONENTS: usize> Surface<'a, COMPONENTS> {
     }
 }
 
+/// 4-channel, 8-bit surface: `R8 G8 B8 A8` — 4 bytes per pixel.
+///
+/// Used by [`bc1`], [`bc3`], [`bc7`], [`astc`], and [`etc1`].
 pub type RgbaSurface<'a> = Surface<'a, 4>;
+
+/// 2-channel, 8-bit surface: `R8 G8` interleaved — 2 bytes per pixel.
+///
+/// Used by [`bc5`].
 pub type RgSurface<'a> = Surface<'a, 2>;
+
+/// 1-channel, 8-bit surface: `R8` — 1 byte per pixel.
+///
+/// Used by [`bc4`].
 pub type RSurface<'a> = Surface<'a, 1>;
+
+/// 4-channel, 16-bit surface: `R16 G16 B16 A16` — 8 bytes per pixel.
+///
+/// Each channel is a little-endian unsigned 16-bit integer (u16) in the range
+/// `0..=65535`. The alpha channel is present in the layout but ignored by
+/// [`bc6h`].
+pub type Rgba16Surface<'a> = Surface<'a, 8>;
