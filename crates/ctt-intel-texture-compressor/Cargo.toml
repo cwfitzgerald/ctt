@@ -1,0 +1,24 @@
+[package]
+name = "ctt-intel-texture-compressor"
+version.workspace = true
+edition.workspace = true
+authors = [
+    "The ctt developers",
+    "Traverse Research <opensource@traverseresearch.nl>",
+    "Graham Wihlidal <graham@wihlidal.ca>",
+    "Intel Corporation",
+]
+license = "(MIT OR Apache-2.0) AND MIT"
+description = "Vendored Intel ISPC texture compressor bindings, based on intel_tex_2"
+build = "build.rs"
+
+[dependencies]
+ispc_rt = "2"
+
+[build-dependencies]
+ispc_compile = "2.0.1"
+cc = "1"
+ispc_rt = "2"
+
+[lints]
+workspace = true

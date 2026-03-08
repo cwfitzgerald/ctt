@@ -1,0 +1,14 @@
+[workspace]
+members = ["crates/*"]
+resolver = "3"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+authors = ["The ctt developers"]
+license = "MIT OR Apache-2.0 OR Zlib"
+
+[workspace.lints]
+
+[workspace.dependencies]
+ctt-intel-texture-compressor = { path = "crates/ctt-intel-texture-compressor" }
