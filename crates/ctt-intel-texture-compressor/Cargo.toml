@@ -2,6 +2,7 @@
 name = "ctt-intel-texture-compressor"
 version.workspace = true
 edition.workspace = true
+repository.workspace = true
 authors = [
     "The ctt developers",
     "Traverse Research <opensource@traverseresearch.nl>",

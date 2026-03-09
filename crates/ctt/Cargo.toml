@@ -4,6 +4,8 @@ version.workspace = true
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
+repository.workspace = true
+description = "Compress images to GPU texture formats"
 
 [dependencies]
 ctt-intel-texture-compressor = { workspace = true }
