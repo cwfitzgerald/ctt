@@ -45,5 +45,6 @@ fn main() {
         .include(&out_dir)
         .include("ispc")
         .file("ispc/ispc_texcomp_astc.cpp")
+        .cpp(true)
         .compile("ispc_texcomp_astc");
 }

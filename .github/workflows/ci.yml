@@ -85,6 +85,9 @@ jobs:
       - name: Clippy
         run: cargo clippy --target ${{ matrix.target }} --all-targets
 
+      - name: Build
+        run: cargo build --target ${{ matrix.target }}
+
       - name: Test
         if: ${{ matrix.test }}
         run: cargo nextest run --target ${{ matrix.target }}
