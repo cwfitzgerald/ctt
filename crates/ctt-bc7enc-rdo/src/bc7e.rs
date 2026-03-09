@@ -41,12 +41,12 @@ pub fn calc_output_size(width: u32, height: u32) -> usize {
 ///
 /// Panics if `blocks` or `pixels` are not correctly sized for the given
 /// number of blocks.
-pub fn compress_blocks(
-    blocks: &mut [u8],
-    pixels: &[u8],
-    params: &ffi::bc7e_compress_block_params,
-) {
-    assert_eq!(blocks.len() % 16, 0, "output must be a multiple of 16 bytes");
+pub fn compress_blocks(blocks: &mut [u8], pixels: &[u8], params: &ffi::bc7e_compress_block_params) {
+    assert_eq!(
+        blocks.len() % 16,
+        0,
+        "output must be a multiple of 16 bytes"
+    );
     let num_blocks = blocks.len() / 16;
     assert_eq!(
         pixels.len(),
@@ -167,6 +167,9 @@ mod tests {
         compress_blocks(&mut output, &pixels, &params);
 
         // The output should be non-zero (a valid BC7 block).
-        assert!(output.iter().any(|&b| b != 0), "expected non-zero BC7 output");
+        assert!(
+            output.iter().any(|&b| b != 0),
+            "expected non-zero BC7 output"
+        );
     }
 }

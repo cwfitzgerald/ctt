@@ -7,8 +7,14 @@ license.workspace = true
 repository.workspace = true
 description = "Compress images to GPU texture formats"
 
+[features]
+default = ["encoder-ispc", "encoder-bc7enc"]
+encoder-ispc = ["dep:ctt-intel-texture-compressor"]
+encoder-bc7enc = ["dep:ctt-bc7enc-rdo"]
+
 [dependencies]
-ctt-intel-texture-compressor = { workspace = true }
+ctt-intel-texture-compressor = { workspace = true, optional = true }
+ctt-bc7enc-rdo = { workspace = true, optional = true }
 ddsfile = { workspace = true }
 half = { workspace = true }
 ktx2 = { workspace = true }

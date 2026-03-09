@@ -10,36 +10,6 @@ pub enum CompressedFormat {
     Astc { block_width: u8, block_height: u8 },
 }
 
-impl CompressedFormat {
-    /// The pixel format that the underlying compressor expects as input.
-    ///
-    /// `color_space` is passed through — the compressor doesn't change it.
-    pub fn required_input_format(self, color_space: ColorSpace) -> PixelFormat {
-        match self {
-            Self::Bc1 | Self::Bc3 | Self::Bc7 | Self::Etc1 | Self::Astc { .. } => PixelFormat {
-                components: PixelComponents::Rgba,
-                channel_type: ChannelType::U8,
-                color_space,
-            },
-            Self::Bc4 => PixelFormat {
-                components: PixelComponents::R,
-                channel_type: ChannelType::U8,
-                color_space,
-            },
-            Self::Bc5 => PixelFormat {
-                components: PixelComponents::Rg,
-                channel_type: ChannelType::U8,
-                color_space,
-            },
-            Self::Bc6h => PixelFormat {
-                components: PixelComponents::Rgba,
-                channel_type: ChannelType::U16,
-                color_space,
-            },
-        }
-    }
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum ColorSpace {
     #[default]

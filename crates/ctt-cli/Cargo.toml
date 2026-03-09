@@ -12,7 +12,7 @@ name = "ctt"
 path = "src/main.rs"
 
 [dependencies]
-ctt = { workspace = true }
+ctt = { workspace = true, features = ["encoder-ispc", "encoder-bc7enc"] }
 clap = { workspace = true }
 image = { workspace = true }
 bytemuck = { workspace = true }

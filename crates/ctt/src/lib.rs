@@ -1,5 +1,7 @@
 pub mod compress;
 pub mod config;
+pub mod encoder;
+pub mod encoders;
 pub mod error;
 pub mod format;
 pub mod image;

@@ -1,5 +1,6 @@
 use crate::compress::compress_layout;
-use crate::config::{CompressConfig, EncodeSettings, OutputFormat};
+use crate::config::{CompressConfig, OutputFormat};
+use crate::encoder::EncoderRegistry;
 use crate::error::{Error, Result};
 use crate::format::CompressedFormat;
 use crate::image::ImageLayout;
@@ -10,8 +11,36 @@ use crate::transform::swizzle::apply_swizzle;
 /// Run the full compression pipeline: swizzle -> convert -> compress -> encode.
 ///
 /// Returns the encoded file bytes (DDS or KTX2).
-pub fn run(config: &CompressConfig, mut layout: ImageLayout) -> Result<Vec<u8>> {
+pub fn run(config: &CompressConfig, layout: ImageLayout) -> Result<Vec<u8>> {
+    let registry = EncoderRegistry::default_registry();
+    run_with_registry(config, layout, &registry)
+}
+
+/// Run the pipeline with an explicit encoder registry.
+pub fn run_with_registry(
+    config: &CompressConfig,
+    mut layout: ImageLayout,
+    registry: &EncoderRegistry,
+) -> Result<Vec<u8>> {
     validate(config, &layout)?;
+
+    // Resolve encoder.
+    let encoder = if let Some(ref name) = config.encoder_name {
+        registry
+            .find_by_name(name, config.format)
+            .ok_or_else(|| {
+                Error::UnsupportedFormat(format!(
+                    "no encoder named '{}' supports {:?}",
+                    name, config.format
+                ))
+            })?
+    } else {
+        registry.find(config.format).ok_or_else(|| {
+            Error::UnsupportedFormat(format!("no encoder supports {:?}", config.format))
+        })?
+    };
+
+    log::info!("Using encoder '{}' for {:?}", encoder.name(), config.format);
 
     // Apply swizzle if configured.
     if let Some(ref swizzle) = config.swizzle {
@@ -23,8 +52,8 @@ pub fn run(config: &CompressConfig, mut layout: ImageLayout) -> Result<Vec<u8>> 
         }
     }
 
-    // Convert images to the format required by the compressor.
-    let required_format = config.format.required_input_format(config.color_space);
+    // Convert images to the format required by the encoder.
+    let required_format = encoder.required_input_format(config.format, config.color_space);
     log::info!("Converting images to {}", required_format);
     for layer in &mut layout.layers {
         for image in layer {
@@ -38,11 +67,16 @@ pub fn run(config: &CompressConfig, mut layout: ImageLayout) -> Result<Vec<u8>> 
     }
 
     // Compress all layers and mip levels.
-    let settings = config
-        .encode_settings
-        .unwrap_or_else(|| EncodeSettings::default_for(config.format));
     log::info!("Compressing as {:?}", config.format);
-    let compressed = compress_layout(&layout, config.format, config.color_space, &settings)?;
+    let settings_ref = config.encoder_settings.as_deref();
+    let compressed = compress_layout(
+        encoder,
+        &layout,
+        config.format,
+        config.color_space,
+        config.quality,
+        settings_ref,
+    )?;
 
     // Encode to the requested output format.
     log::info!("Encoding as {:?}", config.output_format);

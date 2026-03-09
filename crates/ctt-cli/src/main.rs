@@ -5,9 +5,8 @@ use std::process::ExitCode;
 
 use clap::Parser;
 
-use ctt::config::{
-    Bc6hQuality, Bc7Quality, Bc7Settings, CompressConfig, EncodeSettings, Etc1Quality, OutputFormat,
-};
+use ctt::config::{CompressConfig, OutputFormat};
+use ctt::encoder::{EncoderRegistry, Quality};
 use ctt::error::Error;
 use ctt::format::{ChannelType, ColorSpace, CompressedFormat, PixelComponents, PixelFormat};
 use ctt::image::{ImageLayout, RawImage};
@@ -47,30 +46,41 @@ fn setup_logger(verbose: u8) {
 }
 
 fn run(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
+    if args.list_encoders {
+        print_encoder_table();
+        return Ok(());
+    }
+
+    let format_str = args.format.as_deref().unwrap();
+    let output = args.output.as_ref().unwrap();
+
     let color_space = match args.color_space {
         ColorSpaceArg::Srgb => ColorSpace::Srgb,
         ColorSpaceArg::Linear => ColorSpace::Linear,
     };
 
-    let format = parse_format(&args.format)?;
+    let (encoder_name, format) = parse_format(format_str)?;
     let output_format = match args.container {
         ContainerArg::Dds => OutputFormat::Dds,
         ContainerArg::Ktx2 => OutputFormat::Ktx2,
     };
     let swizzle = args.swizzle.as_deref().map(parse_swizzle).transpose()?;
-    let encode_settings = build_encode_settings(format, args.quality, args.alpha);
+    let quality = map_quality(args.quality);
+
+    let encoder_settings = build_encoder_settings(args);
 
     let config = CompressConfig {
         format,
         output_format,
         swizzle,
         color_space,
-        encode_settings: Some(encode_settings),
+        quality,
+        encoder_name,
+        encoder_settings,
     };
 
     log::info!(
-        "Format: {format:?}, container: {output_format:?}, quality: {:?}, color space: {color_space:?}",
-        args.quality
+        "Format: {format:?}, container: {output_format:?}, quality: {quality:?}, color space: {color_space:?}",
     );
 
     // Load input images in their native format.
@@ -92,13 +102,46 @@ fn run(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
     let output_bytes = ctt::pipeline::run(&config, layout)?;
 
     // Write output.
-    fs::write(&args.output, &output_bytes)?;
+    fs::write(output, &output_bytes)?;
     log::info!(
         "Output written: {} ({} bytes)",
-        args.output.display(),
+        output.display(),
         output_bytes.len()
     );
     Ok(())
+}
+
+fn print_encoder_table() {
+    let registry = EncoderRegistry::default_registry();
+    let encoders = registry.encoders();
+
+    if encoders.is_empty() {
+        println!("No encoder backends are enabled.");
+        println!("Recompile with features: encoder-ispc, encoder-bc7enc");
+        return;
+    }
+
+    // Header
+    println!("{:<10} {:<12} Formats", "Encoder", "Priority");
+    println!("{:<10} {:<12} -------", "-------", "--------");
+
+    for (i, encoder) in encoders.iter().enumerate() {
+        let formats: Vec<String> = encoder
+            .supported_formats()
+            .iter()
+            .map(|f| format!("{f:?}").to_lowercase())
+            .collect();
+        println!(
+            "{:<10} {:<12} {}",
+            encoder.name(),
+            i + 1,
+            formats.join(", ")
+        );
+    }
+
+    println!();
+    println!("Use a bare format name (e.g. bc7) to use the highest-priority encoder,");
+    println!("or prefix with the encoder name (e.g. ispc_bc7) to choose explicitly.");
 }
 
 fn load_images(
@@ -196,43 +239,50 @@ fn build_cubemap_layout(
     })
 }
 
-fn build_encode_settings(
-    format: CompressedFormat,
-    quality: QualityArg,
-    alpha: bool,
-) -> EncodeSettings {
-    match format {
-        CompressedFormat::Bc1 => EncodeSettings::Bc1,
-        CompressedFormat::Bc3 => EncodeSettings::Bc3,
-        CompressedFormat::Bc4 => EncodeSettings::Bc4,
-        CompressedFormat::Bc5 => EncodeSettings::Bc5,
-        CompressedFormat::Bc6h => {
-            let q = match quality {
-                QualityArg::UltraFast | QualityArg::VeryFast => Bc6hQuality::VeryFast,
-                QualityArg::Fast => Bc6hQuality::Fast,
-                QualityArg::Basic => Bc6hQuality::Basic,
-                QualityArg::Slow => Bc6hQuality::Slow,
-                QualityArg::VerySlow => Bc6hQuality::VerySlow,
-            };
-            EncodeSettings::Bc6h(q)
-        }
-        CompressedFormat::Bc7 => {
-            let q = match quality {
-                QualityArg::UltraFast => Bc7Quality::UltraFast,
-                QualityArg::VeryFast => Bc7Quality::VeryFast,
-                QualityArg::Fast => Bc7Quality::Fast,
-                QualityArg::Basic => Bc7Quality::Basic,
-                QualityArg::Slow | QualityArg::VerySlow => Bc7Quality::Slow,
-            };
-            EncodeSettings::Bc7(Bc7Settings { quality: q, alpha })
-        }
-        CompressedFormat::Etc1 => EncodeSettings::Etc1(Etc1Quality::Slow),
-        CompressedFormat::Astc { .. } => EncodeSettings::Astc,
+fn map_quality(q: QualityArg) -> Quality {
+    match q {
+        QualityArg::UltraFast => Quality::UltraFast,
+        QualityArg::VeryFast => Quality::VeryFast,
+        QualityArg::Fast => Quality::Fast,
+        QualityArg::Basic => Quality::Basic,
+        QualityArg::Slow => Quality::Slow,
+        QualityArg::VerySlow => Quality::VerySlow,
     }
 }
 
-fn parse_format(s: &str) -> Result<CompressedFormat, Error> {
-    match s.to_lowercase().as_str() {
+/// Build encoder-specific settings from CLI args.
+fn build_encoder_settings(args: &Args) -> Option<Box<dyn ctt::encoder::EncoderSettings>> {
+    if args.alpha {
+        return Some(Box::new(
+            ctt::encoders::ispc::IspcSettings { alpha: true },
+        ));
+    }
+    None
+}
+
+/// Parse a format string, optionally with an encoder prefix (e.g., "ispc_bc7", "bc7e_bc7").
+///
+/// Returns `(optional_encoder_name, compressed_format)`.
+fn parse_format(s: &str) -> Result<(Option<String>, CompressedFormat), Error> {
+    let lower = s.to_lowercase();
+
+    // Try to parse as a prefixed format: "encoder_format".
+    // Known encoder prefixes are tried first to avoid ambiguity with format names.
+    let known_prefixes = ["ispc", "bc7e"];
+    for prefix in &known_prefixes {
+        if let Some(rest) = lower.strip_prefix(prefix).and_then(|r| r.strip_prefix('_')) {
+            let format = parse_bare_format(rest, s)?;
+            return Ok((Some(prefix.to_string()), format));
+        }
+    }
+
+    // No prefix — parse as bare format.
+    let format = parse_bare_format(&lower, s)?;
+    Ok((None, format))
+}
+
+fn parse_bare_format(lower: &str, original: &str) -> Result<CompressedFormat, Error> {
+    match lower {
         "bc1" => Ok(CompressedFormat::Bc1),
         "bc3" => Ok(CompressedFormat::Bc3),
         "bc4" => Ok(CompressedFormat::Bc4),
@@ -244,15 +294,19 @@ fn parse_format(s: &str) -> Result<CompressedFormat, Error> {
             if let Some(rest) = other.strip_prefix("astc_") {
                 let (w, h) = rest
                     .split_once('x')
-                    .ok_or_else(|| Error::UnsupportedFormat(s.into()))?;
-                let block_width: u8 = w.parse().map_err(|_| Error::UnsupportedFormat(s.into()))?;
-                let block_height: u8 = h.parse().map_err(|_| Error::UnsupportedFormat(s.into()))?;
+                    .ok_or_else(|| Error::UnsupportedFormat(original.into()))?;
+                let block_width: u8 = w
+                    .parse()
+                    .map_err(|_| Error::UnsupportedFormat(original.into()))?;
+                let block_height: u8 = h
+                    .parse()
+                    .map_err(|_| Error::UnsupportedFormat(original.into()))?;
                 Ok(CompressedFormat::Astc {
                     block_width,
                     block_height,
                 })
             } else {
-                Err(Error::UnsupportedFormat(s.into()))
+                Err(Error::UnsupportedFormat(original.into()))
             }
         }
     }

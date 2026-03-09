@@ -7,16 +7,16 @@ use clap::Parser;
 #[command(name = "ctt", version, about)]
 pub struct Args {
     /// Input image file(s). For cubemaps with separate faces, provide 6 files.
-    #[arg(required = true)]
+    #[arg(required_unless_present = "list_encoders")]
     pub input: Vec<PathBuf>,
 
     /// Output file path.
-    #[arg(short, long)]
-    pub output: PathBuf,
+    #[arg(short, long, required_unless_present = "list_encoders")]
+    pub output: Option<PathBuf>,
 
-    /// Compression format (bc1, bc3, bc4, bc5, bc6h, bc7, etc1, astc_4x4, astc_6x6, ...).
-    #[arg(short, long)]
-    pub format: String,
+    /// Compression format. Bare (bc1, bc7) or prefixed with encoder (ispc_bc7, bc7e_bc7).
+    #[arg(short, long, required_unless_present = "list_encoders")]
+    pub format: Option<String>,
 
     /// Output container format.
     #[arg(short, long, default_value = "ktx2")]
@@ -48,6 +48,10 @@ pub struct Args {
     /// Encode alpha channel (for BC7).
     #[arg(long)]
     pub alpha: bool,
+
+    /// List available encoder backends and their supported formats.
+    #[arg(long)]
+    pub list_encoders: bool,
 
     /// Increase logging verbosity (-v = debug, -vv = trace).
     #[arg(short, action = clap::ArgAction::Count)]
