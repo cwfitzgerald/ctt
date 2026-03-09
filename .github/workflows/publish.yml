@@ -1,19 +1,19 @@
-name: CI
+name: Publish
 
 on:
   push:
-    branches: [trunk]
-  pull_request:
-  workflow_call:
-
-env:
-  ISPC_VERSION: "1.30.0"
-  RUSTFLAGS: "-D warnings"
+    tags: ['v*']
 
 jobs:
   ci:
-    name: ${{ matrix.name }}
+    uses: ./.github/workflows/ci.yml
+
+  build-release:
+    needs: ci
+    name: Build ${{ matrix.name }}
     runs-on: ${{ matrix.os }}
+    env:
+      ISPC_VERSION: "1.30.0"
     strategy:
       fail-fast: false
       matrix:
@@ -23,37 +23,31 @@ jobs:
             target: x86_64-unknown-linux-gnu
             ispc_asset_suffix: linux
             ispc_ext: tar.gz
-            test: true
           - name: Linux aarch64
             os: ubuntu-24.04-arm
             target: aarch64-unknown-linux-gnu
             ispc_asset_suffix: linux.aarch64
             ispc_ext: tar.gz
-            test: true
           - name: macOS aarch64
             os: macos-latest
             target: aarch64-apple-darwin
             ispc_asset_suffix: macOS.arm64
             ispc_ext: tar.gz
-            test: true
           - name: macOS x86_64
             os: macos-latest
             target: x86_64-apple-darwin
             ispc_asset_suffix: macOS.arm64
             ispc_ext: tar.gz
-            test: true
           - name: Windows x86_64
             os: windows-latest
             target: x86_64-pc-windows-msvc
             ispc_asset_suffix: windows
             ispc_ext: zip
-            test: true
           - name: Windows aarch64
             os: windows-latest
             target: aarch64-pc-windows-msvc
             ispc_asset_suffix: windows
             ispc_ext: zip
-            test: false
     steps:
       - uses: actions/checkout@v4
 
@@ -61,12 +55,6 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
-          components: clippy
-
-      - name: Install cargo-nextest
-        uses: taiki-e/install-action@v2
-        with:
-          tool: cargo-nextest
 
       - name: Download ISPC
         shell: bash
@@ -82,9 +70,46 @@ jobs:
           fi
           echo "$GITHUB_WORKSPACE/ispc_extracted/${ISPC_ASSET}/bin" >> "$GITHUB_PATH"
 
-      - name: Clippy
-        run: cargo clippy --target ${{ matrix.target }} --all-targets
+      - name: Build
+        run: cargo build --release --target ${{ matrix.target }} -p ctt-cli
 
-      - name: Test
-        if: ${{ matrix.test }}
-        run: cargo nextest run --target ${{ matrix.target }}
+      - name: Package
+        shell: bash
+        run: |
+          VERSION="${GITHUB_REF_NAME}"
+          ARCHIVE_NAME="ctt-cli-${{ matrix.target }}-${VERSION}"
+          mkdir -p "${ARCHIVE_NAME}"
+          if [[ "${{ matrix.target }}" == *windows* ]]; then
+            cp "target/${{ matrix.target }}/release/ctt.exe" "${ARCHIVE_NAME}/"
+            7z a "${ARCHIVE_NAME}.zip" "${ARCHIVE_NAME}"
+          else
+            cp "target/${{ matrix.target }}/release/ctt" "${ARCHIVE_NAME}/"
+            tar czf "${ARCHIVE_NAME}.tar.gz" "${ARCHIVE_NAME}"
+          fi
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.target }}
+          path: ctt-cli-*
+
+  publish:
+    needs: build-release
+    name: Publish Release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: release-*
+          merge-multiple: true
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            ctt-cli-*.tar.gz
+            ctt-cli-*.zip
+          generate_release_notes: true
