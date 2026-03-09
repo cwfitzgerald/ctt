@@ -395,6 +395,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "ctt-bc7enc-rdo"
+version = "0.1.0"
+dependencies = [
+ "ispc_compile",
+ "ispc_rt",
+]
+
+[[package]]
 name = "ctt-cli"
 version = "0.1.0"
 dependencies = [

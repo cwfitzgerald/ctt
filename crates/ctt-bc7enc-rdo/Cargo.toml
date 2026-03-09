@@ -1,0 +1,22 @@
+[package]
+name = "ctt-bc7enc-rdo"
+version.workspace = true
+edition.workspace = true
+repository.workspace = true
+authors = [
+    "The ctt developers",
+    "Rich Geldreich <richgel99@gmail.com>",
+]
+license = "(MIT OR Apache-2.0) AND Apache-2.0"
+description = "Vendored bc7enc_rdo bindings with ISPC bc7e encoder"
+build = "build.rs"
+
+[dependencies]
+ispc_rt = "2"
+
+[build-dependencies]
+ispc_compile = "2.0.1"
+ispc_rt = "2"
+
+[lints]
+workspace = true

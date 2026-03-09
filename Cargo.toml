@@ -14,6 +14,7 @@ repository = "https://github.com/cwfitzgerald/ctt"
 [workspace.dependencies]
 ctt = { path = "crates/ctt", version = "0.1" }
 ctt-intel-texture-compressor = { path = "crates/ctt-intel-texture-compressor", version = "0.1" }
+ctt-bc7enc-rdo = { path = "crates/ctt-bc7enc-rdo", version = "0.1" }
 
 bytemuck = "1"
 clap = { version = "4", features = ["derive"] }
