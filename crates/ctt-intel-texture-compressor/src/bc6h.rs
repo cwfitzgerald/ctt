@@ -22,8 +22,8 @@
 //! format stores unsigned half-float endpoints; signed BC6H is not supported
 //! by this encoder.
 
-use crate::bindings::kernel;
 use crate::Rgba16Surface;
+use crate::bindings::kernel;
 
 #[derive(Debug, Copy, Clone)]
 pub struct EncodeSettings {

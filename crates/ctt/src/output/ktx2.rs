@@ -202,13 +202,15 @@ mod tests {
 
     #[test]
     fn unsupported_astc_block_size() {
-        assert!(to_vk_format(
-            CompressedFormat::Astc {
-                block_width: 3,
-                block_height: 3
-            },
-            ColorSpace::Srgb
-        )
-        .is_err());
+        assert!(
+            to_vk_format(
+                CompressedFormat::Astc {
+                    block_width: 3,
+                    block_height: 3
+                },
+                ColorSpace::Srgb
+            )
+            .is_err()
+        );
     }
 }

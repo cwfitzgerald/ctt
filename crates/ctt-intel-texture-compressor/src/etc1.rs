@@ -10,8 +10,8 @@
 //!
 //! Each 4×4 texel block is encoded into **8 bytes** (0.5 bytes/pixel).
 
-use crate::bindings::kernel;
 use crate::RgbaSurface;
+use crate::bindings::kernel;
 
 #[derive(Debug, Copy, Clone)]
 pub struct EncodeSettings {

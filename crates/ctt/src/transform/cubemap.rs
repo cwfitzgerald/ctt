@@ -83,14 +83,8 @@ fn split_strip(image: &RawImage) -> Result<[RawImage; 6]> {
     Ok(std::array::from_fn(|i| faces[i].clone()))
 }
 
-fn extract_region(
-    src: &RawImage,
-    src_x: u32,
-    src_y: u32,
-    width: u32,
-    height: u32,
-) -> RawImage {
-    let bpp = src.pixel_format.components.channel_count();
+fn extract_region(src: &RawImage, src_x: u32, src_y: u32, width: u32, height: u32) -> RawImage {
+    let bpp = src.pixel_format.bytes_per_pixel();
     let new_stride = width * bpp as u32;
     let mut data = Vec::with_capacity((new_stride * height) as usize);
 
@@ -112,7 +106,7 @@ fn extract_region(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::format::{ColorSpace, PixelComponents, PixelFormat};
+    use crate::format::{ChannelType, ColorSpace, PixelComponents, PixelFormat};
 
     fn make_face(width: u32, height: u32, fill: u8) -> RawImage {
         let stride = width * 4;
@@ -123,6 +117,7 @@ mod tests {
             stride,
             pixel_format: PixelFormat {
                 components: PixelComponents::Rgba,
+                channel_type: ChannelType::U8,
                 color_space: ColorSpace::Srgb,
             },
         }

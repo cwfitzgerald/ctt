@@ -11,8 +11,8 @@
 //!
 //! Each 4×4 texel block is encoded into **8 bytes** (0.5 bytes/pixel).
 
-use crate::bindings::kernel;
 use crate::RSurface;
+use crate::bindings::kernel;
 
 #[must_use]
 pub fn calc_output_size(width: u32, height: u32) -> usize {

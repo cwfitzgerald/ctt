@@ -7,10 +7,37 @@ pub enum CompressedFormat {
     Bc6h,
     Bc7,
     Etc1,
-    Astc {
-        block_width: u8,
-        block_height: u8,
-    },
+    Astc { block_width: u8, block_height: u8 },
+}
+
+impl CompressedFormat {
+    /// The pixel format that the underlying compressor expects as input.
+    ///
+    /// `color_space` is passed through — the compressor doesn't change it.
+    pub fn required_input_format(self, color_space: ColorSpace) -> PixelFormat {
+        match self {
+            Self::Bc1 | Self::Bc3 | Self::Bc7 | Self::Etc1 | Self::Astc { .. } => PixelFormat {
+                components: PixelComponents::Rgba,
+                channel_type: ChannelType::U8,
+                color_space,
+            },
+            Self::Bc4 => PixelFormat {
+                components: PixelComponents::R,
+                channel_type: ChannelType::U8,
+                color_space,
+            },
+            Self::Bc5 => PixelFormat {
+                components: PixelComponents::Rg,
+                channel_type: ChannelType::U8,
+                color_space,
+            },
+            Self::Bc6h => PixelFormat {
+                components: PixelComponents::Rgba,
+                channel_type: ChannelType::U16,
+                color_space,
+            },
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
@@ -18,6 +45,25 @@ pub enum ColorSpace {
     #[default]
     Srgb,
     Linear,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum ChannelType {
+    #[default]
+    U8,
+    U16,
+    F16,
+    F32,
+}
+
+impl ChannelType {
+    pub fn byte_size(self) -> usize {
+        match self {
+            Self::U8 => 1,
+            Self::U16 | Self::F16 => 2,
+            Self::F32 => 4,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -42,5 +88,12 @@ impl PixelComponents {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct PixelFormat {
     pub components: PixelComponents,
+    pub channel_type: ChannelType,
     pub color_space: ColorSpace,
+}
+
+impl PixelFormat {
+    pub fn bytes_per_pixel(self) -> usize {
+        self.components.channel_count() * self.channel_type.byte_size()
+    }
 }

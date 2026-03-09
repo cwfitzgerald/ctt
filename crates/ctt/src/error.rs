@@ -27,4 +27,7 @@ pub enum Error {
 
     #[error("data length mismatch: expected {expected}, got {actual}")]
     DataLengthMismatch { expected: usize, actual: usize },
+
+    #[error("unsupported pixel format conversion: {0}")]
+    UnsupportedConversion(String),
 }

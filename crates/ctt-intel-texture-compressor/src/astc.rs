@@ -23,8 +23,8 @@
 #![allow(dead_code)]
 #![allow(unused_variables)]
 
-use crate::bindings::kernel_astc;
 use crate::RgbaSurface;
+use crate::bindings::kernel_astc;
 
 #[derive(Debug, Copy, Clone)]
 pub struct EncodeSettings {
@@ -151,8 +151,12 @@ pub fn calc_output_size(width: u32, height: u32, block_width: u32, block_height:
 
 #[must_use]
 pub fn compress_blocks(settings: &EncodeSettings, surface: &RgbaSurface) -> Vec<u8> {
-    let output_size =
-        calc_output_size(surface.width, surface.height, settings.block_width, settings.block_height);
+    let output_size = calc_output_size(
+        surface.width,
+        surface.height,
+        settings.block_width,
+        settings.block_height,
+    );
     let mut output = vec![0u8; output_size];
     compress_blocks_into(settings, surface, &mut output);
     output
@@ -175,7 +179,12 @@ pub fn compress_blocks_into(settings: &EncodeSettings, surface: &RgbaSurface, bl
     assert!(settings.block_width <= 8);
     assert_eq!(
         blocks.len(),
-        calc_output_size(surface.width, surface.height, settings.block_width, settings.block_height)
+        calc_output_size(
+            surface.width,
+            surface.height,
+            settings.block_width,
+            settings.block_height
+        )
     );
 
     let tex_width = surface.width / settings.block_width;

@@ -12,8 +12,8 @@
 //! Each 4×4 texel block is encoded into **16 bytes** (1 byte/pixel):
 //! 8 bytes for the alpha block followed by 8 bytes for the color block.
 
-use crate::bindings::kernel;
 use crate::RgbaSurface;
+use crate::bindings::kernel;
 
 #[must_use]
 pub fn calc_output_size(width: u32, height: u32) -> usize {

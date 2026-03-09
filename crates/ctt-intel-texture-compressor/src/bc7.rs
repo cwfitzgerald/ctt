@@ -13,8 +13,8 @@
 //! Each 4×4 texel block is encoded into **16 bytes** (1 byte/pixel). BC7
 //! selects among 8 internal modes to balance color and alpha precision.
 
-use crate::bindings::kernel;
 use crate::RgbaSurface;
+use crate::bindings::kernel;
 
 #[derive(Debug, Copy, Clone)]
 pub struct EncodeSettings {

@@ -5,14 +5,16 @@ use std::process::ExitCode;
 
 use clap::Parser;
 
-use ctt::config::{CompressConfig, OutputFormat};
+use ctt::config::{
+    Bc6hQuality, Bc7Quality, Bc7Settings, CompressConfig, EncodeSettings, Etc1Quality, OutputFormat,
+};
 use ctt::error::Error;
-use ctt::format::{ColorSpace, CompressedFormat, PixelComponents, PixelFormat};
+use ctt::format::{ChannelType, ColorSpace, CompressedFormat, PixelComponents, PixelFormat};
 use ctt::image::{ImageLayout, RawImage};
 use ctt::transform::cubemap::{CubemapInput, split_cubemap};
 use ctt::transform::swizzle::{Swizzle, SwizzleChannel};
 
-use args::{Args, ColorSpaceArg, ContainerArg, CubemapLayoutArg};
+use args::{Args, ColorSpaceArg, ContainerArg, CubemapLayoutArg, QualityArg};
 
 fn main() -> ExitCode {
     let args = Args::parse();
@@ -36,20 +38,18 @@ fn run(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
         ContainerArg::Dds => OutputFormat::Dds,
         ContainerArg::Ktx2 => OutputFormat::Ktx2,
     };
-    let swizzle = args
-        .swizzle
-        .as_deref()
-        .map(parse_swizzle)
-        .transpose()?;
+    let swizzle = args.swizzle.as_deref().map(parse_swizzle).transpose()?;
+    let encode_settings = build_encode_settings(format, args.quality, args.alpha);
 
     let config = CompressConfig {
         format,
         output_format,
         swizzle,
         color_space,
+        encode_settings: Some(encode_settings),
     };
 
-    // Load input images.
+    // Load input images in their native format.
     let images = load_images(&args.input, color_space)?;
 
     // Build layout.
@@ -76,19 +76,60 @@ fn load_images(
 ) -> Result<Vec<RawImage>, Box<dyn std::error::Error>> {
     let mut images = Vec::with_capacity(paths.len());
     for path in paths {
-        let img = image::open(path)?.to_rgba8();
-        let (width, height) = img.dimensions();
-        let stride = width * 4;
-        images.push(RawImage {
-            data: img.into_raw(),
-            width,
-            height,
-            stride,
-            pixel_format: PixelFormat {
-                components: PixelComponents::Rgba,
-                color_space,
-            },
-        });
+        let img = image::open(path)?;
+
+        let raw = match img.color() {
+            image::ColorType::Rgb32F | image::ColorType::Rgba32F => {
+                let rgba = img.to_rgba32f();
+                let (width, height) = rgba.dimensions();
+                let stride = width * 4 * 4; // 4 channels * 4 bytes
+                RawImage {
+                    data: bytemuck::cast_slice(rgba.as_raw()).to_vec(),
+                    width,
+                    height,
+                    stride,
+                    pixel_format: PixelFormat {
+                        components: PixelComponents::Rgba,
+                        channel_type: ChannelType::F32,
+                        color_space,
+                    },
+                }
+            }
+            image::ColorType::Rgb16 | image::ColorType::Rgba16 => {
+                let rgba = img.to_rgba16();
+                let (width, height) = rgba.dimensions();
+                let stride = width * 4 * 2; // 4 channels * 2 bytes
+                RawImage {
+                    data: bytemuck::cast_slice(rgba.as_raw()).to_vec(),
+                    width,
+                    height,
+                    stride,
+                    pixel_format: PixelFormat {
+                        components: PixelComponents::Rgba,
+                        channel_type: ChannelType::U16,
+                        color_space,
+                    },
+                }
+            }
+            _ => {
+                let rgba = img.to_rgba8();
+                let (width, height) = rgba.dimensions();
+                let stride = width * 4;
+                RawImage {
+                    data: rgba.into_raw(),
+                    width,
+                    height,
+                    stride,
+                    pixel_format: PixelFormat {
+                        components: PixelComponents::Rgba,
+                        channel_type: ChannelType::U8,
+                        color_space,
+                    },
+                }
+            }
+        };
+
+        images.push(raw);
     }
     Ok(images)
 }
@@ -98,11 +139,7 @@ fn build_cubemap_layout(
     layout_arg: CubemapLayoutArg,
 ) -> Result<ImageLayout, Box<dyn std::error::Error>> {
     let cubemap_input = if images.len() == 6 {
-        CubemapInput::SeparateFaces(
-            images
-                .try_into()
-                .map_err(|_| Error::CubemapFaceCount(0))?,
-        )
+        CubemapInput::SeparateFaces(images.try_into().map_err(|_| Error::CubemapFaceCount(0))?)
     } else if images.len() == 1 {
         let img = images.into_iter().next().unwrap();
         match layout_arg {
@@ -121,6 +158,41 @@ fn build_cubemap_layout(
     })
 }
 
+fn build_encode_settings(
+    format: CompressedFormat,
+    quality: QualityArg,
+    alpha: bool,
+) -> EncodeSettings {
+    match format {
+        CompressedFormat::Bc1 => EncodeSettings::Bc1,
+        CompressedFormat::Bc3 => EncodeSettings::Bc3,
+        CompressedFormat::Bc4 => EncodeSettings::Bc4,
+        CompressedFormat::Bc5 => EncodeSettings::Bc5,
+        CompressedFormat::Bc6h => {
+            let q = match quality {
+                QualityArg::UltraFast | QualityArg::VeryFast => Bc6hQuality::VeryFast,
+                QualityArg::Fast => Bc6hQuality::Fast,
+                QualityArg::Basic => Bc6hQuality::Basic,
+                QualityArg::Slow => Bc6hQuality::Slow,
+                QualityArg::VerySlow => Bc6hQuality::VerySlow,
+            };
+            EncodeSettings::Bc6h(q)
+        }
+        CompressedFormat::Bc7 => {
+            let q = match quality {
+                QualityArg::UltraFast => Bc7Quality::UltraFast,
+                QualityArg::VeryFast => Bc7Quality::VeryFast,
+                QualityArg::Fast => Bc7Quality::Fast,
+                QualityArg::Basic => Bc7Quality::Basic,
+                QualityArg::Slow | QualityArg::VerySlow => Bc7Quality::Slow,
+            };
+            EncodeSettings::Bc7(Bc7Settings { quality: q, alpha })
+        }
+        CompressedFormat::Etc1 => EncodeSettings::Etc1(Etc1Quality::Slow),
+        CompressedFormat::Astc { .. } => EncodeSettings::Astc,
+    }
+}
+
 fn parse_format(s: &str) -> Result<CompressedFormat, Error> {
     match s.to_lowercase().as_str() {
         "bc1" => Ok(CompressedFormat::Bc1),
@@ -135,12 +207,8 @@ fn parse_format(s: &str) -> Result<CompressedFormat, Error> {
                 let (w, h) = rest
                     .split_once('x')
                     .ok_or_else(|| Error::UnsupportedFormat(s.into()))?;
-                let block_width: u8 = w
-                    .parse()
-                    .map_err(|_| Error::UnsupportedFormat(s.into()))?;
-                let block_height: u8 = h
-                    .parse()
-                    .map_err(|_| Error::UnsupportedFormat(s.into()))?;
+                let block_width: u8 = w.parse().map_err(|_| Error::UnsupportedFormat(s.into()))?;
+                let block_height: u8 = h.parse().map_err(|_| Error::UnsupportedFormat(s.into()))?;
                 Ok(CompressedFormat::Astc {
                     block_width,
                     block_height,

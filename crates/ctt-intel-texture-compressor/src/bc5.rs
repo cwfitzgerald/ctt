@@ -14,8 +14,8 @@
 //! 8 bytes for the red channel block followed by 8 bytes for the green channel
 //! block.
 
-use crate::bindings::kernel;
 use crate::RgSurface;
+use crate::bindings::kernel;
 
 #[must_use]
 pub fn calc_output_size(width: u32, height: u32) -> usize {

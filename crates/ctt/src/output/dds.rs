@@ -100,14 +100,16 @@ mod tests {
 
     #[test]
     fn astc_dds_unsupported() {
-        assert!(to_dxgi_format(
-            CompressedFormat::Astc {
-                block_width: 4,
-                block_height: 4
-            },
-            ColorSpace::Srgb
-        )
-        .is_err());
+        assert!(
+            to_dxgi_format(
+                CompressedFormat::Astc {
+                    block_width: 4,
+                    block_height: 4
+                },
+                ColorSpace::Srgb
+            )
+            .is_err()
+        );
     }
 
     #[test]

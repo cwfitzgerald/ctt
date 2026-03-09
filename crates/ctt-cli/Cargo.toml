@@ -9,6 +9,7 @@ license.workspace = true
 ctt = { workspace = true }
 clap = { workspace = true }
 image = { workspace = true }
+bytemuck = { workspace = true }
 
 [lints]
 workspace = true

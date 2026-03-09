@@ -18,3 +18,5 @@ ddsfile = "0.5"
 ktx2 = "0.3"
 clap = { version = "4", features = ["derive"] }
 image = "0.25"
+half = "2"
+bytemuck = { version = "1", features = ["derive"] }

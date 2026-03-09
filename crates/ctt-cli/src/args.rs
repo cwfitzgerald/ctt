@@ -30,13 +30,24 @@ pub struct Args {
     #[arg(long, default_value = "cross")]
     pub cubemap_layout: CubemapLayoutArg,
 
-    /// Channel swizzle (e.g. "rgba", "bgra", "rrrg", "rgb1").
+    /// Remap RGBA channels. 4 characters from: rgba01.
+    ///
+    /// "bgra" = swap red/blue, "0r0g" = 2 channel normal map to BC3 packing
+    /// "rgb1" = force opaque, "r000" = ignore non-red channel.
     #[arg(long)]
     pub swizzle: Option<String>,
 
-    /// Color space of the input.
+    /// Color space of the input. Used for selecting output color space and performing mipmap generation.
     #[arg(long, default_value = "srgb")]
     pub color_space: ColorSpaceArg,
+
+    /// Compression quality preset.
+    #[arg(long, default_value = "basic")]
+    pub quality: QualityArg,
+
+    /// Encode alpha channel (for BC7).
+    #[arg(long)]
+    pub alpha: bool,
 }
 
 #[derive(Debug, Clone, Copy, clap::ValueEnum)]
@@ -55,4 +66,14 @@ pub enum CubemapLayoutArg {
 pub enum ColorSpaceArg {
     Srgb,
     Linear,
+}
+
+#[derive(Debug, Clone, Copy, clap::ValueEnum)]
+pub enum QualityArg {
+    UltraFast,
+    VeryFast,
+    Fast,
+    Basic,
+    Slow,
+    VerySlow,
 }
