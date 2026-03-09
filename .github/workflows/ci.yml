@@ -1,0 +1,89 @@
+name: CI
+
+on:
+  push:
+    branches: [trunk]
+  pull_request:
+
+env:
+  ISPC_VERSION: "1.30.0"
+  RUSTFLAGS: "-D warnings"
+
+jobs:
+  ci:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Linux x86_64
+            os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            ispc_asset_suffix: linux
+            ispc_ext: tar.gz
+            test: true
+          - name: Linux aarch64
+            os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            ispc_asset_suffix: linux.aarch64
+            ispc_ext: tar.gz
+            test: true
+          - name: macOS aarch64
+            os: macos-latest
+            target: aarch64-apple-darwin
+            ispc_asset_suffix: macOS.arm64
+            ispc_ext: tar.gz
+            test: true
+          - name: macOS x86_64
+            os: macos-latest
+            target: x86_64-apple-darwin
+            ispc_asset_suffix: macOS.x86_64
+            ispc_ext: tar.gz
+            test: true
+          - name: Windows x86_64
+            os: windows-latest
+            target: x86_64-pc-windows-msvc
+            ispc_asset_suffix: windows
+            ispc_ext: zip
+            test: true
+          - name: Windows aarch64
+            os: windows-latest
+            target: aarch64-pc-windows-msvc
+            ispc_asset_suffix: windows
+            ispc_ext: zip
+            test: false
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+          components: clippy
+
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest
+
+      - name: Download ISPC
+        shell: bash
+        run: |
+          ISPC_ASSET="ispc-v${ISPC_VERSION}-${{ matrix.ispc_asset_suffix }}"
+          URL="https://github.com/ispc/ispc/releases/download/v${ISPC_VERSION}/${ISPC_ASSET}.${{ matrix.ispc_ext }}"
+          curl -L "$URL" -o "ispc_archive.${{ matrix.ispc_ext }}"
+          if [[ "${{ matrix.ispc_ext }}" == "zip" ]]; then
+            7z x "ispc_archive.zip" -oispc_extracted
+          else
+            mkdir -p ispc_extracted
+            tar xzf ispc_archive.tar.gz -C ispc_extracted
+          fi
+          echo "$PWD/ispc_extracted/${ISPC_ASSET}/bin" >> "$GITHUB_PATH"
+
+      - name: Clippy
+        run: cargo clippy --target ${{ matrix.target }} --all-targets
+
+      - name: Test
+        if: ${{ matrix.test }}
+        run: cargo nextest run --target ${{ matrix.target }}
