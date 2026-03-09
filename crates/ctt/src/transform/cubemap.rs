@@ -14,9 +14,20 @@ pub enum CubemapInput {
 /// Split a cubemap input into its 6 individual faces.
 pub fn split_cubemap(input: CubemapInput) -> Result<[RawImage; 6]> {
     match input {
-        CubemapInput::SeparateFaces(faces) => validate_uniform_faces(&faces).map(|()| faces),
-        CubemapInput::Cross(image) => split_cross(&image),
-        CubemapInput::Strip(image) => split_strip(&image),
+        CubemapInput::SeparateFaces(faces) => {
+            log::debug!("Splitting cubemap: separate faces input");
+            validate_uniform_faces(&faces).map(|()| faces)
+        }
+        CubemapInput::Cross(image) => {
+            log::debug!("Splitting cubemap: cross input");
+            log::debug!("Cross source: {}x{}", image.width, image.height);
+            split_cross(&image)
+        }
+        CubemapInput::Strip(image) => {
+            log::debug!("Splitting cubemap: strip input");
+            log::debug!("Strip source: {}x{}", image.width, image.height);
+            split_strip(&image)
+        }
     }
 }
 

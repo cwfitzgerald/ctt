@@ -15,8 +15,10 @@ ctt = { path = "crates/ctt" }
 ctt-intel-texture-compressor = { path = "crates/ctt-intel-texture-compressor" }
 thiserror = "2"
 ddsfile = "0.5"
-ktx2 = "0.3"
+ktx2 = "0.4"
 clap = { version = "4", features = ["derive"] }
 image = "0.25"
 half = "2"
 bytemuck = { version = "1", features = ["derive"] }
+log = "0.4"
+fern = "0.7"

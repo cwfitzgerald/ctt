@@ -5,11 +5,17 @@ edition.workspace = true
 authors.workspace = true
 license.workspace = true
 
+[[bin]]
+name = "ctt"
+path = "src/main.rs"
+
 [dependencies]
 ctt = { workspace = true }
 clap = { workspace = true }
 image = { workspace = true }
 bytemuck = { workspace = true }
+fern = { workspace = true }
+log = { workspace = true }
 
 [lints]
 workspace = true

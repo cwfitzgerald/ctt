@@ -18,13 +18,32 @@ use args::{Args, ColorSpaceArg, ContainerArg, CubemapLayoutArg, QualityArg};
 
 fn main() -> ExitCode {
     let args = Args::parse();
+    setup_logger(args.verbose);
     match run(&args) {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
-            eprintln!("error: {e}");
+            log::error!("{e}");
             ExitCode::FAILURE
         }
     }
+}
+
+fn setup_logger(verbose: u8) {
+    let level = match verbose {
+        0 => log::LevelFilter::Info,
+        1 => log::LevelFilter::Debug,
+        _ => log::LevelFilter::Trace,
+    };
+    fern::Dispatch::new()
+        .format(|out, message, record| match record.level() {
+            log::Level::Error => out.finish(format_args!("error: {message}")),
+            log::Level::Warn => out.finish(format_args!("warning: {message}")),
+            _ => out.finish(format_args!("{message}")),
+        })
+        .level(level)
+        .chain(std::io::stderr())
+        .apply()
+        .expect("failed to initialize logger");
 }
 
 fn run(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
@@ -49,11 +68,18 @@ fn run(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
         encode_settings: Some(encode_settings),
     };
 
+    log::info!(
+        "Format: {format:?}, container: {output_format:?}, quality: {:?}, color space: {color_space:?}",
+        args.quality
+    );
+
     // Load input images in their native format.
+    log::info!("Loading {} input image(s)", args.input.len());
     let images = load_images(&args.input, color_space)?;
 
     // Build layout.
     let layout = if args.cubemap {
+        log::info!("Cubemap mode, layout: {:?}", args.cubemap_layout);
         build_cubemap_layout(images, args.cubemap_layout)?
     } else {
         ImageLayout {
@@ -66,7 +92,12 @@ fn run(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
     let output_bytes = ctt::pipeline::run(&config, layout)?;
 
     // Write output.
-    fs::write(&args.output, output_bytes)?;
+    fs::write(&args.output, &output_bytes)?;
+    log::info!(
+        "Output written: {} ({} bytes)",
+        args.output.display(),
+        output_bytes.len()
+    );
     Ok(())
 }
 
@@ -129,6 +160,13 @@ fn load_images(
             }
         };
 
+        log::debug!(
+            "Loaded {}: {}x{}, {}",
+            path.display(),
+            raw.width,
+            raw.height,
+            raw.pixel_format
+        );
         images.push(raw);
     }
     Ok(images)

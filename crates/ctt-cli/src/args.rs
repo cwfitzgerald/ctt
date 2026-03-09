@@ -48,6 +48,10 @@ pub struct Args {
     /// Encode alpha channel (for BC7).
     #[arg(long)]
     pub alpha: bool,
+
+    /// Increase logging verbosity (-v = debug, -vv = trace).
+    #[arg(short, action = clap::ArgAction::Count)]
+    pub verbose: u8,
 }
 
 #[derive(Debug, Clone, Copy, clap::ValueEnum)]

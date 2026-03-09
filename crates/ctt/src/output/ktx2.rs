@@ -57,6 +57,12 @@ fn astc_vk_format(bw: u8, bh: u8, srgb: bool) -> Result<u32> {
 pub fn encode_ktx2(texture: &CompressedTexture) -> Result<Vec<u8>> {
     let first = &texture.layers[0][0];
     let vk_format = to_vk_format(first.format, texture.color_space)?;
+    log::debug!(
+        "KTX2: vk_format={}, {} layers, {} mips",
+        vk_format,
+        texture.layers.len(),
+        texture.layers[0].len()
+    );
 
     let level_count = texture.layers[0].len() as u32;
     let face_count = if texture.is_cubemap { 6u32 } else { 1u32 };

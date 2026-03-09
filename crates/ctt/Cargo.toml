@@ -10,6 +10,7 @@ ctt-intel-texture-compressor = { workspace = true }
 ddsfile = { workspace = true }
 half = { workspace = true }
 ktx2 = { workspace = true }
+log = { workspace = true }
 thiserror = { workspace = true }
 
 [lints]

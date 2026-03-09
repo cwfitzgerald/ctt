@@ -92,6 +92,28 @@ pub struct PixelFormat {
     pub color_space: ColorSpace,
 }
 
+impl std::fmt::Display for PixelFormat {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let components = match self.components {
+            PixelComponents::R => "R",
+            PixelComponents::Rg => "RG",
+            PixelComponents::Rgb => "RGB",
+            PixelComponents::Rgba => "RGBA",
+        };
+        let channel = match self.channel_type {
+            ChannelType::U8 => "8",
+            ChannelType::U16 => "16",
+            ChannelType::F16 => "16f",
+            ChannelType::F32 => "32f",
+        };
+        let cs = match self.color_space {
+            ColorSpace::Srgb => "sRGB",
+            ColorSpace::Linear => "linear",
+        };
+        write!(f, "{components}{channel} ({cs})")
+    }
+}
+
 impl PixelFormat {
     pub fn bytes_per_pixel(self) -> usize {
         self.components.channel_count() * self.channel_type.byte_size()

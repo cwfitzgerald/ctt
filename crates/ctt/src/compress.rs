@@ -91,9 +91,14 @@ pub fn compress_layout(
     settings: &EncodeSettings,
 ) -> Result<CompressedTexture> {
     let mut layers = Vec::with_capacity(layout.layers.len());
-    for layer in &layout.layers {
+    for (layer_idx, layer) in layout.layers.iter().enumerate() {
         let mut mips = Vec::with_capacity(layer.len());
-        for image in layer {
+        for (mip_idx, image) in layer.iter().enumerate() {
+            log::debug!(
+                "Compressing layer {layer_idx}, mip {mip_idx}: {}x{} to {format:?}",
+                image.width,
+                image.height,
+            );
             mips.push(compress(image, format, settings)?);
         }
         layers.push(mips);

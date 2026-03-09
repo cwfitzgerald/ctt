@@ -39,8 +39,11 @@ pub fn apply_swizzle(image: &mut RawImage, swizzle: &Swizzle) -> Result<()> {
     }
 
     if *swizzle == Swizzle::IDENTITY {
+        log::debug!("Swizzle: identity, skipping");
         return Ok(());
     }
+
+    log::debug!("Swizzling {}x{} image", image.width, image.height);
 
     let width = image.width as usize;
     let height = image.height as usize;

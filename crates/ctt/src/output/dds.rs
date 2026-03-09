@@ -39,6 +39,12 @@ pub fn to_dxgi_format(format: CompressedFormat, color_space: ColorSpace) -> Resu
 pub fn encode_dds(texture: &CompressedTexture) -> Result<Vec<u8>> {
     let first = &texture.layers[0][0];
     let dxgi_format = to_dxgi_format(first.format, texture.color_space)?;
+    log::debug!(
+        "DDS: {:?}, {} layers, {} mips",
+        dxgi_format,
+        texture.layers.len(),
+        texture.layers[0].len()
+    );
 
     let mut dds = Dds::new_dxgi(NewDxgiParams {
         height: first.height,
