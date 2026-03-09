@@ -38,7 +38,7 @@ jobs:
           - name: macOS x86_64
             os: macos-latest
             target: x86_64-apple-darwin
-            ispc_asset_suffix: macOS.x86_64
+            ispc_asset_suffix: macOS.arm64
             ispc_ext: tar.gz
             test: true
           - name: Windows x86_64
