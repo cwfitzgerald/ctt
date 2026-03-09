@@ -11,4 +11,10 @@ license = "MIT OR Apache-2.0 OR Zlib"
 [workspace.lints]
 
 [workspace.dependencies]
+ctt = { path = "crates/ctt" }
 ctt-intel-texture-compressor = { path = "crates/ctt-intel-texture-compressor" }
+thiserror = "2"
+ddsfile = "0.5"
+ktx2 = "0.3"
+clap = { version = "4", features = ["derive"] }
+image = "0.25"

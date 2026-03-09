@@ -7,6 +7,9 @@ license.workspace = true
 
 [dependencies]
 ctt-intel-texture-compressor = { workspace = true }
+thiserror = { workspace = true }
+ddsfile = { workspace = true }
+ktx2 = { workspace = true }
 
 [lints]
 workspace = true

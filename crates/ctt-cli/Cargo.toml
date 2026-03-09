@@ -5,5 +5,10 @@ edition.workspace = true
 authors.workspace = true
 license.workspace = true
 
+[dependencies]
+ctt = { workspace = true }
+clap = { workspace = true }
+image = { workspace = true }
+
 [lints]
 workspace = true

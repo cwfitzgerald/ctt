@@ -1,0 +1,30 @@
+use crate::format::CompressedFormat;
+
+pub type Result<T> = std::result::Result<T, Error>;
+
+#[derive(Debug, thiserror::Error)]
+pub enum Error {
+    #[error("invalid dimensions: {0}")]
+    InvalidDimensions(String),
+
+    #[error("unsupported format: {0}")]
+    UnsupportedFormat(String),
+
+    #[error("compression not implemented for {0:?}")]
+    CompressionNotImplemented(CompressedFormat),
+
+    #[error("invalid swizzle: {0}")]
+    InvalidSwizzle(String),
+
+    #[error("cubemap requires exactly 6 faces, got {0}")]
+    CubemapFaceCount(usize),
+
+    #[error("cubemap faces must have uniform dimensions")]
+    CubemapNonUniformFaces,
+
+    #[error("output encoding error: {0}")]
+    OutputEncoding(String),
+
+    #[error("data length mismatch: expected {expected}, got {actual}")]
+    DataLengthMismatch { expected: usize, actual: usize },
+}
