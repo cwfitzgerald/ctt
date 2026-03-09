@@ -79,7 +79,7 @@ jobs:
             mkdir -p ispc_extracted
             tar xzf ispc_archive.tar.gz -C ispc_extracted
           fi
-          echo "$PWD/ispc_extracted/${ISPC_ASSET}/bin" >> "$GITHUB_PATH"
+          echo "$GITHUB_WORKSPACE/ispc_extracted/${ISPC_ASSET}/bin" >> "$GITHUB_PATH"
 
       - name: Clippy
         run: cargo clippy --target ${{ matrix.target }} --all-targets
