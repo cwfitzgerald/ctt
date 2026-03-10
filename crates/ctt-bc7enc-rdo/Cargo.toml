@@ -8,7 +8,11 @@ authors = [
     "Rich Geldreich <richgel99@gmail.com>",
 ]
 license = "(MIT OR Apache-2.0) AND Apache-2.0"
+rust-version.workspace = true
+readme = "../../README.md"
 description = "Vendored bc7enc_rdo bindings with ISPC bc7e encoder"
+keywords = ["texture", "compression", "bc7", "gpu"]
+categories = ["graphics", "compression"]
 build = "build.rs"
 
 [dependencies]

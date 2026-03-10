@@ -253,9 +253,7 @@ fn map_quality(q: QualityArg) -> Quality {
 /// Build encoder-specific settings from CLI args.
 fn build_encoder_settings(args: &Args) -> Option<Box<dyn ctt::encoder::EncoderSettings>> {
     if args.alpha {
-        return Some(Box::new(
-            ctt::encoders::ispc::IspcSettings { alpha: true },
-        ));
+        return Some(Box::new(ctt::encoders::ispc::IspcSettings { alpha: true }));
     }
     None
 }

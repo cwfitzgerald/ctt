@@ -247,6 +247,10 @@ registry.register(Box::new(IspcEncoder)); // ISPC gets priority 1
 let output = ctt::pipeline::run_with_registry(&config, layout, &registry)?;
 ```
 
+## Minimum Supported Rust Version (MSRV)
+
+The MSRV is **1.85** (edition 2024). MSRV bumps are considered breaking changes.
+
 ## License
 
 Licensed under any of:

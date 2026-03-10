@@ -10,7 +10,11 @@ authors = [
     "Intel Corporation",
 ]
 license = "(MIT OR Apache-2.0) AND MIT"
+rust-version.workspace = true
+readme = "../../README.md"
 description = "Vendored Intel ISPC texture compressor bindings, based on intel_tex_2"
+keywords = ["texture", "compression", "ispc", "gpu"]
+categories = ["graphics", "compression"]
 build = "build.rs"
 
 [dependencies]

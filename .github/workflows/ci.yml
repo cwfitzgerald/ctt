@@ -7,8 +7,11 @@ on:
   workflow_call:
 
 env:
+  CI_RUST_VERSION: "1.94"
+  CI_RUST_MSRV: "1.85"
   ISPC_VERSION: "1.30.0"
   RUSTFLAGS: "-D warnings"
+  RUSTDOCFLAGS: "-D warnings"
 
 jobs:
   ci:
@@ -58,8 +61,9 @@ jobs:
       - uses: actions/checkout@v6
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: cwfitzgerald/repo-common/.github/actions/install-rust@trunk
         with:
+          version: ${{ env.CI_RUST_VERSION }}
           targets: ${{ matrix.target }}
           components: clippy
 
@@ -88,6 +92,77 @@ jobs:
       - name: Build
         run: cargo build --target ${{ matrix.target }}
 
+      - name: Doc
+        run: cargo doc --target ${{ matrix.target }} --no-deps
+
       - name: Test
         if: ${{ matrix.test }}
         run: cargo nextest run --target ${{ matrix.target }}
+
+      - name: Doctest
+        if: ${{ matrix.test }}
+        run: cargo test --doc --target ${{ matrix.target }}
+
+  format:
+    name: Format
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Rust
+        uses: cwfitzgerald/repo-common/.github/actions/install-rust@trunk
+        with:
+          version: ${{ env.CI_RUST_VERSION }}
+          components: rustfmt
+
+      - name: Format
+        run: cargo fmt --check
+
+  deny:
+    name: Deny
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Rust
+        uses: cwfitzgerald/repo-common/.github/actions/install-rust@trunk
+        with:
+          version: ${{ env.CI_RUST_VERSION }}
+
+      - name: Install cargo-deny
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deny
+
+      - name: Deny
+        run: cargo deny --all-features check
+
+  msrv:
+    name: MSRV
+    runs-on: ubuntu-latest
+    env:
+      RUSTFLAGS: ""
+      RUSTDOCFLAGS: ""
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Rust
+        uses: cwfitzgerald/repo-common/.github/actions/install-rust@trunk
+        with:
+          version: ${{ env.CI_RUST_MSRV }}
+
+      - name: Download ISPC
+        shell: bash
+        run: |
+          ISPC_ASSET="ispc-v${ISPC_VERSION}-linux"
+          URL="https://github.com/ispc/ispc/releases/download/v${ISPC_VERSION}/${ISPC_ASSET}.tar.gz"
+          curl -L "$URL" -o "ispc_archive.tar.gz"
+          mkdir -p ispc_extracted
+          tar xzf ispc_archive.tar.gz -C ispc_extracted
+          echo "$GITHUB_WORKSPACE/ispc_extracted/${ISPC_ASSET}/bin" >> "$GITHUB_PATH"
+
+      - name: Check (default features)
+        run: cargo check -p ctt
+
+      - name: Check (no default features)
+        run: cargo check -p ctt --no-default-features

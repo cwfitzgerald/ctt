@@ -31,8 +31,11 @@ pub trait Encoder: Send + Sync {
     fn supported_formats(&self) -> &[CompressedFormat];
 
     /// What pixel format this encoder needs for a given compressed format.
-    fn required_input_format(&self, format: CompressedFormat, color_space: ColorSpace)
-        -> PixelFormat;
+    fn required_input_format(
+        &self,
+        format: CompressedFormat,
+        color_space: ColorSpace,
+    ) -> PixelFormat;
 
     /// Compress a single image.
     ///

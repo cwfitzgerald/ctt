@@ -5,7 +5,11 @@ edition.workspace = true
 authors.workspace = true
 license.workspace = true
 repository.workspace = true
+rust-version.workspace = true
+readme = "../../README.md"
 description = "Command-line interface for the ctt texture compression library"
+keywords = ["texture", "compression", "gpu", "cli"]
+categories = ["command-line-utilities", "graphics"]
 
 [[bin]]
 name = "ctt"
