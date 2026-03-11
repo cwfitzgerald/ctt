@@ -26,14 +26,12 @@ pub fn run_with_registry(
 
     // Resolve encoder.
     let encoder = if let Some(ref name) = config.encoder_name {
-        registry
-            .find_by_name(name, config.format)
-            .ok_or_else(|| {
-                Error::UnsupportedFormat(format!(
-                    "no encoder named '{}' supports {:?}",
-                    name, config.format
-                ))
-            })?
+        registry.find_by_name(name, config.format).ok_or_else(|| {
+            Error::UnsupportedFormat(format!(
+                "no encoder named '{}' supports {:?}",
+                name, config.format
+            ))
+        })?
     } else {
         registry.find(config.format).ok_or_else(|| {
             Error::UnsupportedFormat(format!("no encoder supports {:?}", config.format))

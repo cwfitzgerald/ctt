@@ -5,7 +5,11 @@ edition.workspace = true
 authors.workspace = true
 license.workspace = true
 repository.workspace = true
+rust-version.workspace = true
+readme = "../../README.md"
 description = "Compress images to GPU texture formats"
+keywords = ["texture", "compression", "gpu", "bc7", "dds"]
+categories = ["graphics", "compression"]
 
 [features]
 default = ["encoder-ispc", "encoder-bc7enc"]
