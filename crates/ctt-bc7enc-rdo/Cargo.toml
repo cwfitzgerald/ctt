@@ -15,12 +15,16 @@ keywords = ["texture", "compression", "bc7", "gpu"]
 categories = ["graphics", "compression"]
 build = "build.rs"
 
+[features]
+default = ["prebuilt"]
+prebuilt = ["dep:ctt-bc7enc-rdo-prebuilt"]
+build-from-source = []
+
 [dependencies]
-ispc_rt = "2"
+ctt-bc7enc-rdo-prebuilt = { workspace = true, optional = true }
 
 [build-dependencies]
-ispc_compile = "2.0.1"
-ispc_rt = "2"
+ispc-build-utils = { workspace = true }
 
 [lints]
 workspace = true

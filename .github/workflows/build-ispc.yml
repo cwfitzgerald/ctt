@@ -1,0 +1,199 @@
+name: Build ISPC Libraries
+
+on:
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: write
+  attestations: write
+
+env:
+  CI_RUST_VERSION: "1.94"
+  ISPC_VERSION: "1.30.0"
+
+jobs:
+  build:
+    name: Build ${{ matrix.artifact_dir }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            artifact_dir: linux-x86_64
+            ispc_asset_suffix: linux
+            ispc_ext: tar.gz
+          - os: ubuntu-latest
+            target: aarch64-unknown-linux-gnu
+            artifact_dir: linux-aarch64
+            ispc_asset_suffix: linux
+            ispc_ext: tar.gz
+            cross: true
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            artifact_dir: windows-x86_64
+            ispc_asset_suffix: windows
+            ispc_ext: zip
+          - os: windows-latest
+            target: aarch64-pc-windows-msvc
+            artifact_dir: windows-aarch64
+            ispc_asset_suffix: windows
+            ispc_ext: zip
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            artifact_dir: macos-x86_64
+            ispc_asset_suffix: macOS.arm64
+            ispc_ext: tar.gz
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            artifact_dir: macos-aarch64
+            ispc_asset_suffix: macOS.arm64
+            ispc_ext: tar.gz
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Rust
+        uses: cwfitzgerald/repo-common/.github/actions/install-rust@trunk
+        with:
+          version: ${{ env.CI_RUST_VERSION }}
+          targets: ${{ matrix.target }}
+
+      - name: Download and verify ISPC
+        shell: bash
+        run: |
+          ISPC_ASSET="ispc-v${ISPC_VERSION}-${{ matrix.ispc_asset_suffix }}"
+          URL="https://github.com/ispc/ispc/releases/download/v${ISPC_VERSION}/${ISPC_ASSET}.${{ matrix.ispc_ext }}"
+          curl -L "$URL" -o "ispc_archive.${{ matrix.ispc_ext }}"
+          if [[ "${{ matrix.ispc_ext }}" == "zip" ]]; then
+            7z x "ispc_archive.zip" -oispc_extracted
+          else
+            mkdir -p ispc_extracted
+            tar xzf ispc_archive.tar.gz -C ispc_extracted
+          fi
+          ISPC_BIN="ispc_extracted/${ISPC_ASSET}/bin/ispc"
+          if [[ "${{ matrix.ispc_ext }}" == "zip" ]]; then
+            ISPC_BIN="${ISPC_BIN}.exe"
+          fi
+          echo "ISPC_PATH=$(pwd)/${ISPC_BIN}" >> "$GITHUB_ENV"
+          echo "$(pwd)/ispc_extracted/${ISPC_ASSET}/bin" >> "$GITHUB_PATH"
+
+          # Compute and export SHA-256 for build-time verification
+          if command -v sha256sum &>/dev/null; then
+            HASH=$(sha256sum "$ISPC_BIN" | cut -d' ' -f1)
+          else
+            HASH=$(shasum -a 256 "$ISPC_BIN" | cut -d' ' -f1)
+          fi
+          echo "ISPC_EXPECTED_SHA256=${HASH}" >> "$GITHUB_ENV"
+          echo "ISPC SHA-256: ${HASH}"
+
+      - name: Build ISPC libraries
+        shell: bash
+        run: |
+          mkdir -p output
+          cargo xtask build-ispc \
+            --crate both \
+            --target ${{ matrix.target }} \
+            --output-dir output/
+
+      - name: Upload intel artifacts
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: intel-${{ matrix.artifact_dir }}
+          path: |
+            output/libkernel.a
+            output/kernel.lib
+            output/libkernel_astc.a
+            output/kernel_astc.lib
+
+      - name: Upload bc7enc artifacts
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: bc7enc-${{ matrix.artifact_dir }}
+          path: |
+            output/libbc7e.a
+            output/bc7e.lib
+
+  attest-and-commit:
+    name: Attest and commit
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.head_ref || github.ref }}
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          path: artifacts
+
+      - name: Copy binaries to prebuilt dirs
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          copy_artifact() {
+            local artifact_name="$1" prebuilt_dir="$2" platform="$3"
+            local src_dir="artifacts/${artifact_name}"
+            local dst_dir="${prebuilt_dir}/bins/${platform}"
+
+            if [[ ! -d "$src_dir" ]]; then
+              echo "SKIP: ${src_dir} not found"
+              return
+            fi
+
+            mkdir -p "$dst_dir"
+            find "$src_dir" -type f \( -name '*.a' -o -name '*.lib' \) | while read -r f; do
+              local basename
+              basename=$(basename "$f")
+              cp "$f" "${dst_dir}/${basename}"
+              echo "Copied ${basename} to ${dst_dir}"
+            done
+          }
+
+          PLATFORMS=("linux-x86_64" "linux-aarch64" "windows-x86_64" "windows-aarch64" "macos-x86_64" "macos-aarch64")
+
+          for p in "${PLATFORMS[@]}"; do
+            copy_artifact "intel-${p}" "crates/ctt-intel-texture-compressor/prebuilt" "$p"
+            copy_artifact "bc7enc-${p}" "crates/ctt-bc7enc-rdo/prebuilt" "$p"
+          done
+
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@96b4a1ef7235a096b17240c259729fdd70c83d45 # v2
+        with:
+          subject-path: "crates/*/prebuilt/bins/**/*.a,crates/*/prebuilt/bins/**/*.lib"
+
+      - name: Download attestation bundles
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          tmpdir=$(mktemp -d)
+          find crates/*/prebuilt/bins -type f \( -name '*.a' -o -name '*.lib' \) | while read -r binary; do
+            local_name=$(basename "$binary")
+            dir=$(dirname "$binary")
+
+            echo "Fetching attestation for ${binary}..."
+            # gh attestation download writes a sha256:*.jsonl file to cwd
+            rm -f "$tmpdir"/*
+            (cd "$tmpdir" && gh attestation download "$GITHUB_WORKSPACE/$binary" \
+              --repo "${{ github.repository }}")
+            # Rename the downloaded file to sit next to the binary
+            mv "$tmpdir"/*.jsonl "${dir}/${local_name}.sigstore.jsonl"
+          done
+          rm -rf "$tmpdir"
+
+      - name: Remove .gitkeep files
+        run: find crates/*/prebuilt/bins -name '.gitkeep' -delete
+
+      - name: Commit and push
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add crates/*/prebuilt/bins/
+          git commit -m "chore: update prebuilt ISPC binaries" || echo "No changes"
+          git push

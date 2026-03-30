@@ -1,8 +1,4 @@
-pub mod bindings {
-    use ispc_rt::ispc_module;
-    ispc_module!(kernel);
-    ispc_module!(kernel_astc);
-}
+pub mod bindings;
 
 pub mod astc;
 pub mod bc1;

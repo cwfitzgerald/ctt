@@ -137,6 +137,22 @@ jobs:
       - name: Deny
         run: cargo deny --all-features check
 
+  verify-attestations:
+    name: Verify attestations
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Rust
+        uses: cwfitzgerald/repo-common/.github/actions/install-rust@trunk
+        with:
+          version: ${{ env.CI_RUST_VERSION }}
+
+      - name: Verify binary attestations
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: cargo xtask verify-binaries
+
   msrv:
     name: MSRV
     runs-on: ubuntu-latest
