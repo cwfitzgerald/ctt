@@ -68,7 +68,7 @@ impl EncoderRegistry {
         #[allow(unused_mut)]
         let mut r = Self::new();
         #[cfg(feature = "encoder-bc7enc")]
-        r.register(Box::new(crate::encoders::bc7enc::Bc7encEncoder::new()));
+        r.register(Box::new(crate::encoders::bc7enc::Bc7encEncoder));
         #[cfg(feature = "encoder-ispc")]
         r.register(Box::new(crate::encoders::ispc::IspcEncoder));
         r

@@ -70,13 +70,17 @@ impl<'a, const COMPONENTS: usize> Surface<'a, COMPONENTS> {
             i32::try_from(stride).is_ok(),
             "stride {stride} exceeds i32::MAX"
         );
+        let width_components = (width as usize)
+            .checked_mul(COMPONENTS)
+            .expect("width * COMPONENTS overflows usize");
         assert!(
-            stride as usize >= width as usize * COMPONENTS,
-            "stride {stride} is less than width * COMPONENTS ({} * {COMPONENTS} = {})",
+            stride as usize >= width_components,
+            "stride {stride} is less than width * COMPONENTS ({} * {COMPONENTS} = {width_components})",
             width,
-            width as usize * COMPONENTS,
         );
-        let required = stride as usize * height as usize;
+        let required = (stride as usize)
+            .checked_mul(height as usize)
+            .expect("stride * height overflows usize");
         assert!(
             data.len() >= required,
             "data length {} is less than stride * height ({required})",
