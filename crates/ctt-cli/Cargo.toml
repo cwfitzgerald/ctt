@@ -11,6 +11,11 @@ description = "Command-line interface for the ctt texture compression library"
 keywords = ["texture", "compression", "gpu", "cli"]
 categories = ["command-line-utilities", "graphics"]
 
+[features]
+default = ["ispc-prebuilt"]
+ispc-prebuilt = ["ctt/ispc-prebuilt"]
+ispc-build-from-source = ["ctt/ispc-build-from-source"]
+
 [[bin]]
 name = "ctt"
 path = "src/main.rs"

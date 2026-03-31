@@ -1,5 +1,3 @@
-use std::sync::Once;
-
 use ctt_bc7enc_rdo::bc7e;
 
 use crate::encoder::{Encoder, EncoderSettings, Quality};
@@ -20,21 +18,8 @@ impl EncoderSettings for Bc7encSettings {
     }
 }
 
-pub struct Bc7encEncoder {
-    init: Once,
-}
-
-impl Bc7encEncoder {
-    pub fn new() -> Self {
-        Self { init: Once::new() }
-    }
-}
-
-impl Default for Bc7encEncoder {
-    fn default() -> Self {
-        Self::new()
-    }
-}
+#[derive(Default)]
+pub struct Bc7encEncoder;
 
 impl Encoder for Bc7encEncoder {
     fn name(&self) -> &str {
@@ -68,8 +53,6 @@ impl Encoder for Bc7encEncoder {
             return Err(Error::CompressionNotImplemented(format));
         }
 
-        self.init.call_once(bc7e::compress_block_init);
-
         let perceptual = settings
             .and_then(|s| s.as_any().downcast_ref::<Bc7encSettings>())
             .map(|s| s.perceptual)
@@ -85,7 +68,13 @@ impl Encoder for Bc7encEncoder {
         };
 
         let pixels = image::tile_to_blocks(raw_image, 4, 4);
-        let num_blocks = (raw_image.width.div_ceil(4) * raw_image.height.div_ceil(4)) as usize;
-        Ok(bc7e::compress_blocks_alloc(num_blocks, &pixels, &params))
+        let pixels: &[u32] = bytemuck::cast_slice(&pixels);
+        let num_blocks = raw_image
+            .width
+            .div_ceil(4)
+            .checked_mul(raw_image.height.div_ceil(4))
+            .expect("block count overflow") as usize;
+        let compressed = bc7e::compress_blocks_alloc(num_blocks, pixels, &params);
+        Ok(bytemuck::cast_vec(compressed))
     }
 }

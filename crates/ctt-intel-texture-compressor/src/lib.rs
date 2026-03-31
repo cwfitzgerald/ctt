@@ -1,8 +1,7 @@
-pub mod bindings {
-    use ispc_rt::ispc_module;
-    ispc_module!(kernel);
-    ispc_module!(kernel_astc);
-}
+#[cfg(feature = "prebuilt")]
+extern crate ctt_intel_texture_compressor_prebuilt;
+
+pub mod bindings;
 
 pub mod astc;
 pub mod bc1;
@@ -74,7 +73,17 @@ impl<'a, const COMPONENTS: usize> Surface<'a, COMPONENTS> {
             i32::try_from(stride).is_ok(),
             "stride {stride} exceeds i32::MAX"
         );
-        let required = stride as usize * height as usize;
+        let width_components = (width as usize)
+            .checked_mul(COMPONENTS)
+            .expect("width * COMPONENTS overflows usize");
+        assert!(
+            stride as usize >= width_components,
+            "stride {stride} is less than width * COMPONENTS ({} * {COMPONENTS} = {width_components})",
+            width,
+        );
+        let required = (stride as usize)
+            .checked_mul(height as usize)
+            .expect("stride * height overflows usize");
         assert!(
             data.len() >= required,
             "data length {} is less than stride * height ({required})",

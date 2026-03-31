@@ -1,0 +1,15 @@
+[package]
+name = "ispc-build-utils"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Utilities for compiling ISPC source files in build scripts"
+
+[dependencies]
+find-msvc-tools = "0.1.9"
+
+[lints]
+workspace = true

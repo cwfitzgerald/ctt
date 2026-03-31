@@ -3,10 +3,7 @@ name = "ctt-bc7enc-rdo"
 version.workspace = true
 edition.workspace = true
 repository.workspace = true
-authors = [
-    "The ctt developers",
-    "Rich Geldreich <richgel99@gmail.com>",
-]
+authors = ["The ctt developers", "Rich Geldreich <richgel99@gmail.com>"]
 license = "(MIT OR Apache-2.0) AND Apache-2.0"
 rust-version.workspace = true
 readme = "../../README.md"
@@ -15,12 +12,16 @@ keywords = ["texture", "compression", "bc7", "gpu"]
 categories = ["graphics", "compression"]
 build = "build.rs"
 
+[features]
+default = ["prebuilt"]
+prebuilt = ["dep:ctt-bc7enc-rdo-prebuilt"]
+build-from-source = []
+
 [dependencies]
-ispc_rt = "2"
+ctt-bc7enc-rdo-prebuilt = { workspace = true, optional = true }
 
 [build-dependencies]
-ispc_compile = "2.0.1"
-ispc_rt = "2"
+ispc-build-utils = { workspace = true }
 
 [lints]
 workspace = true

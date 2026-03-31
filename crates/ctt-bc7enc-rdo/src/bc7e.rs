@@ -10,71 +10,82 @@
 //!
 //! Each 4x4 block produces **16 bytes** of BC7-compressed data.
 
+use std::sync::Once;
+
 use crate::bindings::bc7e as ffi;
+
+static INIT: Once = Once::new();
 
 /// Initializes the bc7e codec lookup tables.
 ///
-/// Must be called at least once before [`compress_blocks`]. Subsequent calls
-/// are no-ops. This is **not** thread-safe with respect to concurrent calls
-/// to [`compress_blocks`] during the first initialization.
-pub fn compress_block_init() {
-    unsafe {
+/// Called automatically by all encoding functions. Subsequent calls are no-ops.
+fn compress_block_init() {
+    INIT.call_once(|| unsafe {
         ffi::bc7e_compress_block_init();
-    }
+    });
 }
 
 /// Returns the compressed output size in bytes for an image of the given
 /// dimensions: 16 bytes per 4x4 block.
+///
+/// # Panics
+///
+/// Panics if the block count overflows `u32`.
 #[must_use]
 pub fn calc_output_size(width: u32, height: u32) -> usize {
-    let block_count = (width.div_ceil(4) * height.div_ceil(4)) as usize;
+    let block_count = width
+        .div_ceil(4)
+        .checked_mul(height.div_ceil(4))
+        .expect("block count overflow") as usize;
     block_count * 16
 }
 
 /// Compresses 4x4 pixel blocks into BC7.
 ///
-/// `pixels` must contain `num_blocks * 64` bytes of tightly-packed RGBA data
-/// (16 pixels per block, 4 bytes per pixel). `blocks` must be exactly
-/// `num_blocks * 16` bytes.
+/// `pixels` must contain `num_blocks * 16` RGBA pixels (one `u32` per pixel,
+/// 16 pixels per block). `blocks` must have exactly `num_blocks * 2` elements
+/// (each block is 16 bytes = 2 × `u64`).
 ///
 /// # Panics
 ///
 /// Panics if `blocks` or `pixels` are not correctly sized for the given
 /// number of blocks.
-pub fn compress_blocks(blocks: &mut [u8], pixels: &[u8], params: &ffi::bc7e_compress_block_params) {
+pub fn compress_blocks(
+    blocks: &mut [u64],
+    pixels: &[u32],
+    params: &ffi::bc7e_compress_block_params,
+) {
     assert_eq!(
-        blocks.len() % 16,
+        blocks.len() % 2,
         0,
-        "output must be a multiple of 16 bytes"
+        "output must be a multiple of 2 u64s (16 bytes per block)"
     );
-    let num_blocks = blocks.len() / 16;
+    let num_blocks = blocks.len() / 2;
     assert_eq!(
         pixels.len(),
-        num_blocks * 64,
-        "pixels must contain {num_blocks} blocks * 64 bytes each, got {}",
+        num_blocks * 16,
+        "pixels must contain {num_blocks} blocks * 16 u32 pixels each, got {}",
         pixels.len()
     );
+    let num_blocks_u32 = u32::try_from(num_blocks).expect("block count exceeds u32::MAX");
+
+    compress_block_init();
 
     unsafe {
-        ffi::bc7e_compress_blocks(
-            num_blocks as u32,
-            blocks.as_mut_ptr() as *mut u64,
-            pixels.as_ptr() as *const u32,
-            params,
-        );
+        ffi::bc7e_compress_blocks(num_blocks_u32, blocks.as_mut_ptr(), pixels.as_ptr(), params);
     }
 }
 
 /// Compresses 4x4 pixel blocks into BC7, returning a newly allocated `Vec`.
 ///
-/// `pixels` must contain `num_blocks * 64` bytes of tightly-packed RGBA data.
+/// `pixels` must contain `num_blocks * 16` RGBA pixels (one `u32` per pixel).
 #[must_use]
 pub fn compress_blocks_alloc(
     num_blocks: usize,
-    pixels: &[u8],
+    pixels: &[u32],
     params: &ffi::bc7e_compress_block_params,
-) -> Vec<u8> {
-    let mut output = vec![0u8; num_blocks * 16];
+) -> Vec<u64> {
+    let mut output = vec![0u64; num_blocks * 2];
     compress_blocks(&mut output, pixels, params);
     output
 }
@@ -86,6 +97,7 @@ pub fn compress_blocks_alloc(
 /// Default / highest quality preset.
 #[must_use]
 pub fn params_init(perceptual: bool) -> ffi::bc7e_compress_block_params {
+    compress_block_init();
     let mut p = unsafe { std::mem::zeroed() };
     unsafe { ffi::bc7e_compress_block_params_init(&mut p, perceptual) };
     p
@@ -94,6 +106,7 @@ pub fn params_init(perceptual: bool) -> ffi::bc7e_compress_block_params {
 /// Ultrafast preset — mode 6 only for opaque, limited alpha modes.
 #[must_use]
 pub fn params_init_ultrafast(perceptual: bool) -> ffi::bc7e_compress_block_params {
+    compress_block_init();
     let mut p = unsafe { std::mem::zeroed() };
     unsafe { ffi::bc7e_compress_block_params_init_ultrafast(&mut p, perceptual) };
     p
@@ -102,6 +115,7 @@ pub fn params_init_ultrafast(perceptual: bool) -> ffi::bc7e_compress_block_param
 /// Very fast preset.
 #[must_use]
 pub fn params_init_veryfast(perceptual: bool) -> ffi::bc7e_compress_block_params {
+    compress_block_init();
     let mut p = unsafe { std::mem::zeroed() };
     unsafe { ffi::bc7e_compress_block_params_init_veryfast(&mut p, perceptual) };
     p
@@ -110,6 +124,7 @@ pub fn params_init_veryfast(perceptual: bool) -> ffi::bc7e_compress_block_params
 /// Fast preset.
 #[must_use]
 pub fn params_init_fast(perceptual: bool) -> ffi::bc7e_compress_block_params {
+    compress_block_init();
     let mut p = unsafe { std::mem::zeroed() };
     unsafe { ffi::bc7e_compress_block_params_init_fast(&mut p, perceptual) };
     p
@@ -118,6 +133,7 @@ pub fn params_init_fast(perceptual: bool) -> ffi::bc7e_compress_block_params {
 /// Basic quality preset.
 #[must_use]
 pub fn params_init_basic(perceptual: bool) -> ffi::bc7e_compress_block_params {
+    compress_block_init();
     let mut p = unsafe { std::mem::zeroed() };
     unsafe { ffi::bc7e_compress_block_params_init_basic(&mut p, perceptual) };
     p
@@ -126,6 +142,7 @@ pub fn params_init_basic(perceptual: bool) -> ffi::bc7e_compress_block_params {
 /// Slow preset — higher quality, pbit search enabled.
 #[must_use]
 pub fn params_init_slow(perceptual: bool) -> ffi::bc7e_compress_block_params {
+    compress_block_init();
     let mut p = unsafe { std::mem::zeroed() };
     unsafe { ffi::bc7e_compress_block_params_init_slow(&mut p, perceptual) };
     p
@@ -134,6 +151,7 @@ pub fn params_init_slow(perceptual: bool) -> ffi::bc7e_compress_block_params {
 /// Very slow preset.
 #[must_use]
 pub fn params_init_veryslow(perceptual: bool) -> ffi::bc7e_compress_block_params {
+    compress_block_init();
     let mut p = unsafe { std::mem::zeroed() };
     unsafe { ffi::bc7e_compress_block_params_init_veryslow(&mut p, perceptual) };
     p
@@ -142,6 +160,7 @@ pub fn params_init_veryslow(perceptual: bool) -> ffi::bc7e_compress_block_params
 /// Slowest preset — maximum quality.
 #[must_use]
 pub fn params_init_slowest(perceptual: bool) -> ffi::bc7e_compress_block_params {
+    compress_block_init();
     let mut p = unsafe { std::mem::zeroed() };
     unsafe { ffi::bc7e_compress_block_params_init_slowest(&mut p, perceptual) };
     p
@@ -153,17 +172,14 @@ mod tests {
 
     #[test]
     fn compress_single_block() {
-        compress_block_init();
-
-        // One 4x4 block of solid red pixels (RGBA).
-        let mut pixels = [0u8; 64];
-        for i in 0..16 {
-            pixels[i * 4] = 255; // R
-            pixels[i * 4 + 3] = 255; // A
+        // One 4x4 block of solid red pixels (RGBA packed as u32).
+        let mut pixels = [0u32; 16];
+        for pixel in &mut pixels {
+            *pixel = 0xFF0000FF_u32.to_le(); // R=255, G=0, B=0, A=255
         }
 
         let params = params_init_ultrafast(false);
-        let mut output = [0u8; 16];
+        let mut output = [0u64; 2];
         compress_blocks(&mut output, &pixels, &params);
 
         // The output should be non-zero (a valid BC7 block).
