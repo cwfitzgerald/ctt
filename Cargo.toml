@@ -8,7 +8,7 @@ members = [
 resolver = "3"
 
 [workspace.package]
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 rust-version = "1.85"
 authors = ["The ctt developers"]
@@ -18,12 +18,12 @@ repository = "https://github.com/cwfitzgerald/ctt"
 [workspace.lints]
 
 [workspace.dependencies]
-ctt = { path = "crates/ctt", version = "0.1", default-features = false }
-ctt-intel-texture-compressor = { path = "crates/ctt-intel-texture-compressor", version = "0.1", default-features = false }
-ctt-intel-texture-compressor-prebuilt = { path = "crates/ctt-intel-texture-compressor/prebuilt", version = "0.1", default-features = false }
-ctt-bc7enc-rdo = { path = "crates/ctt-bc7enc-rdo", version = "0.1", default-features = false }
-ctt-bc7enc-rdo-prebuilt = { path = "crates/ctt-bc7enc-rdo/prebuilt", version = "0.1", default-features = false }
-ispc-build-utils = { path = "crates/ispc-build-utils", version = "0.1", default-features = false }
+ctt = { path = "crates/ctt", version = "0.2", default-features = false }
+ctt-intel-texture-compressor = { path = "crates/ctt-intel-texture-compressor", version = "0.2", default-features = false }
+ctt-intel-texture-compressor-prebuilt = { path = "crates/ctt-intel-texture-compressor/prebuilt", version = "0.2", default-features = false }
+ctt-bc7enc-rdo = { path = "crates/ctt-bc7enc-rdo", version = "0.2", default-features = false }
+ctt-bc7enc-rdo-prebuilt = { path = "crates/ctt-bc7enc-rdo/prebuilt", version = "0.2", default-features = false }
+ispc-build-utils = { path = "crates/ispc-build-utils", version = "0.2", default-features = false }
 
 anyhow = "1"
 bytemuck = "1"

@@ -16,8 +16,13 @@ Per Keep a Changelog there are 6 main categories of changes:
 #### Table of Contents
 
 - [Unreleased](#unreleased)
+- [v0.2.0](#v020)
 
 ## Unreleased
+
+## v0.2.0
+
+Released 2026-03-31
 
 ### Added
 
@@ -33,3 +38,6 @@ Per Keep a Changelog there are 6 main categories of changes:
 - GitHub Actions pinned to commit SHAs.
 
 ## Diffs
+
+- [Unreleased](https://github.com/cwfitzgerald/ctt/compare/v0.2.0...HEAD)
+- [v0.2.0](https://github.com/cwfitzgerald/ctt/compare/v0.1.0...v0.2.0)
