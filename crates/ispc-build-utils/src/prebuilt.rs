@@ -1,4 +1,4 @@
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 /// Returns the platform directory name (e.g. `"linux-x86_64"`) for the current
 /// Cargo build target.
@@ -35,21 +35,11 @@ pub fn platform_dir_for(target_os: &str, target_arch: &str) -> &'static str {
 pub fn link_prebuilt(lib_names: &[&str]) {
     let manifest_dir =
         PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR not set"));
-    link_prebuilt_from(lib_names, &manifest_dir.join("bins"));
-}
-
-/// Copy prebuilt static libraries from `<bins_base>/<platform>/` into
-/// `OUT_DIR`, and emit the appropriate `cargo:rustc-link-lib` and
-/// `cargo:rustc-link-search` directives.
-///
-/// `lib_names` should be the bare library names (e.g. `["bc7e"]` or
-/// `["kernel", "kernel_astc"]`).
-pub fn link_prebuilt_from(lib_names: &[&str], bins_base: &Path) {
     let out_dir = PathBuf::from(std::env::var("OUT_DIR").expect("OUT_DIR not set"));
     let target_env = std::env::var("CARGO_CFG_TARGET_ENV").unwrap_or_default();
 
     let platform = platform_dir();
-    let bins_dir = bins_base.join(platform);
+    let bins_dir = manifest_dir.join("bins").join(platform);
 
     for &lib_name in lib_names {
         let filename = if target_env == "msvc" {

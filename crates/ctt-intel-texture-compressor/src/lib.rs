@@ -1,3 +1,6 @@
+#[cfg(feature = "prebuilt")]
+extern crate ctt_intel_texture_compressor_prebuilt;
+
 pub mod bindings;
 
 pub mod astc;

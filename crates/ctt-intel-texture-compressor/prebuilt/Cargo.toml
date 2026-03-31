@@ -15,12 +15,16 @@ description = "Prebuilt ISPC static libraries for ctt-intel-texture-compressor"
 keywords = ["texture", "compression", "ispc", "gpu"]
 categories = ["graphics", "compression"]
 build = "build.rs"
+links = "ispc_tex"
 include = [
     "src/**",
     "build.rs",
     "bins/**",
     "Cargo.toml",
 ]
+
+[build-dependencies]
+ispc-build-utils = { workspace = true }
 
 [lints]
 workspace = true

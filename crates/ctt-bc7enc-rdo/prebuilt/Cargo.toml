@@ -13,12 +13,16 @@ description = "Prebuilt ISPC static libraries for ctt-bc7enc-rdo"
 keywords = ["texture", "compression", "bc7", "gpu"]
 categories = ["graphics", "compression"]
 build = "build.rs"
+links = "bc7e"
 include = [
     "src/**",
     "build.rs",
     "bins/**",
     "Cargo.toml",
 ]
+
+[build-dependencies]
+ispc-build-utils = { workspace = true }
 
 [lints]
 workspace = true
