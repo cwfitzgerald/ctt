@@ -85,7 +85,9 @@ impl Encoder for Bc7encEncoder {
         };
 
         let pixels = image::tile_to_blocks(raw_image, 4, 4);
+        let pixels: &[u32] = bytemuck::cast_slice(&pixels);
         let num_blocks = (raw_image.width.div_ceil(4) * raw_image.height.div_ceil(4)) as usize;
-        Ok(bc7e::compress_blocks_alloc(num_blocks, &pixels, &params))
+        let compressed = bc7e::compress_blocks_alloc(num_blocks, pixels, &params);
+        Ok(bytemuck::cast_vec(compressed))
     }
 }

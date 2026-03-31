@@ -18,21 +18,20 @@ pub fn verify_binaries() -> Result<()> {
 
     for bins_dir in &prebuilt_dirs {
         if !bins_dir.exists() {
-            eprintln!("SKIP: {} does not exist", bins_dir.display());
-            continue;
+            bail!("{} does not exist", bins_dir.display());
         }
 
         for_each_binary(bins_dir, &mut |binary| {
-            let mut attestation = binary.as_os_str().to_owned();
-            attestation.push(".sigstore.jsonl");
-            let attestation = PathBuf::from(attestation);
-            if !attestation.exists() {
+            let mut attestation_path = binary.as_os_str().to_owned();
+            attestation_path.push(".sigstore.jsonl");
+            let attestation_path = PathBuf::from(attestation_path);
+            if !attestation_path.exists() {
                 eprintln!("FAIL: no attestation for {}", binary.display());
                 missing_attestation += 1;
                 return;
             }
 
-            match verify_attestation(binary) {
+            match verify_attestation(binary, &attestation_path) {
                 Ok(()) => {
                     println!("PASS: {}", binary.display());
                     passed += 1;
@@ -43,6 +42,10 @@ pub fn verify_binaries() -> Result<()> {
                 }
             }
         });
+    }
+
+    if passed == 0 {
+        bail!("no binaries found to verify");
     }
 
     println!();
@@ -61,13 +64,13 @@ pub fn verify_binaries() -> Result<()> {
     Ok(())
 }
 
-fn verify_attestation(binary: &Path) -> Result<(), String> {
+fn verify_attestation(binary: &Path, attestation: &Path) -> Result<(), String> {
     let output = Command::new("gh")
         .arg("attestation")
         .arg("verify")
         .arg(binary)
-        .arg("--repo")
-        .arg("cwfitzgerald/ctt")
+        .arg("--bundle")
+        .arg(attestation)
         .arg("--signer-workflow")
         .arg("cwfitzgerald/ctt/.github/workflows/build-ispc.yml")
         .output()

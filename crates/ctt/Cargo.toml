@@ -17,6 +17,7 @@ encoder-ispc = ["dep:ctt-intel-texture-compressor"]
 encoder-bc7enc = ["dep:ctt-bc7enc-rdo"]
 
 [dependencies]
+bytemuck = { workspace = true }
 ctt-intel-texture-compressor = { workspace = true, optional = true }
 ctt-bc7enc-rdo = { workspace = true, optional = true }
 ddsfile = { workspace = true }

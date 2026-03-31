@@ -33,48 +33,47 @@ pub fn calc_output_size(width: u32, height: u32) -> usize {
 
 /// Compresses 4x4 pixel blocks into BC7.
 ///
-/// `pixels` must contain `num_blocks * 64` bytes of tightly-packed RGBA data
-/// (16 pixels per block, 4 bytes per pixel). `blocks` must be exactly
-/// `num_blocks * 16` bytes.
+/// `pixels` must contain `num_blocks * 16` RGBA pixels (one `u32` per pixel,
+/// 16 pixels per block). `blocks` must have exactly `num_blocks * 2` elements
+/// (each block is 16 bytes = 2 × `u64`).
 ///
 /// # Panics
 ///
 /// Panics if `blocks` or `pixels` are not correctly sized for the given
 /// number of blocks.
-pub fn compress_blocks(blocks: &mut [u8], pixels: &[u8], params: &ffi::bc7e_compress_block_params) {
+pub fn compress_blocks(
+    blocks: &mut [u64],
+    pixels: &[u32],
+    params: &ffi::bc7e_compress_block_params,
+) {
     assert_eq!(
-        blocks.len() % 16,
+        blocks.len() % 2,
         0,
-        "output must be a multiple of 16 bytes"
+        "output must be a multiple of 2 u64s (16 bytes per block)"
     );
-    let num_blocks = blocks.len() / 16;
+    let num_blocks = blocks.len() / 2;
     assert_eq!(
         pixels.len(),
-        num_blocks * 64,
-        "pixels must contain {num_blocks} blocks * 64 bytes each, got {}",
+        num_blocks * 16,
+        "pixels must contain {num_blocks} blocks * 16 u32 pixels each, got {}",
         pixels.len()
     );
 
     unsafe {
-        ffi::bc7e_compress_blocks(
-            num_blocks as u32,
-            blocks.as_mut_ptr() as *mut u64,
-            pixels.as_ptr() as *const u32,
-            params,
-        );
+        ffi::bc7e_compress_blocks(num_blocks as u32, blocks.as_mut_ptr(), pixels.as_ptr(), params);
     }
 }
 
 /// Compresses 4x4 pixel blocks into BC7, returning a newly allocated `Vec`.
 ///
-/// `pixels` must contain `num_blocks * 64` bytes of tightly-packed RGBA data.
+/// `pixels` must contain `num_blocks * 16` RGBA pixels (one `u32` per pixel).
 #[must_use]
 pub fn compress_blocks_alloc(
     num_blocks: usize,
-    pixels: &[u8],
+    pixels: &[u32],
     params: &ffi::bc7e_compress_block_params,
-) -> Vec<u8> {
-    let mut output = vec![0u8; num_blocks * 16];
+) -> Vec<u64> {
+    let mut output = vec![0u64; num_blocks * 2];
     compress_blocks(&mut output, pixels, params);
     output
 }
@@ -155,15 +154,14 @@ mod tests {
     fn compress_single_block() {
         compress_block_init();
 
-        // One 4x4 block of solid red pixels (RGBA).
-        let mut pixels = [0u8; 64];
-        for i in 0..16 {
-            pixels[i * 4] = 255; // R
-            pixels[i * 4 + 3] = 255; // A
+        // One 4x4 block of solid red pixels (RGBA packed as u32).
+        let mut pixels = [0u32; 16];
+        for pixel in &mut pixels {
+            *pixel = 0xFF0000FF_u32.to_le(); // R=255, G=0, B=0, A=255
         }
 
         let params = params_init_ultrafast(false);
-        let mut output = [0u8; 16];
+        let mut output = [0u64; 2];
         compress_blocks(&mut output, &pixels, &params);
 
         // The output should be non-zero (a valid BC7 block).

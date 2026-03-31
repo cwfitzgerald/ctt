@@ -161,7 +161,6 @@ impl Config {
         assert!(!self.files.is_empty(), "no ISPC files added to compile");
 
         let ispc_path = find_ispc();
-        verify_ispc_sha256(&ispc_path);
 
         let (ispc_targets, ispc_arch) = targets_for_arch(&target.target_arch);
         let ispc_target_os = target_os_for_cargo(&target.target_os);
@@ -250,7 +249,7 @@ pub fn targets_for_arch(cargo_arch: &str) -> (&'static str, &'static str) {
             "sse2-i32x4,sse4-i32x4,avx1-i32x8,avx2-i32x8,avx512skx-i32x16",
             if cargo_arch == "x86" { "x86" } else { "x86-64" },
         ),
-        "arm" | "aarch64" => ("neon-i32x8", "aarch64"),
+        "aarch64" => ("neon-i32x8", "aarch64"),
         other => panic!("unsupported target architecture for ISPC: {other}"),
     }
 }
@@ -299,51 +298,6 @@ fn find_ispc() -> PathBuf {
         .next()
         .expect("empty output from which/where");
     PathBuf::from(first_line.trim())
-}
-
-/// If `ISPC_EXPECTED_SHA256` is set, compute the SHA-256 of the ISPC binary
-/// and assert it matches. This is used by CI to enforce a pinned compiler
-/// version.
-fn verify_ispc_sha256(ispc_path: &Path) {
-    #[cfg(feature = "verify-hash")]
-    {
-        use std::fmt::Write as _;
-
-        let expected = match std::env::var("ISPC_EXPECTED_SHA256") {
-            Ok(v) => v,
-            Err(_) => return,
-        };
-
-        use sha2::{Digest, Sha256};
-        let bytes = std::fs::read(ispc_path).unwrap_or_else(|e| {
-            panic!(
-                "failed to read ISPC binary at {} for SHA-256 verification: {e}",
-                ispc_path.display()
-            )
-        });
-        let hash = Sha256::digest(&bytes);
-        let mut hex = String::with_capacity(64);
-        for byte in hash.as_slice() {
-            write!(&mut hex, "{byte:02x}").unwrap();
-        }
-
-        assert!(
-            hex.eq_ignore_ascii_case(&expected),
-            "ISPC binary SHA-256 mismatch!\n  expected: {expected}\n  actual:   {hex}\n  path:     {}",
-            ispc_path.display()
-        );
-    }
-
-    #[cfg(not(feature = "verify-hash"))]
-    {
-        let _ = ispc_path;
-        if std::env::var("ISPC_EXPECTED_SHA256").is_ok() {
-            panic!(
-                "ISPC_EXPECTED_SHA256 is set but the `verify-hash` feature is not enabled \
-                 on ispc-build-utils. Enable it to verify the ISPC binary hash."
-            );
-        }
-    }
 }
 
 /// Collect all object files from a directory.

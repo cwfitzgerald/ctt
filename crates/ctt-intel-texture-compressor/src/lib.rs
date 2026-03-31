@@ -70,6 +70,12 @@ impl<'a, const COMPONENTS: usize> Surface<'a, COMPONENTS> {
             i32::try_from(stride).is_ok(),
             "stride {stride} exceeds i32::MAX"
         );
+        assert!(
+            stride as usize >= width as usize * COMPONENTS,
+            "stride {stride} is less than width * COMPONENTS ({} * {COMPONENTS} = {})",
+            width,
+            width as usize * COMPONENTS,
+        );
         let required = stride as usize * height as usize;
         assert!(
             data.len() >= required,

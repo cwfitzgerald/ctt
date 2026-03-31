@@ -58,7 +58,7 @@ jobs:
             ispc_ext: zip
             test: false
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
 
       - name: Install Rust
         uses: cwfitzgerald/repo-common/.github/actions/install-rust@trunk
@@ -68,7 +68,7 @@ jobs:
           components: clippy
 
       - name: Install cargo-nextest
-        uses: taiki-e/install-action@v2
+        uses: taiki-e/install-action@6ef672efc2b5aabc787a9e94baf4989aa02a97df # v2
         with:
           tool: cargo-nextest
 
@@ -107,7 +107,7 @@ jobs:
     name: Format
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
 
       - name: Install Rust
         uses: cwfitzgerald/repo-common/.github/actions/install-rust@trunk
@@ -122,7 +122,7 @@ jobs:
     name: Deny
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
 
       - name: Install Rust
         uses: cwfitzgerald/repo-common/.github/actions/install-rust@trunk
@@ -130,7 +130,7 @@ jobs:
           version: ${{ env.CI_RUST_VERSION }}
 
       - name: Install cargo-deny
-        uses: taiki-e/install-action@v2
+        uses: taiki-e/install-action@6ef672efc2b5aabc787a9e94baf4989aa02a97df # v2
         with:
           tool: cargo-deny
 
@@ -141,7 +141,7 @@ jobs:
     name: Verify attestations
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
 
       - name: Install Rust
         uses: cwfitzgerald/repo-common/.github/actions/install-rust@trunk
@@ -160,7 +160,7 @@ jobs:
       RUSTFLAGS: ""
       RUSTDOCFLAGS: ""
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
 
       - name: Install Rust
         uses: cwfitzgerald/repo-common/.github/actions/install-rust@trunk

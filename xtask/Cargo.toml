@@ -9,4 +9,4 @@ publish = false
 anyhow = { workspace = true }
 bindgen = "0.71"
 clap = { workspace = true }
-ispc-build-utils = { workspace = true, features = ["verify-hash"] }
+ispc-build-utils = { workspace = true }

@@ -3,10 +3,7 @@ name: Build ISPC Libraries
 on:
   workflow_dispatch:
 
-permissions:
-  id-token: write
-  contents: write
-  attestations: write
+permissions: {}
 
 env:
   CI_RUST_VERSION: "1.94"
@@ -16,6 +13,7 @@ jobs:
   build:
     name: Build ${{ matrix.artifact_dir }}
     runs-on: ${{ matrix.os }}
+    permissions: {}
     strategy:
       fail-fast: false
       matrix:
@@ -52,7 +50,7 @@ jobs:
             ispc_asset_suffix: macOS.arm64
             ispc_ext: tar.gz
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
 
       - name: Install Rust
         uses: cwfitzgerald/repo-common/.github/actions/install-rust@trunk
@@ -60,7 +58,7 @@ jobs:
           version: ${{ env.CI_RUST_VERSION }}
           targets: ${{ matrix.target }}
 
-      - name: Download and verify ISPC
+      - name: Download ISPC
         shell: bash
         run: |
           ISPC_ASSET="ispc-v${ISPC_VERSION}-${{ matrix.ispc_asset_suffix }}"
@@ -78,15 +76,6 @@ jobs:
           fi
           echo "ISPC_PATH=$(pwd)/${ISPC_BIN}" >> "$GITHUB_ENV"
           echo "$(pwd)/ispc_extracted/${ISPC_ASSET}/bin" >> "$GITHUB_PATH"
-
-          # Compute and export SHA-256 for build-time verification
-          if command -v sha256sum &>/dev/null; then
-            HASH=$(sha256sum "$ISPC_BIN" | cut -d' ' -f1)
-          else
-            HASH=$(shasum -a 256 "$ISPC_BIN" | cut -d' ' -f1)
-          fi
-          echo "ISPC_EXPECTED_SHA256=${HASH}" >> "$GITHUB_ENV"
-          echo "ISPC SHA-256: ${HASH}"
 
       - name: Build ISPC libraries
         shell: bash
@@ -119,8 +108,12 @@ jobs:
     name: Attest and commit
     needs: build
     runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: write
+      attestations: write
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           ref: ${{ github.head_ref || github.ref }}
 
@@ -173,7 +166,7 @@ jobs:
           set -euo pipefail
 
           tmpdir=$(mktemp -d)
-          find crates/*/prebuilt/bins -type f \( -name '*.a' -o -name '*.lib' \) | while read -r binary; do
+          while IFS= read -r -d '' binary; do
             local_name=$(basename "$binary")
             dir=$(dirname "$binary")
 
@@ -184,7 +177,7 @@ jobs:
               --repo "${{ github.repository }}")
             # Rename the downloaded file to sit next to the binary
             mv "$tmpdir"/*.jsonl "${dir}/${local_name}.sigstore.jsonl"
-          done
+          done < <(find crates/*/prebuilt/bins -type f \( -name '*.a' -o -name '*.lib' \) -print0)
           rm -rf "$tmpdir"
 
       - name: Remove .gitkeep files

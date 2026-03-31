@@ -65,6 +65,8 @@ pub fn link_prebuilt_from(lib_names: &[&str], bins_base: &Path) {
             src.display()
         );
 
+        println!("cargo:rerun-if-changed={}", src.display());
+
         let dst = out_dir.join(&filename);
         std::fs::copy(&src, &dst).unwrap_or_else(|e| {
             panic!("failed to copy {} to {}: {e}", src.display(), dst.display())
