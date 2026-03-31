@@ -86,6 +86,7 @@ jobs:
           fi
           echo "$GITHUB_WORKSPACE/ispc_extracted/${ISPC_ASSET}/bin" >> "$GITHUB_PATH"
 
+      # Default features (prebuilt)
       - name: Clippy
         run: cargo clippy --target ${{ matrix.target }} --all-targets
 
@@ -102,6 +103,45 @@ jobs:
       - name: Doctest
         if: ${{ matrix.test }}
         run: cargo test --doc --target ${{ matrix.target }}
+
+      # build-from-source
+      - name: Clippy (build-from-source)
+        run: cargo clippy --target ${{ matrix.target }} --all-targets --no-default-features --features ctt-cli/ispc-build-from-source
+
+      - name: Build (build-from-source)
+        run: cargo build --target ${{ matrix.target }} --no-default-features --features ctt-cli/ispc-build-from-source
+
+      - name: Doc (build-from-source)
+        run: cargo doc --target ${{ matrix.target }} --no-deps --no-default-features --features ctt-cli/ispc-build-from-source
+
+      - name: Test (build-from-source)
+        if: ${{ matrix.test }}
+        run: cargo nextest run --target ${{ matrix.target }} --no-default-features --features ctt-cli/ispc-build-from-source
+
+      - name: Doctest (build-from-source)
+        if: ${{ matrix.test }}
+        run: cargo test --doc --target ${{ matrix.target }} --no-default-features --features ctt-cli/ispc-build-from-source
+
+  no-prebuilt-in-build-from-source:
+    name: No prebuilt in build-from-source
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+
+      - name: Install Rust
+        uses: cwfitzgerald/repo-common/.github/actions/install-rust@trunk
+        with:
+          version: ${{ env.CI_RUST_VERSION }}
+
+      - name: Check no prebuilt crates in build-from-source tree
+        shell: bash
+        run: |
+          TREE=$(cargo tree --no-default-features --features ctt-cli/ispc-build-from-source -e features)
+          if echo "$TREE" | grep -q prebuilt; then
+            echo "ERROR: prebuilt crates found in build-from-source dependency tree:"
+            echo "$TREE" | grep prebuilt
+            exit 1
+          fi
 
   format:
     name: Format

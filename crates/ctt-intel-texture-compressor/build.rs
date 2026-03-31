@@ -1,7 +1,4 @@
 fn main() {
-    #[cfg(all(feature = "prebuilt", feature = "build-from-source"))]
-    compile_error!("Cannot enable both 'prebuilt' and 'build-from-source' — pick one");
-
     // Always compile the C++ ASTC support code that the ISPC kernel_astc
     // module extern "C"'s into.
     cc::Build::new()
@@ -9,15 +6,6 @@ fn main() {
         .file("ispc/ispc_texcomp_astc.cpp")
         .cpp(true)
         .compile("ispc_texcomp_astc");
-
-    #[cfg(feature = "prebuilt")]
-    {
-        let manifest_dir = std::path::PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap());
-        ispc_build_utils::prebuilt::link_prebuilt_from(
-            &["kernel", "kernel_astc"],
-            &manifest_dir.join("prebuilt/bins"),
-        );
-    }
 
     #[cfg(feature = "build-from-source")]
     {
@@ -31,5 +19,14 @@ fn main() {
             .opt_level(2)
             .woff();
         kernel_astc.compile("kernel_astc");
+    }
+
+    #[cfg(all(feature = "prebuilt", not(feature = "build-from-source")))]
+    {
+        let manifest_dir = std::path::PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap());
+        ispc_build_utils::prebuilt::link_prebuilt_from(
+            &["kernel", "kernel_astc"],
+            &manifest_dir.join("prebuilt/bins"),
+        );
     }
 }

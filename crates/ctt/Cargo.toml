@@ -12,9 +12,11 @@ keywords = ["texture", "compression", "gpu", "bc7", "dds"]
 categories = ["graphics", "compression"]
 
 [features]
-default = ["encoder-ispc", "encoder-bc7enc"]
+default = ["encoder-ispc", "encoder-bc7enc", "ispc-prebuilt"]
 encoder-ispc = ["dep:ctt-intel-texture-compressor"]
 encoder-bc7enc = ["dep:ctt-bc7enc-rdo"]
+ispc-prebuilt = ["ctt-intel-texture-compressor?/prebuilt", "ctt-bc7enc-rdo?/prebuilt"]
+ispc-build-from-source = ["ctt-intel-texture-compressor?/build-from-source", "ctt-bc7enc-rdo?/build-from-source"]
 
 [dependencies]
 bytemuck = { workspace = true }
