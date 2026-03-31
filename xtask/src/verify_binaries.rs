@@ -71,6 +71,8 @@ fn verify_attestation(binary: &Path, attestation: &Path) -> Result<(), String> {
         .arg(binary)
         .arg("--bundle")
         .arg(attestation)
+        .arg("--repo")
+        .arg("cwfitzgerald/ctt")
         .arg("--signer-workflow")
         .arg("cwfitzgerald/ctt/.github/workflows/build-ispc.yml")
         .output()
