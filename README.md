@@ -42,13 +42,17 @@ All formats support quality presets from `ultra-fast` to `very-slow` where the e
 - **KTX2** (default) — Khronos cross-platform container. Supports all formats.
 - **DDS** — DirectX standard. Does not support ETC1.
 
-## Prerequisites
+## Prebuilt binaries
 
-Building requires the following tools on your `PATH`:
+By default, ctt ships prebuilt ISPC static libraries for all supported platforms (linux, macOS, Windows; x86_64 and aarch64). A default build requires only a Rust toolchain and a C++ compiler.
 
-- **[ISPC](https://ispc.github.io/)** — Intel SPMD Program Compiler, used to compile the compression kernels.
-- **libclang** — Required by [bindgen](https://rust-lang.github.io/bindgen/) for FFI generation. On Windows: LLVM installer or Visual Studio. On Linux: `libclang-dev`. On macOS: Xcode command-line tools.
-- **A C++ compiler** — MSVC on Windows, GCC/Clang on Linux/macOS.
+Every prebuilt binary has a [GitHub Artifact Attestation](https://docs.github.com/en/actions/security-for-github-actions/using-artifact-attestations/using-artifact-attestations-to-establish-provenance-for-builds) that cryptographically proves it was produced by this repository's CI. See [`docs/prebuilt-binaries.md`](docs/prebuilt-binaries.md) for full details on the build process, attestation guarantees, and how to verify them.
+
+To build from source instead (requires [`ispc.exe`](https://github.com/ispc/ispc/releases) on `PATH`):
+
+```sh
+cargo install ctt-cli --no-default-features --features ispc-build-from-source
+```
 
 ## Installation
 
