@@ -136,7 +136,7 @@ jobs:
       - name: Check no prebuilt crates in build-from-source tree
         shell: bash
         run: |
-          TREE=$(cargo tree --no-default-features --features ctt-cli/ispc-build-from-source -e features)
+          TREE=$(cargo tree --no-default-features --features ctt-cli/ispc-build-from-source -p ctt-cli)
           if echo "$TREE" | grep -q prebuilt; then
             echo "ERROR: prebuilt crates found in build-from-source dependency tree:"
             echo "$TREE" | grep prebuilt
