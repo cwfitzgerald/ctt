@@ -3,10 +3,7 @@ name = "ctt-bc7enc-rdo"
 version.workspace = true
 edition.workspace = true
 repository.workspace = true
-authors = [
-    "The ctt developers",
-    "Rich Geldreich <richgel99@gmail.com>",
-]
+authors = ["The ctt developers", "Rich Geldreich <richgel99@gmail.com>"]
 license = "(MIT OR Apache-2.0) AND Apache-2.0"
 rust-version.workspace = true
 readme = "../../README.md"

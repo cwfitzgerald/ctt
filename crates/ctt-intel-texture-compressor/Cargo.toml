@@ -4,10 +4,10 @@ version.workspace = true
 edition.workspace = true
 repository.workspace = true
 authors = [
-    "The ctt developers",
-    "Traverse Research <opensource@traverseresearch.nl>",
-    "Graham Wihlidal <graham@wihlidal.ca>",
-    "Intel Corporation",
+  "The ctt developers",
+  "Traverse Research <opensource@traverseresearch.nl>",
+  "Graham Wihlidal <graham@wihlidal.ca>",
+  "Intel Corporation",
 ]
 license = "(MIT OR Apache-2.0) AND MIT"
 rust-version.workspace = true

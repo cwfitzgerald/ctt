@@ -3,10 +3,10 @@ name = "ctt-intel-texture-compressor-prebuilt"
 version.workspace = true
 edition.workspace = true
 authors = [
-    "The ctt developers",
-    "Traverse Research <opensource@traverseresearch.nl>",
-    "Graham Wihlidal <graham@wihlidal.ca>",
-    "Intel Corporation",
+  "The ctt developers",
+  "Traverse Research <opensource@traverseresearch.nl>",
+  "Graham Wihlidal <graham@wihlidal.ca>",
+  "Intel Corporation",
 ]
 license = "(MIT OR Apache-2.0) AND MIT"
 repository.workspace = true
@@ -16,12 +16,7 @@ keywords = ["texture", "compression", "ispc", "gpu"]
 categories = ["graphics", "compression"]
 build = "build.rs"
 links = "ispc_tex"
-include = [
-    "src/**",
-    "build.rs",
-    "bins/**",
-    "Cargo.toml",
-]
+include = ["src/**", "build.rs", "bins/**", "Cargo.toml"]
 
 [build-dependencies]
 ispc-build-utils = { workspace = true }

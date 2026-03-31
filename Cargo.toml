@@ -1,9 +1,9 @@
 [workspace]
 members = [
-    "crates/*",
-    "crates/ctt-intel-texture-compressor/prebuilt",
-    "crates/ctt-bc7enc-rdo/prebuilt",
-    "xtask",
+  "crates/*",
+  "crates/ctt-intel-texture-compressor/prebuilt",
+  "crates/ctt-bc7enc-rdo/prebuilt",
+  "xtask",
 ]
 resolver = "3"
 

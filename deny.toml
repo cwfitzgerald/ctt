@@ -1,25 +1,25 @@
 [licenses]
 allow = [
-    "Apache-2.0",
-    "BSD-2-Clause",
-    "BSD-3-Clause",
-    "CC0-1.0",
-    "ISC",
-    "MIT",
-    "NCSA",
-    "Unicode-3.0",
-    "Unlicense",
-    "Zlib",
+  "Apache-2.0",
+  "BSD-2-Clause",
+  "BSD-3-Clause",
+  "CC0-1.0",
+  "ISC",
+  "MIT",
+  "NCSA",
+  "Unicode-3.0",
+  "Unlicense",
+  "Zlib",
 ]
 
 [bans]
 multiple-versions = "deny"
 skip = [
-    { crate = "itertools@0.13", reason = "bindgen uses 0.13, rav1e uses 0.14" },
-    { crate = "nom@7", reason = "bindgen (via cexpr) uses 7, av1-grain uses 8" },
-    { crate = "syn@1", reason = "widely used older major version" },
-    { crate = "zune-core@0.4", reason = "tiff pulls in older version alongside image's 0.5" },
-    { crate = "zune-jpeg@0.4", reason = "tiff pulls in older version alongside image's 0.5" },
+  { crate = "itertools@0.13", reason = "bindgen uses 0.13, rav1e uses 0.14" },
+  { crate = "nom@7", reason = "bindgen (via cexpr) uses 7, av1-grain uses 8" },
+  { crate = "syn@1", reason = "widely used older major version" },
+  { crate = "zune-core@0.4", reason = "tiff pulls in older version alongside image's 0.5" },
+  { crate = "zune-jpeg@0.4", reason = "tiff pulls in older version alongside image's 0.5" },
 ]
 
 [sources]
