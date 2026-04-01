@@ -128,7 +128,7 @@ impl Encoder for AstcencEncoder {
         )
         .map_err(|e| crate::error::Error::Compression(e.to_string()))?;
 
-        let ctx = astc::Context::new(&config, 1)
+        let mut ctx = astc::Context::new(&config)
             .map_err(|e| crate::error::Error::Compression(e.to_string()))?;
 
         // Build the astcenc_image pointing at the raw pixel data.
@@ -154,7 +154,7 @@ impl Encoder for AstcencEncoder {
         let output_size = (blocks_x * blocks_y * 16) as usize;
         let mut output = vec![0u8; output_size];
 
-        ctx.compress(&mut img, &swizzle, &mut output, 0)
+        ctx.compress(&mut img, &swizzle, &mut output)
             .map_err(|e| crate::error::Error::Compression(e.to_string()))?;
 
         Ok(output)

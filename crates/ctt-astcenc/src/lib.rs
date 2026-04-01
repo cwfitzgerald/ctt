@@ -100,23 +100,36 @@ pub fn config_init(
 
 /// An opaque handle wrapping `astcenc_context`.
 ///
-/// Manages the lifecycle of the context (freed on drop).
+/// Manages the lifecycle of the context (freed on drop). All methods take
+/// `&mut self` because the underlying C library mutates internal state during
+/// compression and decompression and provides **no** internal synchronization.
+///
+/// # Threading limitations
+///
+/// This wrapper currently hardcodes `thread_count = 1` and always uses
+/// `thread_index = 0`. The astcenc library supports a fork/join threading
+/// model where multiple threads call into the same context with distinct
+/// `thread_index` values. To support that in the future, one could:
+///
+/// - Accept a `thread_count` parameter in [`Context::new`].
+/// - Expose `thread_index` on `compress` / `decompress`.
+/// - Use an internal synchronization primitive (or `unsafe impl Sync`) to
+///   allow concurrent access with the required per-phase barriers that
+///   astcenc expects between compression stages.
 pub struct Context {
     ptr: *mut astcenc_context,
 }
 
-// SAFETY: The astcenc context is internally synchronized for the threading model
-// we use (single thread_index=0). It's safe to send across threads.
+// SAFETY: The raw pointer is not aliased — all methods require `&mut self`,
+// so only one thread can access the context at a time.
 unsafe impl Send for Context {}
-unsafe impl Sync for Context {}
 
 impl Context {
-    /// Allocate a new context. `thread_count` is the number of threads that will
-    /// call compress/decompress concurrently.
-    pub fn new(config: &astcenc_config, thread_count: u32) -> Result<Self, Error> {
+    /// Allocate a new single-threaded context.
+    pub fn new(config: &astcenc_config) -> Result<Self, Error> {
         let mut ctx: *mut astcenc_context = ptr::null_mut();
         let code =
-            unsafe { (dispatch().context_alloc)(config, thread_count, &mut ctx, ptr::null()) };
+            unsafe { (dispatch().context_alloc)(config, 1, &mut ctx, ptr::null()) };
         check(code)?;
         Ok(Self { ptr: ctx })
     }
@@ -126,11 +139,10 @@ impl Context {
     /// `output` must be large enough to hold the compressed data:
     /// `ceil(width / block_x) * ceil(height / block_y) * 16` bytes.
     pub fn compress(
-        &self,
+        &mut self,
         image: &mut astcenc_image,
         swizzle: &astcenc_swizzle,
         output: &mut [u8],
-        thread_index: u32,
     ) -> Result<(), Error> {
         let code = unsafe {
             (dispatch().compress_image)(
@@ -139,26 +151,25 @@ impl Context {
                 swizzle,
                 output.as_mut_ptr(),
                 output.len(),
-                thread_index,
+                0,
             )
         };
         check(code)
     }
 
     /// Reset the compressor state so another image can be compressed using the
-    /// same context. Required between images when using multi-threaded compression.
-    pub fn compress_reset(&self) -> Result<(), Error> {
+    /// same context.
+    pub fn compress_reset(&mut self) -> Result<(), Error> {
         let code = unsafe { (dispatch().compress_reset)(self.ptr) };
         check(code)
     }
 
     /// Decompress ASTC data into an image.
     pub fn decompress(
-        &self,
+        &mut self,
         data: &[u8],
         image_out: &mut astcenc_image,
         swizzle: &astcenc_swizzle,
-        thread_index: u32,
     ) -> Result<(), Error> {
         let code = unsafe {
             (dispatch().decompress_image)(
@@ -167,14 +178,14 @@ impl Context {
                 data.len(),
                 image_out,
                 swizzle,
-                thread_index,
+                0,
             )
         };
         check(code)
     }
 
     /// Reset the decompressor state between images.
-    pub fn decompress_reset(&self) -> Result<(), Error> {
+    pub fn decompress_reset(&mut self) -> Result<(), Error> {
         let code = unsafe { (dispatch().decompress_reset)(self.ptr) };
         check(code)
     }

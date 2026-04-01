@@ -28,7 +28,7 @@ pub fn generate_bindings() -> Result<()> {
         let ispc_dir = workspace_root.join("crates/ctt-intel-texture-compressor/ispc");
         let out = workspace_root.join("crates/ctt-intel-texture-compressor/src/bindings/kernel.rs");
 
-        println!("[1/3] Generating kernel.rs");
+        println!("[2/3] Generating kernel.rs");
 
         println!("      Compiling kernel.ispc with ISPC...");
         let mut config = ispc_build_utils::Config::new();
@@ -87,7 +87,7 @@ pub fn generate_bindings() -> Result<()> {
         let ispc_dir = workspace_root.join("crates/ctt-bc7enc-rdo/ispc");
         let out = workspace_root.join("crates/ctt-bc7enc-rdo/src/bindings/bc7e.rs");
 
-        println!("[2/3] Generating bc7e.rs");
+        println!("[3/3] Generating bc7e.rs");
 
         println!("      Compiling bc7e.ispc with ISPC...");
         let mut config = ispc_build_utils::Config::new();
@@ -146,9 +146,9 @@ pub fn generate_bindings() -> Result<()> {
 
 fn generate_astcenc_bindings(workspace_root: &Path) -> Result<()> {
     let header = workspace_root.join("crates/ctt-astcenc/cpp/astcenc.h");
-    let out = workspace_root.join("crates/ctt-astcenc/src/bindings/mod.rs");
+    let out = workspace_root.join("crates/ctt-astcenc/src/bindings.rs");
 
-    println!("[3/3] Generating bindings/mod.rs (astcenc)");
+    println!("[1/3] Generating bindings.rs (astcenc)");
 
     ensure!(
         header.exists(),
