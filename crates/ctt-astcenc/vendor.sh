@@ -59,4 +59,7 @@ cp "$SRC_DIR/astcenc_vecmathlib_sve_8.h" "$DST_DIR/astcenc_vecmathlib_sve_8.h"
 cp "$SRC_DIR/astcenc_vecmathlib_none_4.h" "$DST_DIR/astcenc_vecmathlib_none_4.h"
 cp "$SRC_DIR/astcenc_vecmathlib_common_4.h" "$DST_DIR/astcenc_vecmathlib_common_4.h"
 
+# License
+cp "$SRC_DIR/../LICENSE.txt" "$SCRIPT_DIR/LICENSE-APACHE-ASTCENC.md"
+
 echo "Vendored astcenc from $SRC_DIR into $DST_DIR"
