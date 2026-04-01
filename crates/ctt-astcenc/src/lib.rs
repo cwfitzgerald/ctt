@@ -128,8 +128,7 @@ impl Context {
     /// Allocate a new single-threaded context.
     pub fn new(config: &astcenc_config) -> Result<Self, Error> {
         let mut ctx: *mut astcenc_context = ptr::null_mut();
-        let code =
-            unsafe { (dispatch().context_alloc)(config, 1, &mut ctx, ptr::null()) };
+        let code = unsafe { (dispatch().context_alloc)(config, 1, &mut ctx, ptr::null()) };
         check(code)?;
         Ok(Self { ptr: ctx })
     }
