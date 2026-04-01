@@ -1,4 +1,5 @@
 use std::env;
+use std::path::PathBuf;
 
 /// All 22 core library source files.
 const SOURCES: &[&str] = &[
@@ -129,6 +130,12 @@ fn main() {
 fn build_variant(variant: &IsaVariant, is_msvc: bool) {
     let mut build = cc::Build::new();
 
+    // Use a per-variant output directory to avoid object file collisions
+    // between ISA variants compiled from the same source files.
+    let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
+    let variant_dir = out_dir.join(variant.name);
+    build.out_dir(&variant_dir);
+
     build.cpp(true).std("c++14").include("cpp").warnings(false);
 
     // ISA-specific defines.
@@ -167,8 +174,83 @@ fn build_variant(variant: &IsaVariant, is_msvc: bool) {
         build.flag("-ffp-contract=fast");
     }
 
+    // When multiple ISA variants are linked into the same binary, internal C++
+    // functions (anything not in PUBLIC_FUNCTIONS) would collide — the linker
+    // picks one variant's definition for all callers, causing ABI mismatches
+    // (e.g. AVX2 code calling SSE2-compiled helpers with different struct sizes).
+    //
+    // Fix: wrap each source file in a per-variant C++ namespace. Internal C++
+    // symbols get distinct mangled names per variant. The `extern "C"` public
+    // API functions are unaffected (C linkage ignores namespaces).
+    //
+    // Standard library headers must be included *before* the namespace opens
+    // because `using ::uint16_t` etc. inside `<cstdint>` would fail.
+    let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
+    let cpp_dir = manifest_dir.join("cpp");
+    std::fs::create_dir_all(&variant_dir).expect("failed to create variant output dir");
+
+    // All standard/system headers used anywhere in the astcenc source tree.
+    // Pre-including them before the namespace ensures they resolve in the
+    // global namespace as the standard requires.
+    let std_headers = "\
+        #include <algorithm>\n\
+        #include <array>\n\
+        #include <atomic>\n\
+        #include <cassert>\n\
+        #include <cfloat>\n\
+        #include <cmath>\n\
+        #include <condition_variable>\n\
+        #include <cstdarg>\n\
+        #include <cstddef>\n\
+        #include <cstdint>\n\
+        #include <cstdio>\n\
+        #include <cstdlib>\n\
+        #include <cstring>\n\
+        #include <fstream>\n\
+        #include <functional>\n\
+        #include <iostream>\n\
+        #include <limits>\n\
+        #include <mutex>\n\
+        #include <new>\n\
+        #include <string>\n\
+        #include <type_traits>\n\
+        #include <utility>\n\
+        #include <vector>\n\
+        #include <assert.h>\n\
+        #include <stdio.h>\n\
+    ";
+
     for &src in SOURCES {
-        build.file(src);
+        let file_name = std::path::Path::new(src)
+            .file_name()
+            .unwrap()
+            .to_str()
+            .unwrap();
+        let abs_src = cpp_dir.join(file_name);
+        let wrapper_path = variant_dir.join(file_name);
+
+        let wrapper = format!(
+            "{std_headers}\
+             namespace astcenc_{ns} {{\n\
+             using ::abs;\n\
+             using ::memcpy;\n\
+             using ::memset;\n\
+             #include \"{src}\"\n\
+             }} // namespace astcenc_{ns}\n",
+            std_headers = std_headers,
+            ns = variant.name,
+            src = abs_src.to_str().unwrap().replace('\\', "/"),
+        );
+
+        // Only rewrite if content changed to avoid unnecessary rebuilds.
+        let needs_write = std::fs::read_to_string(&wrapper_path)
+            .map(|existing| existing != wrapper)
+            .unwrap_or(true);
+        if needs_write {
+            std::fs::write(&wrapper_path, &wrapper).expect("failed to write wrapper");
+        }
+
+        build.file(&wrapper_path);
     }
 
     build.compile(variant.lib_name);

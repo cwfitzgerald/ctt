@@ -279,11 +279,18 @@ fn parse_format(
 
     // Derive encoder prefixes from the registry, sorted longest-first
     // so that longer names match before shorter ones (e.g. "astcenc" before "astc").
-    let mut prefixes: Vec<String> = registry.encoders().iter().map(|e| e.name().to_string()).collect();
+    let mut prefixes: Vec<String> = registry
+        .encoders()
+        .iter()
+        .map(|e| e.name().to_string())
+        .collect();
     prefixes.sort_by_key(|p| std::cmp::Reverse(p.len()));
 
     for prefix in &prefixes {
-        if let Some(rest) = lower.strip_prefix(prefix.as_str()).and_then(|r| r.strip_prefix('_')) {
+        if let Some(rest) = lower
+            .strip_prefix(prefix.as_str())
+            .and_then(|r| r.strip_prefix('_'))
+        {
             let format = parse_bare_format(rest, s)?;
             return Ok((Some(prefix.to_string()), format));
         }
