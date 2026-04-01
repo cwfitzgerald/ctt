@@ -15,6 +15,7 @@ pub struct Args {
     pub output: Option<PathBuf>,
 
     /// Compression format. Bare (bc1, bc7) or prefixed with encoder (ispc_bc7, bc7e_bc7).
+    /// ASTC formats use astc_WxH (e.g. astc_4x4, astc_8x8, astc_12x12).
     #[arg(short, long, required_unless_present = "list_encoders")]
     pub format: Option<String>,
 

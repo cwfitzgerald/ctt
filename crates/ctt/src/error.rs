@@ -10,7 +10,7 @@ pub enum Error {
     #[error("unsupported format: {0}")]
     UnsupportedFormat(String),
 
-    #[error("compression not implemented for {0:?}")]
+    #[error("compression not implemented for {0}")]
     CompressionNotImplemented(CompressedFormat),
 
     #[error("invalid swizzle: {0}")]
@@ -21,6 +21,9 @@ pub enum Error {
 
     #[error("cubemap faces must have uniform dimensions")]
     CubemapNonUniformFaces,
+
+    #[error("compression failed: {0}")]
+    Compression(String),
 
     #[error("output encoding error: {0}")]
     OutputEncoding(String),

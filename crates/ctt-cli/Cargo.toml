@@ -10,6 +10,7 @@ readme = "../../README.md"
 description = "Command-line interface for the ctt texture compression library"
 keywords = ["texture", "compression", "gpu", "cli"]
 categories = ["command-line-utilities", "graphics"]
+default-run = "ctt"
 
 [features]
 default = ["ispc-prebuilt"]
@@ -19,9 +20,14 @@ ispc-build-from-source = ["ctt/ispc-build-from-source"]
 [[bin]]
 name = "ctt"
 path = "src/main.rs"
+doc = false
 
 [dependencies]
-ctt = { workspace = true, features = ["encoder-ispc", "encoder-bc7enc"] }
+ctt = { workspace = true, features = [
+    "encoder-ispc",
+    "encoder-bc7enc",
+    "encoder-astcenc",
+] }
 clap = { workspace = true }
 image = { workspace = true }
 bytemuck = { workspace = true }
