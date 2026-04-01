@@ -8,7 +8,6 @@ Based on [intel-tex-rs-2](https://github.com/Traverse-Research/intel-tex-rs-2) b
 
 - BC1, BC3, BC4, BC5, BC6H, BC7
 - ETC1
-- ASTC
 
 ## Build requirements
 

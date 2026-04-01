@@ -8,7 +8,7 @@ Two crates contain prebuilt binaries:
 
 | Crate | Libraries | Source |
 |-------|-----------|--------|
-| `ctt-intel-texture-compressor-prebuilt` | `kernel`, `kernel_astc` | [Intel ISPC Texture Compressor](https://github.com/GameTechDev/ISPCTextureCompressor) |
+| `ctt-intel-texture-compressor-prebuilt` | `kernel` | [Intel ISPC Texture Compressor](https://github.com/GameTechDev/ISPCTextureCompressor) |
 | `ctt-bc7enc-rdo-prebuilt` | `bc7e` | [bc7enc_rdo](https://github.com/richgel999/bc7enc_rdo) |
 
 Each crate stores its binaries under `bins/<platform>/`:

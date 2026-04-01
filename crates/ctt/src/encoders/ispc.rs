@@ -1,7 +1,7 @@
 use ctt_intel_texture_compressor as itc;
 
 use crate::encoder::{Encoder, EncoderSettings, Quality};
-use crate::error::{Error, Result};
+use crate::error::Result;
 use crate::format::{ChannelType, ColorSpace, CompressedFormat, PixelComponents, PixelFormat};
 use crate::image::RawImage;
 
@@ -46,8 +46,7 @@ impl Encoder for IspcEncoder {
             CompressedFormat::Bc1
             | CompressedFormat::Bc3
             | CompressedFormat::Bc7
-            | CompressedFormat::Etc1
-            | CompressedFormat::Astc { .. } => PixelFormat {
+            | CompressedFormat::Etc1 => PixelFormat {
                 components: PixelComponents::Rgba,
                 channel_type: ChannelType::U8,
                 color_space,
@@ -67,6 +66,7 @@ impl Encoder for IspcEncoder {
                 channel_type: ChannelType::U16,
                 color_space,
             },
+            CompressedFormat::Astc { .. } => unreachable!("ASTC not in supported_formats()"),
         }
     }
 
@@ -119,7 +119,7 @@ impl Encoder for IspcEncoder {
                 let settings = etc1_settings();
                 Ok(itc::etc1::compress_blocks(&settings, &surface))
             }
-            CompressedFormat::Astc { .. } => Err(Error::CompressionNotImplemented(format)),
+            CompressedFormat::Astc { .. } => unreachable!("ASTC not in supported_formats()"),
         }
     }
 }

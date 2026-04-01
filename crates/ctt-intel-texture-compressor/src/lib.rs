@@ -3,7 +3,6 @@ extern crate ctt_intel_texture_compressor_prebuilt;
 
 pub mod bindings;
 
-pub mod astc;
 pub mod bc1;
 pub mod bc3;
 pub mod bc4;
@@ -26,7 +25,7 @@ pub mod etc1;
 /// |---|---|---|---|
 /// | [`RSurface`] | 1 | `R8` (1 byte/pixel) | [`bc4`] |
 /// | [`RgSurface`] | 2 | `R8 G8` interleaved (2 bytes/pixel) | [`bc5`] |
-/// | [`RgbaSurface`] | 4 | `R8 G8 B8 A8` interleaved (4 bytes/pixel) | [`bc1`], [`bc3`], [`bc7`], [`astc`], [`etc1`] |
+/// | [`RgbaSurface`] | 4 | `R8 G8 B8 A8` interleaved (4 bytes/pixel) | [`bc1`], [`bc3`], [`bc7`], [`etc1`] |
 /// | [`Rgba16Surface`] | 8 | `R16 G16 B16 A16` interleaved (8 bytes/pixel) | [`bc6h`] |
 #[derive(Debug, Copy, Clone)]
 pub struct Surface<'a, const COMPONENTS: usize> {
@@ -100,7 +99,7 @@ impl<'a, const COMPONENTS: usize> Surface<'a, COMPONENTS> {
 
 /// 4-channel, 8-bit surface: `R8 G8 B8 A8` — 4 bytes per pixel.
 ///
-/// Used by [`bc1`], [`bc3`], [`bc7`], [`astc`], and [`etc1`].
+/// Used by [`bc1`], [`bc3`], [`bc7`], and [`etc1`].
 pub type RgbaSurface<'a> = Surface<'a, 4>;
 
 /// 2-channel, 8-bit surface: `R8 G8` interleaved — 2 bytes per pixel.

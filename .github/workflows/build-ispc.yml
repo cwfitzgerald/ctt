@@ -93,8 +93,6 @@ jobs:
           path: |
             output/libkernel.a
             output/kernel.lib
-            output/libkernel_astc.a
-            output/kernel_astc.lib
 
       - name: Upload bc7enc artifacts
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

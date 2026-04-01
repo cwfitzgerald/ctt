@@ -49,14 +49,7 @@ pub fn build_ispc(args: BuildIspcArgs) -> Result<()> {
             .woff();
         kernel.compile_to("kernel", &target);
 
-        let mut kernel_astc = ispc_build_utils::Config::new();
-        kernel_astc
-            .file(ispc_dir.join("kernel_astc.ispc"))
-            .opt_level(2)
-            .woff();
-        kernel_astc.compile_to("kernel_astc", &target);
-
-        println!("  kernel and kernel_astc -> {}", args.output_dir.display());
+        println!("  kernel -> {}", args.output_dir.display());
     }
 
     if build_bc7enc {
