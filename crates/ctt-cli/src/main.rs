@@ -46,8 +46,10 @@ fn setup_logger(verbose: u8) {
 }
 
 fn run(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
+    let registry = EncoderRegistry::default_registry();
+
     if args.list_encoders {
-        print_encoder_table();
+        print_encoder_table(&registry);
         return Ok(());
     }
 
@@ -59,7 +61,7 @@ fn run(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
         ColorSpaceArg::Linear => ColorSpace::Linear,
     };
 
-    let (encoder_name, format) = parse_format(format_str)?;
+    let (encoder_name, format) = parse_format(format_str, &registry)?;
     let output_format = match args.container {
         ContainerArg::Dds => OutputFormat::Dds,
         ContainerArg::Ktx2 => OutputFormat::Ktx2,
@@ -80,7 +82,7 @@ fn run(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
     };
 
     log::info!(
-        "Format: {format:?}, container: {output_format:?}, quality: {quality:?}, color space: {color_space:?}",
+        "Format: {format}, container: {output_format:?}, quality: {quality:?}, color space: {color_space:?}",
     );
 
     // Load input images in their native format.
@@ -111,8 +113,7 @@ fn run(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-fn print_encoder_table() {
-    let registry = EncoderRegistry::default_registry();
+fn print_encoder_table(registry: &EncoderRegistry) {
     let encoders = registry.encoders();
 
     if encoders.is_empty() {
@@ -126,11 +127,19 @@ fn print_encoder_table() {
     println!("{:<10} {:<12} -------", "-------", "--------");
 
     for (i, encoder) in encoders.iter().enumerate() {
-        let formats: Vec<String> = encoder
-            .supported_formats()
-            .iter()
-            .map(|f| format!("{f:?}").to_lowercase())
-            .collect();
+        let mut formats = Vec::new();
+        let mut has_astc = false;
+        for f in encoder.supported_formats() {
+            match f {
+                CompressedFormat::Astc { .. } => {
+                    if !has_astc {
+                        formats.push("astc".to_string());
+                        has_astc = true;
+                    }
+                }
+                other => formats.push(format!("{other:?}").to_lowercase()),
+            }
+        }
         println!(
             "{:<10} {:<12} {}",
             encoder.name(),
@@ -142,6 +151,7 @@ fn print_encoder_table() {
     println!();
     println!("Use a bare format name (e.g. bc7) to use the highest-priority encoder,");
     println!("or prefix with the encoder name (e.g. ispc_bc7) to choose explicitly.");
+    println!("ASTC formats use astc_WxH (e.g. astc_4x4, astc_8x8, astc_12x12).");
 }
 
 fn load_images(
@@ -261,14 +271,26 @@ fn build_encoder_settings(args: &Args) -> Option<Box<dyn ctt::encoder::EncoderSe
 /// Parse a format string, optionally with an encoder prefix (e.g., "ispc_bc7", "bc7e_bc7").
 ///
 /// Returns `(optional_encoder_name, compressed_format)`.
-fn parse_format(s: &str) -> Result<(Option<String>, CompressedFormat), Error> {
+fn parse_format(
+    s: &str,
+    registry: &EncoderRegistry,
+) -> Result<(Option<String>, CompressedFormat), Error> {
     let lower = s.to_lowercase();
 
-    // Try to parse as a prefixed format: "encoder_format".
-    // Known encoder prefixes are tried first to avoid ambiguity with format names.
-    let known_prefixes = ["ispc", "bc7e"];
-    for prefix in &known_prefixes {
-        if let Some(rest) = lower.strip_prefix(prefix).and_then(|r| r.strip_prefix('_')) {
+    // Derive encoder prefixes from the registry, sorted longest-first
+    // so that longer names match before shorter ones (e.g. "astcenc" before "astc").
+    let mut prefixes: Vec<String> = registry
+        .encoders()
+        .iter()
+        .map(|e| e.name().to_string())
+        .collect();
+    prefixes.sort_by_key(|p| std::cmp::Reverse(p.len()));
+
+    for prefix in &prefixes {
+        if let Some(rest) = lower
+            .strip_prefix(prefix.as_str())
+            .and_then(|r| r.strip_prefix('_'))
+        {
             let format = parse_bare_format(rest, s)?;
             return Ok((Some(prefix.to_string()), format));
         }

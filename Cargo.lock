@@ -387,6 +387,7 @@ name = "ctt"
 version = "0.2.0"
 dependencies = [
  "bytemuck",
+ "ctt-astcenc",
  "ctt-bc7enc-rdo",
  "ctt-intel-texture-compressor",
  "ddsfile",
@@ -394,6 +395,14 @@ dependencies = [
  "ktx2",
  "log",
  "thiserror",
+]
+
+[[package]]
+name = "ctt-astcenc"
+version = "0.2.0"
+dependencies = [
+ "cc",
+ "paste",
 ]
 
 [[package]]

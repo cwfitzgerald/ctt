@@ -71,6 +71,8 @@ impl EncoderRegistry {
         r.register(Box::new(crate::encoders::bc7enc::Bc7encEncoder));
         #[cfg(feature = "encoder-ispc")]
         r.register(Box::new(crate::encoders::ispc::IspcEncoder));
+        #[cfg(feature = "encoder-astcenc")]
+        r.register(Box::new(crate::encoders::astcenc::AstcencEncoder));
         r
     }
 
@@ -104,7 +106,7 @@ impl EncoderRegistry {
         let mut formats = Vec::new();
         for encoder in &self.encoders {
             for &fmt in encoder.supported_formats() {
-                formats.push(format!("{}_{:?}", encoder.name(), fmt).to_lowercase());
+                formats.push(format!("{}_{}", encoder.name(), fmt).to_lowercase());
             }
         }
         formats

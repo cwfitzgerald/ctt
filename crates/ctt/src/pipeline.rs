@@ -28,17 +28,17 @@ pub fn run_with_registry(
     let encoder = if let Some(ref name) = config.encoder_name {
         registry.find_by_name(name, config.format).ok_or_else(|| {
             Error::UnsupportedFormat(format!(
-                "no encoder named '{}' supports {:?}",
+                "no encoder named '{}' supports {}",
                 name, config.format
             ))
         })?
     } else {
         registry.find(config.format).ok_or_else(|| {
-            Error::UnsupportedFormat(format!("no encoder supports {:?}", config.format))
+            Error::UnsupportedFormat(format!("no encoder supports {}", config.format))
         })?
     };
 
-    log::info!("Using encoder '{}' for {:?}", encoder.name(), config.format);
+    log::info!("Using encoder '{}' for {}", encoder.name(), config.format);
 
     // Apply swizzle if configured.
     if let Some(ref swizzle) = config.swizzle {
@@ -65,7 +65,7 @@ pub fn run_with_registry(
     }
 
     // Compress all layers and mip levels.
-    log::info!("Compressing as {:?}", config.format);
+    log::info!("Compressing as {}", config.format);
     let settings_ref = config.encoder_settings.as_deref();
     let compressed = compress_layout(
         encoder,
@@ -101,11 +101,6 @@ fn validate(config: &CompressConfig, layout: &ImageLayout) -> Result<()> {
             }
             _ => {}
         }
-    }
-
-    // ASTC compression is not implemented.
-    if matches!(config.format, CompressedFormat::Astc { .. }) {
-        return Err(Error::CompressionNotImplemented(config.format));
     }
 
     // Cubemaps must have exactly 6 layers.

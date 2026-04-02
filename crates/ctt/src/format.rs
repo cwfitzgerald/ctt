@@ -10,6 +10,24 @@ pub enum CompressedFormat {
     Astc { block_width: u8, block_height: u8 },
 }
 
+impl std::fmt::Display for CompressedFormat {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Bc1 => f.write_str("BC1"),
+            Self::Bc3 => f.write_str("BC3"),
+            Self::Bc4 => f.write_str("BC4"),
+            Self::Bc5 => f.write_str("BC5"),
+            Self::Bc6h => f.write_str("BC6H"),
+            Self::Bc7 => f.write_str("BC7"),
+            Self::Etc1 => f.write_str("ETC1"),
+            Self::Astc {
+                block_width,
+                block_height,
+            } => write!(f, "ASTC {block_width}x{block_height}"),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum ColorSpace {
     #[default]

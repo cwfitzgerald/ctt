@@ -51,7 +51,7 @@ pub fn compress_layout(
         let mut mips = Vec::with_capacity(layer.len());
         for (mip_idx, image) in layer.iter().enumerate() {
             log::debug!(
-                "Compressing layer {layer_idx}, mip {mip_idx}: {}x{} to {format:?} using {}",
+                "Compressing layer {layer_idx}, mip {mip_idx}: {}x{} to {format} using {}",
                 image.width,
                 image.height,
                 encoder.name(),
