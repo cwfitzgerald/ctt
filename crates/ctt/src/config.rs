@@ -15,7 +15,7 @@ pub struct CompressConfig {
     pub swizzle: Option<Swizzle>,
     pub color_space: ColorSpace,
     pub quality: Quality,
-    /// Optional encoder name to force a specific encoder (e.g., "ispc", "bc7e").
+    /// Optional encoder name to force a specific encoder (e.g., "intel", "bc7e").
     pub encoder_name: Option<String>,
     /// Optional encoder-specific settings (downcast by the encoder impl).
     pub encoder_settings: Option<Box<dyn EncoderSettings>>,

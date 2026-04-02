@@ -42,7 +42,7 @@ To build from source instead of using the prebuilt binaries:
 cargo install ctt-cli --no-default-features --features ispc-build-from-source
 
 # Library
-cargo add ctt --no-default-features --features "encoder-ispc,encoder-bc7enc,ispc-build-from-source"
+cargo add ctt --no-default-features --features "encoder-intel,encoder-bc7enc,ispc-build-from-source"
 ```
 
 This requires ISPC and libclang on your `PATH`, plus a C++ compiler.

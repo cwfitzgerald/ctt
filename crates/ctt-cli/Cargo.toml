@@ -24,9 +24,10 @@ doc = false
 
 [dependencies]
 ctt = { workspace = true, features = [
-    "encoder-ispc",
-    "encoder-bc7enc",
-    "encoder-astcenc",
+  "encoder-amd",
+  "encoder-astcenc",
+  "encoder-bc7enc",
+  "encoder-intel",
 ] }
 clap = { workspace = true }
 image = { workspace = true }
