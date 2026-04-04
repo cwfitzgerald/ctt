@@ -9,9 +9,11 @@ ctt binds to established open-source compression libraries and exposes them thro
 | Backend | Prefix | Feature | Formats | Description |
 |---------|--------|---------|---------|-------------|
 | [**bc7enc-rdo**](https://github.com/richgel999/bc7enc_rdo) | `bc7e_` | `encoder-bc7enc` | BC7 | Perceptual BC7 encoder with RDO support. |
-| [**Intel ISPC Texture Compressor**](https://github.com/GameTechDev/ISPCTextureCompressor) | `ispc_` | `encoder-ispc` | BC1, BC3, BC4, BC5, BC6H, BC7, ETC1 | SIMD-optimized BCn and ETC encoder. |
+| [**Intel ISPC Texture Compressor**](https://github.com/GameTechDev/ISPCTextureCompressor) | `intel_` | `encoder-intel` | BC1, BC3, BC4, BC5, BC6H, BC7, ETC1 | SIMD-optimized BCn and ETC encoder. |
+| [**AMD Compressonator**](https://github.com/GPUOpen-Tools/compressonator) | `amd_` | `encoder-amd` | BC1, BC2, BC3, BC4, BC4S, BC5, BC5S, BC6H, BC6H_SF, BC7 | AMD's BCn encoder suite. |
+| [**astcenc**](https://github.com/ARM-software/astc-encoder) | `astcenc_` | `encoder-astcenc` | ASTC (all block sizes) | ARM ASTC encoder. |
 
-Encoders are listed in priority order — when multiple encoders support the same format (e.g. BC7), the first one in the table is used. To override this, prefix the format with an encoder name (e.g. `ispc_bc7`).
+Encoders are listed in priority order — when multiple encoders support the same format (e.g. BC7), the first one in the table is used. To override this, prefix the format with an encoder name (e.g. `intel_bc7`).
 
 Use `ctt --list-encoders` to see what's available in your build:
 
@@ -20,7 +22,9 @@ $ ctt --list-encoders
 Encoder    Priority     Formats
 -------    --------     -------
 bc7e       1            bc7
-ispc       2            bc1, bc3, bc4, bc5, bc6h, bc7, etc1
+intel      2            bc1, bc3, bc4, bc5, bc6h, bc7, etc1
+amd        3            bc1, bc2, bc3, bc4, bc4s, bc5, bc5s, bc6h, bc6h_sf, bc7
+astcenc    4            astc
 ```
 
 ## Formats
@@ -28,12 +32,17 @@ ispc       2            bc1, bc3, bc4, bc5, bc6h, bc7, etc1
 | Format | Description |
 |--------|-------------|
 | BC1 | RGB with 1-bit alpha. Opaque textures and simple cutouts. |
+| BC2 | RGBA with explicit 4-bit alpha. Sharp alpha transitions. |
 | BC3 | RGBA with interpolated alpha. General-purpose transparency. |
 | BC4 | Single channel. Grayscale, heightmaps, roughness. |
+| BC4S | Single channel, signed. |
 | BC5 | Two channels. Normal maps. |
+| BC5S | Two channels, signed. |
 | BC6H | HDR half-float RGB. Environment maps, HDR textures. |
+| BC6H_SF | HDR signed float RGB. |
 | BC7 | High-quality RGBA. Best LDR quality, supports alpha. |
 | ETC1 | Mobile-friendly RGB. |
+| ASTC | Adaptive scalable texture compression. Variable block sizes (4x4 to 12x12). |
 
 All formats support quality presets from `ultra-fast` to `very-slow` where the encoder supports them.
 
@@ -64,7 +73,7 @@ cargo install ctt-cli
 cargo add ctt
 ```
 
-By default the library enables `encoder-ispc`. To enable bc7enc-rdo as well:
+By default the library enables all encoders. To add a specific encoder:
 
 ```sh
 cargo add ctt --features encoder-bc7enc
@@ -84,10 +93,10 @@ Compress to BC7 (auto-selects bc7enc-rdo when available):
 ctt diffuse.png -o diffuse.ktx2 -f bc7
 ```
 
-Force the ISPC encoder for BC7:
+Force the Intel ISPC encoder for BC7:
 
 ```sh
-ctt diffuse.png -o diffuse.ktx2 -f ispc_bc7
+ctt diffuse.png -o diffuse.ktx2 -f intel_bc7
 ```
 
 Normal map to BC5 as DDS:
@@ -129,7 +138,7 @@ Options:
 
   -f, --format <FORMAT>
           Compression format. Bare (bc1, bc7) or prefixed with encoder
-          (ispc_bc7, bc7e_bc7)
+          (intel_bc7, bc7e_bc7)
 
   -c, --container <CONTAINER>
           Output container format
@@ -234,7 +243,7 @@ To force a specific encoder programmatically, set `encoder_name`:
 ```rust
 let config = CompressConfig {
     format: CompressedFormat::Bc7,
-    encoder_name: Some("ispc".into()), // force ISPC instead of bc7enc-rdo
+    encoder_name: Some("intel".into()), // force Intel ISPC instead of bc7enc-rdo
     // ...
 };
 ```

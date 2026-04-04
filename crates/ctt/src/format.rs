@@ -1,10 +1,14 @@
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum CompressedFormat {
     Bc1,
+    Bc2,
     Bc3,
     Bc4,
+    Bc4s,
     Bc5,
+    Bc5s,
     Bc6h,
+    Bc6hSf,
     Bc7,
     Etc1,
     Astc { block_width: u8, block_height: u8 },
@@ -14,10 +18,14 @@ impl std::fmt::Display for CompressedFormat {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Bc1 => f.write_str("BC1"),
+            Self::Bc2 => f.write_str("BC2"),
             Self::Bc3 => f.write_str("BC3"),
             Self::Bc4 => f.write_str("BC4"),
+            Self::Bc4s => f.write_str("BC4S"),
             Self::Bc5 => f.write_str("BC5"),
+            Self::Bc5s => f.write_str("BC5S"),
             Self::Bc6h => f.write_str("BC6H"),
+            Self::Bc6hSf => f.write_str("BC6H_SF"),
             Self::Bc7 => f.write_str("BC7"),
             Self::Etc1 => f.write_str("ETC1"),
             Self::Astc {

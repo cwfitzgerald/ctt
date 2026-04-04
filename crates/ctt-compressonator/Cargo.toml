@@ -1,0 +1,23 @@
+[package]
+name = "ctt-compressonator"
+version.workspace = true
+edition.workspace = true
+repository.workspace = true
+authors.workspace = true
+license = "(MIT OR Apache-2.0 OR Zlib) AND MIT"
+rust-version.workspace = true
+readme = "../../README.md"
+description = "Vendored Compressonator CMP_Core bindings for BCn texture compression"
+keywords = ["texture", "compression", "bc7", "gpu"]
+categories = ["graphics", "compression"]
+build = "build.rs"
+links = "cmp_core"
+
+[dependencies]
+thiserror = { workspace = true }
+
+[build-dependencies]
+cc = { workspace = true, features = ["parallel"] }
+
+[lints]
+workspace = true

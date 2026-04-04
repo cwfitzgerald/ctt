@@ -13,14 +13,22 @@ pub fn to_dxgi_format(format: CompressedFormat, color_space: ColorSpace) -> Resu
         } else {
             DxgiFormat::BC1_UNorm
         }),
+        CompressedFormat::Bc2 => Ok(if srgb {
+            DxgiFormat::BC2_UNorm_sRGB
+        } else {
+            DxgiFormat::BC2_UNorm
+        }),
         CompressedFormat::Bc3 => Ok(if srgb {
             DxgiFormat::BC3_UNorm_sRGB
         } else {
             DxgiFormat::BC3_UNorm
         }),
         CompressedFormat::Bc4 => Ok(DxgiFormat::BC4_UNorm),
+        CompressedFormat::Bc4s => Ok(DxgiFormat::BC4_SNorm),
         CompressedFormat::Bc5 => Ok(DxgiFormat::BC5_UNorm),
+        CompressedFormat::Bc5s => Ok(DxgiFormat::BC5_SNorm),
         CompressedFormat::Bc6h => Ok(DxgiFormat::BC6H_UF16),
+        CompressedFormat::Bc6hSf => Ok(DxgiFormat::BC6H_SF16),
         CompressedFormat::Bc7 => Ok(if srgb {
             DxgiFormat::BC7_UNorm_sRGB
         } else {

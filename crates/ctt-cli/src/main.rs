@@ -118,7 +118,7 @@ fn print_encoder_table(registry: &EncoderRegistry) {
 
     if encoders.is_empty() {
         println!("No encoder backends are enabled.");
-        println!("Recompile with features: encoder-ispc, encoder-bc7enc");
+        println!("Recompile with features: encoder-intel, encoder-bc7enc");
         return;
     }
 
@@ -150,7 +150,7 @@ fn print_encoder_table(registry: &EncoderRegistry) {
 
     println!();
     println!("Use a bare format name (e.g. bc7) to use the highest-priority encoder,");
-    println!("or prefix with the encoder name (e.g. ispc_bc7) to choose explicitly.");
+    println!("or prefix with the encoder name (e.g. intel_bc7) to choose explicitly.");
     println!("ASTC formats use astc_WxH (e.g. astc_4x4, astc_8x8, astc_12x12).");
 }
 
@@ -268,7 +268,7 @@ fn build_encoder_settings(args: &Args) -> Option<Box<dyn ctt::encoder::EncoderSe
     None
 }
 
-/// Parse a format string, optionally with an encoder prefix (e.g., "ispc_bc7", "bc7e_bc7").
+/// Parse a format string, optionally with an encoder prefix (e.g., "intel_bc7", "bc7e_bc7").
 ///
 /// Returns `(optional_encoder_name, compressed_format)`.
 fn parse_format(
@@ -304,10 +304,14 @@ fn parse_format(
 fn parse_bare_format(lower: &str, original: &str) -> Result<CompressedFormat, Error> {
     match lower {
         "bc1" => Ok(CompressedFormat::Bc1),
+        "bc2" => Ok(CompressedFormat::Bc2),
         "bc3" => Ok(CompressedFormat::Bc3),
         "bc4" => Ok(CompressedFormat::Bc4),
+        "bc4s" => Ok(CompressedFormat::Bc4s),
         "bc5" => Ok(CompressedFormat::Bc5),
+        "bc5s" => Ok(CompressedFormat::Bc5s),
         "bc6h" => Ok(CompressedFormat::Bc6h),
+        "bc6hsf" | "bc6h_sf" => Ok(CompressedFormat::Bc6hSf),
         "bc7" => Ok(CompressedFormat::Bc7),
         "etc1" => Ok(CompressedFormat::Etc1),
         other => {

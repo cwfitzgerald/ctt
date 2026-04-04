@@ -22,7 +22,7 @@ pub struct IspcEncoder;
 
 impl Encoder for IspcEncoder {
     fn name(&self) -> &str {
-        "ispc"
+        "intel"
     }
 
     fn supported_formats(&self) -> &[CompressedFormat] {
@@ -66,7 +66,7 @@ impl Encoder for IspcEncoder {
                 channel_type: ChannelType::U16,
                 color_space,
             },
-            CompressedFormat::Astc { .. } => unreachable!("ASTC not in supported_formats()"),
+            _ => unreachable!("format not in supported_formats()"),
         }
     }
 
@@ -119,7 +119,7 @@ impl Encoder for IspcEncoder {
                 let settings = etc1_settings();
                 Ok(itc::etc1::compress_blocks(&settings, &surface))
             }
-            CompressedFormat::Astc { .. } => unreachable!("ASTC not in supported_formats()"),
+            _ => unreachable!("format not in supported_formats()"),
         }
     }
 }

@@ -389,6 +389,7 @@ dependencies = [
  "bytemuck",
  "ctt-astcenc",
  "ctt-bc7enc-rdo",
+ "ctt-compressonator",
  "ctt-intel-texture-compressor",
  "ddsfile",
  "half",
@@ -430,6 +431,14 @@ dependencies = [
  "fern",
  "image",
  "log",
+]
+
+[[package]]
+name = "ctt-compressonator"
+version = "0.2.0"
+dependencies = [
+ "cc",
+ "thiserror",
 ]
 
 [[package]]

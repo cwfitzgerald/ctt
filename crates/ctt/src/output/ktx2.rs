@@ -12,10 +12,14 @@ pub fn to_vk_format(format: CompressedFormat, color_space: ColorSpace) -> Result
     let srgb = color_space == ColorSpace::Srgb;
     match format {
         CompressedFormat::Bc1 => Ok(if srgb { 134 } else { 133 }), // BC1_RGBA_{SRGB,UNORM}_BLOCK
+        CompressedFormat::Bc2 => Ok(if srgb { 136 } else { 135 }), // BC2_{SRGB,UNORM}_BLOCK
         CompressedFormat::Bc3 => Ok(if srgb { 138 } else { 137 }), // BC3_{SRGB,UNORM}_BLOCK
         CompressedFormat::Bc4 => Ok(139),                          // BC4_UNORM_BLOCK
+        CompressedFormat::Bc4s => Ok(140),                         // BC4_SNORM_BLOCK
         CompressedFormat::Bc5 => Ok(141),                          // BC5_UNORM_BLOCK
+        CompressedFormat::Bc5s => Ok(142),                         // BC5_SNORM_BLOCK
         CompressedFormat::Bc6h => Ok(143),                         // BC6H_UFLOAT_BLOCK
+        CompressedFormat::Bc6hSf => Ok(144),                       // BC6H_SFLOAT_BLOCK
         CompressedFormat::Bc7 => Ok(if srgb { 146 } else { 145 }), // BC7_{SRGB,UNORM}_BLOCK
         CompressedFormat::Etc1 => Ok(if srgb { 148 } else { 147 }), // ETC2_R8G8B8_{SRGB,UNORM}_BLOCK
         CompressedFormat::Astc {

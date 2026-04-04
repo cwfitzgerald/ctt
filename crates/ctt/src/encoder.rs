@@ -24,7 +24,7 @@ pub trait EncoderSettings: Any + Send + Sync {
 
 /// An encoder backend that can compress raw images.
 pub trait Encoder: Send + Sync {
-    /// Short name used as prefix in format strings (e.g., "ispc", "bc7e").
+    /// Short name used as prefix in format strings (e.g., "intel", "bc7e").
     fn name(&self) -> &str;
 
     /// Formats this encoder supports.
@@ -69,8 +69,12 @@ impl EncoderRegistry {
         let mut r = Self::new();
         #[cfg(feature = "encoder-bc7enc")]
         r.register(Box::new(crate::encoders::bc7enc::Bc7encEncoder));
-        #[cfg(feature = "encoder-ispc")]
+        #[cfg(feature = "encoder-intel")]
         r.register(Box::new(crate::encoders::ispc::IspcEncoder));
+        #[cfg(feature = "encoder-amd")]
+        r.register(Box::new(
+            crate::encoders::compressonator::CompressonatorEncoder,
+        ));
         #[cfg(feature = "encoder-astcenc")]
         r.register(Box::new(crate::encoders::astcenc::AstcencEncoder));
         r
@@ -88,7 +92,7 @@ impl EncoderRegistry {
             .map(|e| e.as_ref())
     }
 
-    /// Find encoder by name + format (for "ispc_bc7", "bc7e_bc7" style).
+    /// Find encoder by name + format (for "intel_bc7", "bc7e_bc7" style).
     pub fn find_by_name(&self, name: &str, format: CompressedFormat) -> Option<&dyn Encoder> {
         self.encoders
             .iter()
@@ -101,7 +105,7 @@ impl EncoderRegistry {
         &self.encoders
     }
 
-    /// List all available format strings (e.g., ["bc7e_bc7", "ispc_bc1", ...]).
+    /// List all available format strings (e.g., ["bc7e_bc7", "intel_bc1", ...]).
     pub fn available_formats(&self) -> Vec<String> {
         let mut formats = Vec::new();
         for encoder in &self.encoders {
