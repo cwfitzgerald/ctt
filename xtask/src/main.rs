@@ -5,6 +5,7 @@ use clap::{Parser, Subcommand};
 mod build_ispc;
 mod generate_bindings;
 mod util;
+mod vendor;
 mod verify_binaries;
 
 #[derive(Parser)]
@@ -24,6 +25,10 @@ enum Cmd {
     ///
     /// Requires ISPC to be installed (for bc7e bindings).
     GenerateBindings,
+    /// Vendor third-party source code into crate directories.
+    ///
+    /// With no subcommand, vendors all targets.
+    Vendor(vendor::VendorArgs),
 }
 
 fn main() -> ExitCode {
@@ -33,6 +38,7 @@ fn main() -> ExitCode {
         Cmd::VerifyBinaries => verify_binaries::verify_binaries(),
         Cmd::BuildIspc(args) => build_ispc::build_ispc(args),
         Cmd::GenerateBindings => generate_bindings::generate_bindings(),
+        Cmd::Vendor(args) => vendor::vendor(args),
     };
 
     match result {
