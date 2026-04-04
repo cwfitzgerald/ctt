@@ -107,15 +107,7 @@ impl Transform for CompressTransform {
 
                 // Pass the denormalized format so the encoder can recover color space.
                 let output_format = self.target_format.denormalize(surface.color_space);
-                let data = encoder.compress(
-                    &surface.data,
-                    surface.width,
-                    surface.height,
-                    surface.stride,
-                    output_format,
-                    self.quality,
-                    settings_ref,
-                )?;
+                let data = encoder.compress(surface, output_format, self.quality, settings_ref)?;
 
                 let bpp_block = self.target_format.bytes_per_block().unwrap_or(16) as u32;
                 let (bw, _bh) = self.target_format.block_size().unwrap_or((4, 4));

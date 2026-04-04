@@ -2,6 +2,7 @@ use ctt_intel_texture_compressor as itc;
 
 use crate::encoder::{Encoder, EncoderSettings, Quality};
 use crate::error::Result;
+use crate::surface::Surface;
 use crate::vk_format::FormatExt as _;
 
 /// ISPC-specific encoder settings.
@@ -48,15 +49,18 @@ impl Encoder for IspcEncoder {
 
     fn compress(
         &self,
-        data: &[u8],
-        width: u32,
-        height: u32,
-        stride: u32,
+        surface: &Surface,
         format: ktx2::Format,
         quality: Quality,
         settings: Option<&dyn EncoderSettings>,
     ) -> Result<Vec<u8>> {
         let (base, _) = format.normalize();
+        let (data, width, height, stride) = (
+            &*surface.data,
+            surface.width,
+            surface.height,
+            surface.stride,
+        );
         use ktx2::Format as F;
         match base {
             F::BC1_RGBA_UNORM_BLOCK => {

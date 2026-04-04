@@ -2,7 +2,7 @@ use ctt_astcenc as astc;
 
 use crate::encoder::{Encoder, EncoderSettings, Quality};
 use crate::error::Result;
-use crate::surface::ColorSpace;
+use crate::surface::{ColorSpace, Surface};
 use crate::vk_format::FormatExt as _;
 
 /// All 14 valid ASTC 2D block sizes.
@@ -41,10 +41,7 @@ impl Encoder for AstcencEncoder {
 
     fn compress(
         &self,
-        data: &[u8],
-        width: u32,
-        height: u32,
-        _stride: u32,
+        surface: &Surface,
         format: ktx2::Format,
         quality: Quality,
         _settings: Option<&dyn EncoderSettings>,
@@ -82,10 +79,10 @@ impl Encoder for AstcencEncoder {
             .map_err(|e| crate::error::Error::Compression(e.to_string()))?;
 
         // Build the astcenc_image pointing at the raw pixel data.
-        let mut data_ptr = data.as_ptr() as *mut std::ffi::c_void;
+        let mut data_ptr = surface.data.as_ptr() as *mut std::ffi::c_void;
         let mut img = astc::astcenc_image {
-            dim_x: width,
-            dim_y: height,
+            dim_x: surface.width,
+            dim_y: surface.height,
             dim_z: 1,
             data_type: astc::astcenc_type_ASTCENC_TYPE_U8,
             data: &mut data_ptr,
@@ -99,8 +96,8 @@ impl Encoder for AstcencEncoder {
         };
 
         // ASTC block is always 16 bytes (128 bits).
-        let blocks_x = width.div_ceil(block_width as u32);
-        let blocks_y = height.div_ceil(block_height as u32);
+        let blocks_x = surface.width.div_ceil(block_width as u32);
+        let blocks_y = surface.height.div_ceil(block_height as u32);
         let output_size = (blocks_x * blocks_y * 16) as usize;
         let mut output = vec![0u8; output_size];
 

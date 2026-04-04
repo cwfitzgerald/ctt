@@ -2,6 +2,7 @@ use ctt_compressonator as cmp;
 
 use crate::encoder::{Encoder, EncoderSettings, Quality};
 use crate::error::{Error, Result};
+use crate::surface::Surface;
 use crate::vk_format::FormatExt as _;
 
 pub struct CompressonatorEncoder;
@@ -38,16 +39,14 @@ impl Encoder for CompressonatorEncoder {
 
     fn compress(
         &self,
-        data: &[u8],
-        width: u32,
-        height: u32,
-        _stride: u32,
+        surface: &Surface,
         format: ktx2::Format,
         quality: Quality,
         _settings: Option<&dyn EncoderSettings>,
     ) -> Result<Vec<u8>> {
         let q = quality_to_float(quality);
         let (base, _) = format.normalize();
+        let (data, width, height) = (&*surface.data, surface.width, surface.height);
 
         use ktx2::Format as F;
         match base {

@@ -43,6 +43,12 @@ impl Surface {
     /// Partial blocks at the image edges are padded with zeros.
     ///
     /// Panics if the format is compressed or has unknown bytes-per-pixel.
+    /// Tile the surface into tightly-packed blocks for block-level encoders.
+    ///
+    /// Each block is `block_w * block_h * bytes_per_pixel` bytes of contiguous pixel data.
+    /// Partial blocks at the image edges are padded with zeros.
+    ///
+    /// Panics if the format is compressed or has unknown bytes-per-pixel.
     pub fn tile_to_blocks(&self, block_w: u32, block_h: u32) -> Vec<u8> {
         let bpp = self
             .format
@@ -50,61 +56,37 @@ impl Surface {
             .expect("tile_to_blocks requires an uncompressed format with known bpp")
             as u32;
 
-        tile_to_blocks(
-            &self.data,
-            self.width,
-            self.height,
-            self.stride,
-            bpp,
-            block_w,
-            block_h,
-        )
-    }
-}
+        let blocks_x = self.width.div_ceil(block_w);
+        let blocks_y = self.height.div_ceil(block_h);
+        let block_bytes = (block_w * block_h * bpp) as usize;
+        let mut out = vec![0u8; (blocks_x * blocks_y) as usize * block_bytes];
 
-/// Tile pixel data into tightly-packed blocks for block-level encoders.
-///
-/// Each block is `block_w * block_h * bpp` bytes of contiguous pixel data.
-/// Partial blocks at the image edges are padded with zeros.
-pub fn tile_to_blocks(
-    data: &[u8],
-    width: u32,
-    height: u32,
-    stride: u32,
-    bpp: u32,
-    block_w: u32,
-    block_h: u32,
-) -> Vec<u8> {
-    let blocks_x = width.div_ceil(block_w);
-    let blocks_y = height.div_ceil(block_h);
-    let block_bytes = (block_w * block_h * bpp) as usize;
-    let mut out = vec![0u8; (blocks_x * blocks_y) as usize * block_bytes];
+        for by in 0..blocks_y {
+            for bx in 0..blocks_x {
+                let block_idx = (by * blocks_x + bx) as usize;
+                let block_start = block_idx * block_bytes;
 
-    for by in 0..blocks_y {
-        for bx in 0..blocks_x {
-            let block_idx = (by * blocks_x + bx) as usize;
-            let block_start = block_idx * block_bytes;
-
-            for py in 0..block_h {
-                let y = by * block_h + py;
-                if y >= height {
-                    break;
-                }
-                for px in 0..block_w {
-                    let x = bx * block_w + px;
-                    if x >= width {
+                for py in 0..block_h {
+                    let y = by * block_h + py;
+                    if y >= self.height {
                         break;
                     }
-                    let src = (y * stride + x * bpp) as usize;
-                    let dst = block_start + ((py * block_w + px) * bpp) as usize;
-                    let len = bpp as usize;
-                    out[dst..dst + len].copy_from_slice(&data[src..src + len]);
+                    for px in 0..block_w {
+                        let x = bx * block_w + px;
+                        if x >= self.width {
+                            break;
+                        }
+                        let src = (y * self.stride + x * bpp) as usize;
+                        let dst = block_start + ((py * block_w + px) * bpp) as usize;
+                        let len = bpp as usize;
+                        out[dst..dst + len].copy_from_slice(&self.data[src..src + len]);
+                    }
                 }
             }
         }
-    }
 
-    out
+        out
+    }
 }
 
 #[cfg(test)]

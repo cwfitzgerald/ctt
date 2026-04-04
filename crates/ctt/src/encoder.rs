@@ -1,6 +1,7 @@
 use std::any::Any;
 
 use crate::error::Result;
+use crate::surface::Surface;
 
 /// Universal quality preset all encoders understand.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
@@ -21,7 +22,6 @@ pub trait EncoderSettings: Any + Send + Sync {
 }
 
 /// An encoder backend that can compress pixel data into block-compressed formats.
-#[allow(clippy::too_many_arguments)]
 pub trait Encoder: Send + Sync {
     /// Short name used as prefix in format strings (e.g., "intel", "bc7e").
     fn name(&self) -> &str;
@@ -36,16 +36,13 @@ pub trait Encoder: Send + Sync {
 
     /// Compress a single image.
     ///
-    /// `data` is the raw pixel buffer, `width`/`height`/`stride` describe its layout.
+    /// `surface` is the uncompressed input surface.
     /// `format` may be the sRGB variant to indicate color space (call `.normalize()` to recover).
     /// `quality` is the universal quality level.
     /// `settings` is an optional encoder-specific settings object (downcast by impl).
     fn compress(
         &self,
-        data: &[u8],
-        width: u32,
-        height: u32,
-        stride: u32,
+        surface: &Surface,
         format: ktx2::Format,
         quality: Quality,
         settings: Option<&dyn EncoderSettings>,

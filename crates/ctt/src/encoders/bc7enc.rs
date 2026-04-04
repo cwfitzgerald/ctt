@@ -2,7 +2,7 @@ use ctt_bc7enc_rdo::bc7e;
 
 use crate::encoder::{Encoder, EncoderSettings, Quality};
 use crate::error::{Error, Result};
-use crate::surface::tile_to_blocks;
+use crate::surface::Surface;
 
 /// bc7enc-rdo-specific encoder settings.
 #[derive(Debug, Clone, Copy)]
@@ -35,10 +35,7 @@ impl Encoder for Bc7encEncoder {
 
     fn compress(
         &self,
-        data: &[u8],
-        width: u32,
-        height: u32,
-        stride: u32,
+        surface: &Surface,
         format: ktx2::Format,
         quality: Quality,
         settings: Option<&dyn EncoderSettings>,
@@ -62,11 +59,12 @@ impl Encoder for Bc7encEncoder {
             Quality::VerySlow => bc7e::params_init_veryslow(perceptual),
         };
 
-        let pixels = tile_to_blocks(data, width, height, stride, 4, 4, 4);
+        let pixels = surface.tile_to_blocks(4, 4);
         let pixels: &[u32] = bytemuck::cast_slice(&pixels);
-        let num_blocks = width
+        let num_blocks = surface
+            .width
             .div_ceil(4)
-            .checked_mul(height.div_ceil(4))
+            .checked_mul(surface.height.div_ceil(4))
             .expect("block count overflow") as usize;
         let compressed = bc7e::compress_blocks_alloc(num_blocks, pixels, &params);
         Ok(bytemuck::cast_vec(compressed))
