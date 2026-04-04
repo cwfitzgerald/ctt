@@ -2,16 +2,23 @@ mod args;
 
 use std::fs;
 use std::process::ExitCode;
+use std::sync::Arc;
 
 use clap::Parser;
 
-use ctt::config::{CompressConfig, OutputFormat};
 use ctt::encoder::{EncoderRegistry, Quality};
 use ctt::error::Error;
 use ctt::format::{ChannelType, ColorSpace, CompressedFormat, PixelComponents, PixelFormat};
-use ctt::image::{ImageLayout, RawImage};
+use ctt::image::RawImage;
+use ctt::pipeline::{
+    AssemblyNode, InputBranch, InputNode, OutputNode, Pipeline, PipelineOutput,
+};
+use ctt::surface::{Image, Surface};
 use ctt::transform::cubemap::{CubemapInput, split_cubemap};
 use ctt::transform::swizzle::{Swizzle, SwizzleChannel};
+use ctt::transforms::compress::CompressTransform;
+use ctt::transforms::swizzle::SwizzleTransform;
+use ctt::vk_format::FormatExt;
 
 use args::{Args, ColorSpaceArg, ContainerArg, CubemapLayoutArg, QualityArg};
 
@@ -46,7 +53,7 @@ fn setup_logger(verbose: u8) {
 }
 
 fn run(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
-    let registry = EncoderRegistry::default_registry();
+    let registry = Arc::new(EncoderRegistry::default_registry());
 
     if args.list_encoders {
         print_encoder_table(&registry);
@@ -61,47 +68,88 @@ fn run(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
         ColorSpaceArg::Linear => ColorSpace::Linear,
     };
 
-    let (encoder_name, format) = parse_format(format_str, &registry)?;
-    let output_format = match args.container {
-        ContainerArg::Dds => OutputFormat::Dds,
-        ContainerArg::Ktx2 => OutputFormat::Ktx2,
+    let (encoder_name, compressed_format) = parse_format(format_str, &registry)?;
+    let output_node = match args.container {
+        ContainerArg::Dds => OutputNode::Dds,
+        ContainerArg::Ktx2 => OutputNode::Ktx2,
     };
     let swizzle = args.swizzle.as_deref().map(parse_swizzle).transpose()?;
     let quality = map_quality(args.quality);
 
-    let encoder_settings = build_encoder_settings(args);
+    // Determine target format as ktx2::Format.
+    let target_format = ctt::ktx2::Format::from_compressed(compressed_format, color_space);
+    let (target_format, _) = target_format.normalize();
 
-    let config = CompressConfig {
-        format,
-        output_format,
-        swizzle,
-        color_space,
+    log::info!(
+        "Format: {compressed_format}, container: {output_node:?}, quality: {quality:?}, color space: {color_space:?}",
+    );
+
+    // Load input images.
+    log::info!("Loading {} input image(s)", args.input.len());
+    let raw_images = load_images(&args.input, color_space)?;
+
+    // Build input branches and assembly.
+    let (inputs, assembly) = if args.cubemap {
+        log::info!("Cubemap mode, layout: {:?}", args.cubemap_layout);
+        build_cubemap_inputs(raw_images, args.cubemap_layout)?
+    } else {
+        let inputs: Vec<InputBranch> = raw_images
+            .into_iter()
+            .map(|raw| {
+                let surface = Surface::from_raw_image(raw);
+                InputBranch {
+                    input: InputNode::Raw(Image {
+                        surfaces: vec![vec![surface]],
+                        is_cubemap: false,
+                    }),
+                    transforms: Vec::new(),
+                }
+            })
+            .collect();
+
+        let assembly = if inputs.len() == 1 {
+            AssemblyNode::Identity
+        } else {
+            AssemblyNode::Array
+        };
+        (inputs, assembly)
+    };
+
+    // Build post-assembly transforms.
+    let mut transforms: Vec<Box<dyn ctt::transform_node::Transform>> = Vec::new();
+
+    if let Some(ref swizzle) = swizzle {
+        transforms.push(Box::new(SwizzleTransform::new(*swizzle)));
+    }
+
+    let encoder_settings = build_encoder_settings(args);
+    transforms.push(Box::new(CompressTransform::new(
+        target_format,
         quality,
         encoder_name,
         encoder_settings,
+        Arc::clone(&registry),
+    )));
+
+    let pipeline = Pipeline {
+        inputs,
+        assembly,
+        transforms,
+        output: output_node,
     };
 
-    log::info!(
-        "Format: {format}, container: {output_format:?}, quality: {quality:?}, color space: {color_space:?}",
-    );
+    // Resolve and execute.
+    let resolved = pipeline.resolve().map_err(|errors| {
+        let messages: Vec<String> = errors.iter().map(|e| e.to_string()).collect();
+        Error::UnsupportedFormat(messages.join("; "))
+    })?;
 
-    // Load input images in their native format.
-    log::info!("Loading {} input image(s)", args.input.len());
-    let images = load_images(&args.input, color_space)?;
-
-    // Build layout.
-    let layout = if args.cubemap {
-        log::info!("Cubemap mode, layout: {:?}", args.cubemap_layout);
-        build_cubemap_layout(images, args.cubemap_layout)?
-    } else {
-        ImageLayout {
-            layers: images.into_iter().map(|img| vec![img]).collect(),
-            is_cubemap: false,
+    let output_bytes = match resolved.execute()? {
+        PipelineOutput::Encoded(bytes) => bytes,
+        PipelineOutput::Raw(_) => {
+            return Err(Error::OutputEncoding("unexpected raw output".into()).into())
         }
     };
-
-    // Run pipeline.
-    let output_bytes = ctt::pipeline::run(&config, layout)?;
 
     // Write output.
     fs::write(output, &output_bytes)?;
@@ -225,10 +273,13 @@ fn load_images(
     Ok(images)
 }
 
-fn build_cubemap_layout(
+/// Build cubemap input branches from loaded images.
+///
+/// Uses the legacy `split_cubemap` for cross/strip splitting, then converts to new types.
+fn build_cubemap_inputs(
     images: Vec<RawImage>,
     layout_arg: CubemapLayoutArg,
-) -> Result<ImageLayout, Box<dyn std::error::Error>> {
+) -> Result<(Vec<InputBranch>, AssemblyNode), Box<dyn std::error::Error>> {
     let cubemap_input = if images.len() == 6 {
         CubemapInput::SeparateFaces(images.try_into().map_err(|_| Error::CubemapFaceCount(0))?)
     } else if images.len() == 1 {
@@ -242,11 +293,21 @@ fn build_cubemap_layout(
     };
 
     let faces = split_cubemap(cubemap_input)?;
-    let layers = faces.into_iter().map(|face| vec![face]).collect();
-    Ok(ImageLayout {
-        layers,
-        is_cubemap: true,
-    })
+    let inputs: Vec<InputBranch> = faces
+        .into_iter()
+        .map(|face| {
+            let surface = Surface::from_raw_image(face);
+            InputBranch {
+                input: InputNode::Raw(Image {
+                    surfaces: vec![vec![surface]],
+                    is_cubemap: false,
+                }),
+                transforms: Vec::new(),
+            }
+        })
+        .collect();
+
+    Ok((inputs, AssemblyNode::Cubemap))
 }
 
 fn map_quality(q: QualityArg) -> Quality {

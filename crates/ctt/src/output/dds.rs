@@ -1,57 +1,60 @@
 use ddsfile::{AlphaMode, Caps2, D3D10ResourceDimension, Dds, DxgiFormat, NewDxgiParams};
 
-use crate::compress::CompressedTexture;
 use crate::error::{Error, Result};
-use crate::format::{ColorSpace, CompressedFormat};
+use crate::format::ColorSpace;
+use crate::vk_format::FormatExt as _;
 
-/// Map a compressed format + color space to a DXGI format.
-pub fn to_dxgi_format(format: CompressedFormat, color_space: ColorSpace) -> Result<DxgiFormat> {
-    let srgb = color_space == ColorSpace::Srgb;
-    match format {
-        CompressedFormat::Bc1 => Ok(if srgb {
-            DxgiFormat::BC1_UNorm_sRGB
-        } else {
-            DxgiFormat::BC1_UNorm
-        }),
-        CompressedFormat::Bc2 => Ok(if srgb {
-            DxgiFormat::BC2_UNorm_sRGB
-        } else {
-            DxgiFormat::BC2_UNorm
-        }),
-        CompressedFormat::Bc3 => Ok(if srgb {
-            DxgiFormat::BC3_UNorm_sRGB
-        } else {
-            DxgiFormat::BC3_UNorm
-        }),
-        CompressedFormat::Bc4 => Ok(DxgiFormat::BC4_UNorm),
-        CompressedFormat::Bc4s => Ok(DxgiFormat::BC4_SNorm),
-        CompressedFormat::Bc5 => Ok(DxgiFormat::BC5_UNorm),
-        CompressedFormat::Bc5s => Ok(DxgiFormat::BC5_SNorm),
-        CompressedFormat::Bc6h => Ok(DxgiFormat::BC6H_UF16),
-        CompressedFormat::Bc6hSf => Ok(DxgiFormat::BC6H_SF16),
-        CompressedFormat::Bc7 => Ok(if srgb {
-            DxgiFormat::BC7_UNorm_sRGB
-        } else {
-            DxgiFormat::BC7_UNorm
-        }),
-        CompressedFormat::Etc1 => Err(Error::UnsupportedFormat(
-            "ETC1 is not supported in DDS".into(),
-        )),
-        CompressedFormat::Astc { .. } => Err(Error::UnsupportedFormat(
-            "ASTC is not supported in DDS".into(),
-        )),
+/// Map a `ktx2::Format` + `ColorSpace` to a DXGI format.
+pub fn vk_format_to_dxgi(format: ktx2::Format, color_space: ColorSpace) -> Result<DxgiFormat> {
+    use ktx2::Format as F;
+
+    let full_format = format.denormalize(color_space);
+    match full_format {
+        // Uncompressed
+        F::R8G8B8A8_UNORM => Ok(DxgiFormat::R8G8B8A8_UNorm),
+        F::R8G8B8A8_SRGB => Ok(DxgiFormat::R8G8B8A8_UNorm_sRGB),
+        F::B8G8R8A8_UNORM => Ok(DxgiFormat::B8G8R8A8_UNorm),
+        F::B8G8R8A8_SRGB => Ok(DxgiFormat::B8G8R8A8_UNorm_sRGB),
+        F::R16G16B16A16_SFLOAT => Ok(DxgiFormat::R16G16B16A16_Float),
+        F::R32G32B32A32_SFLOAT => Ok(DxgiFormat::R32G32B32A32_Float),
+        F::R8_UNORM => Ok(DxgiFormat::R8_UNorm),
+        F::R8G8_UNORM => Ok(DxgiFormat::R8G8_UNorm),
+        F::R16_UNORM => Ok(DxgiFormat::R16_UNorm),
+        F::R16_SFLOAT => Ok(DxgiFormat::R16_Float),
+        F::R32_SFLOAT => Ok(DxgiFormat::R32_Float),
+        F::B10G11R11_UFLOAT_PACK32 => Ok(DxgiFormat::R11G11B10_Float),
+
+        // BC compressed
+        F::BC1_RGBA_UNORM_BLOCK | F::BC1_RGB_UNORM_BLOCK => Ok(DxgiFormat::BC1_UNorm),
+        F::BC1_RGBA_SRGB_BLOCK | F::BC1_RGB_SRGB_BLOCK => Ok(DxgiFormat::BC1_UNorm_sRGB),
+        F::BC2_UNORM_BLOCK => Ok(DxgiFormat::BC2_UNorm),
+        F::BC2_SRGB_BLOCK => Ok(DxgiFormat::BC2_UNorm_sRGB),
+        F::BC3_UNORM_BLOCK => Ok(DxgiFormat::BC3_UNorm),
+        F::BC3_SRGB_BLOCK => Ok(DxgiFormat::BC3_UNorm_sRGB),
+        F::BC4_UNORM_BLOCK => Ok(DxgiFormat::BC4_UNorm),
+        F::BC4_SNORM_BLOCK => Ok(DxgiFormat::BC4_SNorm),
+        F::BC5_UNORM_BLOCK => Ok(DxgiFormat::BC5_UNorm),
+        F::BC5_SNORM_BLOCK => Ok(DxgiFormat::BC5_SNorm),
+        F::BC6H_UFLOAT_BLOCK => Ok(DxgiFormat::BC6H_UF16),
+        F::BC6H_SFLOAT_BLOCK => Ok(DxgiFormat::BC6H_SF16),
+        F::BC7_UNORM_BLOCK => Ok(DxgiFormat::BC7_UNorm),
+        F::BC7_SRGB_BLOCK => Ok(DxgiFormat::BC7_UNorm_sRGB),
+
+        _ => Err(Error::UnsupportedFormat(format!(
+            "{full_format:?} is not supported in DDS"
+        ))),
     }
 }
 
-/// Encode a compressed texture as a DDS file.
-pub fn encode_dds(texture: &CompressedTexture) -> Result<Vec<u8>> {
-    let first = &texture.layers[0][0];
-    let dxgi_format = to_dxgi_format(first.format, texture.color_space)?;
+/// Encode an [`Image`] as a DDS file.
+pub fn encode_dds_image(image: &crate::surface::Image) -> Result<Vec<u8>> {
+    let first = &image.surfaces[0][0];
+    let dxgi_format = vk_format_to_dxgi(first.format, first.color_space)?;
     log::debug!(
         "DDS: {:?}, {} layers, {} mips",
         dxgi_format,
-        texture.layers.len(),
-        texture.layers[0].len()
+        image.surfaces.len(),
+        image.surfaces[0].len()
     );
 
     let mut dds = Dds::new_dxgi(NewDxgiParams {
@@ -59,22 +62,21 @@ pub fn encode_dds(texture: &CompressedTexture) -> Result<Vec<u8>> {
         width: first.width,
         depth: None,
         format: dxgi_format,
-        mipmap_levels: Some(texture.layers[0].len() as u32),
-        array_layers: Some(texture.layers.len() as u32),
-        caps2: if texture.is_cubemap {
+        mipmap_levels: Some(image.surfaces[0].len() as u32),
+        array_layers: Some(image.surfaces.len() as u32),
+        caps2: if image.is_cubemap {
             Some(Caps2::CUBEMAP | Caps2::CUBEMAP_ALLFACES)
         } else {
             None
         },
-        is_cubemap: texture.is_cubemap,
+        is_cubemap: image.is_cubemap,
         resource_dimension: D3D10ResourceDimension::Texture2D,
         alpha_mode: AlphaMode::Unknown,
     })
     .map_err(|e| Error::OutputEncoding(format!("DDS creation failed: {e}")))?;
 
-    // Concatenate all layer/mip data into the DDS data buffer.
     let mut data = Vec::new();
-    for layer in &texture.layers {
+    for layer in &image.surfaces {
         for mip in layer {
             data.extend_from_slice(&mip.data);
         }
@@ -90,11 +92,12 @@ pub fn encode_dds(texture: &CompressedTexture) -> Result<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ktx2::Format as F;
 
     #[test]
     fn bc1_srgb_maps_correctly() {
         assert_eq!(
-            to_dxgi_format(CompressedFormat::Bc1, ColorSpace::Srgb).unwrap(),
+            vk_format_to_dxgi(F::BC1_RGBA_UNORM_BLOCK, ColorSpace::Srgb).unwrap(),
             DxgiFormat::BC1_UNorm_sRGB
         );
     }
@@ -102,38 +105,29 @@ mod tests {
     #[test]
     fn bc7_linear_maps_correctly() {
         assert_eq!(
-            to_dxgi_format(CompressedFormat::Bc7, ColorSpace::Linear).unwrap(),
+            vk_format_to_dxgi(F::BC7_UNORM_BLOCK, ColorSpace::Linear).unwrap(),
             DxgiFormat::BC7_UNorm
         );
     }
 
     #[test]
     fn etc1_dds_unsupported() {
-        assert!(to_dxgi_format(CompressedFormat::Etc1, ColorSpace::Srgb).is_err());
+        assert!(vk_format_to_dxgi(F::ETC2_R8G8B8_UNORM_BLOCK, ColorSpace::Srgb).is_err());
     }
 
     #[test]
     fn astc_dds_unsupported() {
-        assert!(
-            to_dxgi_format(
-                CompressedFormat::Astc {
-                    block_width: 4,
-                    block_height: 4
-                },
-                ColorSpace::Srgb
-            )
-            .is_err()
-        );
+        assert!(vk_format_to_dxgi(F::ASTC_4x4_UNORM_BLOCK, ColorSpace::Srgb).is_err());
     }
 
     #[test]
     fn bc4_ignores_color_space() {
         assert_eq!(
-            to_dxgi_format(CompressedFormat::Bc4, ColorSpace::Srgb).unwrap(),
+            vk_format_to_dxgi(F::BC4_UNORM_BLOCK, ColorSpace::Srgb).unwrap(),
             DxgiFormat::BC4_UNorm
         );
         assert_eq!(
-            to_dxgi_format(CompressedFormat::Bc4, ColorSpace::Linear).unwrap(),
+            vk_format_to_dxgi(F::BC4_UNORM_BLOCK, ColorSpace::Linear).unwrap(),
             DxgiFormat::BC4_UNorm
         );
     }

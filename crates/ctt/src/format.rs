@@ -36,7 +36,7 @@ impl std::fmt::Display for CompressedFormat {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Default)]
 pub enum ColorSpace {
     #[default]
     Srgb,
