@@ -2,7 +2,7 @@ use crate::alpha::AlphaMode;
 use crate::constraint::FormatConstraint;
 use crate::conversion_graph::SurfaceConverter;
 use crate::error::Result;
-use crate::format::ColorSpace;
+use crate::surface::ColorSpace;
 use crate::surface::Image;
 use crate::transform_node::{LayoutInfo, Transform};
 

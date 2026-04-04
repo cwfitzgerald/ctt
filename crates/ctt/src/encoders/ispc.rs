@@ -2,8 +2,7 @@ use ctt_intel_texture_compressor as itc;
 
 use crate::encoder::{Encoder, EncoderSettings, Quality};
 use crate::error::Result;
-use crate::format::{ChannelType, ColorSpace, CompressedFormat, PixelComponents, PixelFormat};
-use crate::image::RawImage;
+use crate::vk_format::FormatExt as _;
 
 /// ISPC-specific encoder settings.
 #[derive(Debug, Clone, Copy)]
@@ -25,97 +24,72 @@ impl Encoder for IspcEncoder {
         "intel"
     }
 
-    fn supported_formats(&self) -> &[CompressedFormat] {
+    fn supported_formats(&self) -> &[ktx2::Format] {
         &[
-            CompressedFormat::Bc1,
-            CompressedFormat::Bc3,
-            CompressedFormat::Bc4,
-            CompressedFormat::Bc5,
-            CompressedFormat::Bc6h,
-            CompressedFormat::Bc7,
-            CompressedFormat::Etc1,
+            ktx2::Format::BC1_RGBA_UNORM_BLOCK,
+            ktx2::Format::BC3_UNORM_BLOCK,
+            ktx2::Format::BC4_UNORM_BLOCK,
+            ktx2::Format::BC5_UNORM_BLOCK,
+            ktx2::Format::BC6H_UFLOAT_BLOCK,
+            ktx2::Format::BC7_UNORM_BLOCK,
+            ktx2::Format::ETC2_R8G8B8_UNORM_BLOCK,
         ]
     }
 
-    fn required_input_format(
-        &self,
-        format: CompressedFormat,
-        color_space: ColorSpace,
-    ) -> PixelFormat {
+    fn required_input_format(&self, format: ktx2::Format) -> ktx2::Format {
+        use ktx2::Format as F;
         match format {
-            CompressedFormat::Bc1
-            | CompressedFormat::Bc3
-            | CompressedFormat::Bc7
-            | CompressedFormat::Etc1 => PixelFormat {
-                components: PixelComponents::Rgba,
-                channel_type: ChannelType::U8,
-                color_space,
-            },
-            CompressedFormat::Bc4 => PixelFormat {
-                components: PixelComponents::R,
-                channel_type: ChannelType::U8,
-                color_space,
-            },
-            CompressedFormat::Bc5 => PixelFormat {
-                components: PixelComponents::Rg,
-                channel_type: ChannelType::U8,
-                color_space,
-            },
-            CompressedFormat::Bc6h => PixelFormat {
-                components: PixelComponents::Rgba,
-                channel_type: ChannelType::U16,
-                color_space,
-            },
-            _ => unreachable!("format not in supported_formats()"),
+            F::BC4_UNORM_BLOCK => F::R8_UNORM,
+            F::BC5_UNORM_BLOCK => F::R8G8_UNORM,
+            F::BC6H_UFLOAT_BLOCK => F::R16G16B16A16_UNORM,
+            _ => F::R8G8B8A8_UNORM,
         }
     }
 
     fn compress(
         &self,
-        image: &RawImage,
-        format: CompressedFormat,
+        data: &[u8],
+        width: u32,
+        height: u32,
+        stride: u32,
+        format: ktx2::Format,
         quality: Quality,
         settings: Option<&dyn EncoderSettings>,
     ) -> Result<Vec<u8>> {
-        match format {
-            CompressedFormat::Bc1 => {
-                let surface =
-                    itc::RgbaSurface::new(&image.data, image.width, image.height, image.stride);
+        let (base, _) = format.normalize();
+        use ktx2::Format as F;
+        match base {
+            F::BC1_RGBA_UNORM_BLOCK => {
+                let surface = itc::RgbaSurface::new(data, width, height, stride);
                 Ok(itc::bc1::compress_blocks(&surface))
             }
-            CompressedFormat::Bc3 => {
-                let surface =
-                    itc::RgbaSurface::new(&image.data, image.width, image.height, image.stride);
+            F::BC3_UNORM_BLOCK => {
+                let surface = itc::RgbaSurface::new(data, width, height, stride);
                 Ok(itc::bc3::compress_blocks(&surface))
             }
-            CompressedFormat::Bc4 => {
-                let surface =
-                    itc::RSurface::new(&image.data, image.width, image.height, image.stride);
+            F::BC4_UNORM_BLOCK => {
+                let surface = itc::RSurface::new(data, width, height, stride);
                 Ok(itc::bc4::compress_blocks(&surface))
             }
-            CompressedFormat::Bc5 => {
-                let surface =
-                    itc::RgSurface::new(&image.data, image.width, image.height, image.stride);
+            F::BC5_UNORM_BLOCK => {
+                let surface = itc::RgSurface::new(data, width, height, stride);
                 Ok(itc::bc5::compress_blocks(&surface))
             }
-            CompressedFormat::Bc6h => {
-                let surface =
-                    itc::Rgba16Surface::new(&image.data, image.width, image.height, image.stride);
+            F::BC6H_UFLOAT_BLOCK => {
+                let surface = itc::Rgba16Surface::new(data, width, height, stride);
                 let settings = bc6h_settings(quality);
                 Ok(itc::bc6h::compress_blocks(&settings, &surface))
             }
-            CompressedFormat::Bc7 => {
-                let surface =
-                    itc::RgbaSurface::new(&image.data, image.width, image.height, image.stride);
+            F::BC7_UNORM_BLOCK => {
+                let surface = itc::RgbaSurface::new(data, width, height, stride);
                 let alpha = settings
                     .and_then(|s| s.as_any().downcast_ref::<IspcSettings>())
                     .is_some_and(|s| s.alpha);
                 let settings = bc7_settings(quality, alpha);
                 Ok(itc::bc7::compress_blocks(&settings, &surface))
             }
-            CompressedFormat::Etc1 => {
-                let surface =
-                    itc::RgbaSurface::new(&image.data, image.width, image.height, image.stride);
+            F::ETC2_R8G8B8_UNORM_BLOCK => {
+                let surface = itc::RgbaSurface::new(data, width, height, stride);
                 let settings = etc1_settings();
                 Ok(itc::etc1::compress_blocks(&settings, &surface))
             }

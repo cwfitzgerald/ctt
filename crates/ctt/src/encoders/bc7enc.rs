@@ -2,8 +2,7 @@ use ctt_bc7enc_rdo::bc7e;
 
 use crate::encoder::{Encoder, EncoderSettings, Quality};
 use crate::error::{Error, Result};
-use crate::format::{ChannelType, ColorSpace, CompressedFormat, PixelComponents, PixelFormat};
-use crate::image::{self, RawImage};
+use crate::surface::tile_to_blocks;
 
 /// bc7enc-rdo-specific encoder settings.
 #[derive(Debug, Clone, Copy)]
@@ -26,31 +25,27 @@ impl Encoder for Bc7encEncoder {
         "bc7e"
     }
 
-    fn supported_formats(&self) -> &[CompressedFormat] {
-        &[CompressedFormat::Bc7]
+    fn supported_formats(&self) -> &[ktx2::Format] {
+        &[ktx2::Format::BC7_UNORM_BLOCK]
     }
 
-    fn required_input_format(
-        &self,
-        _format: CompressedFormat,
-        color_space: ColorSpace,
-    ) -> PixelFormat {
-        PixelFormat {
-            components: PixelComponents::Rgba,
-            channel_type: ChannelType::U8,
-            color_space,
-        }
+    fn required_input_format(&self, _format: ktx2::Format) -> ktx2::Format {
+        ktx2::Format::R8G8B8A8_UNORM
     }
 
     fn compress(
         &self,
-        raw_image: &RawImage,
-        format: CompressedFormat,
+        data: &[u8],
+        width: u32,
+        height: u32,
+        stride: u32,
+        format: ktx2::Format,
         quality: Quality,
         settings: Option<&dyn EncoderSettings>,
     ) -> Result<Vec<u8>> {
-        if format != CompressedFormat::Bc7 {
-            return Err(Error::CompressionNotImplemented(format));
+        let (base, _) = crate::vk_format::FormatExt::normalize(&format);
+        if base != ktx2::Format::BC7_UNORM_BLOCK {
+            return Err(Error::UnsupportedFormat(format!("{format:?}")));
         }
 
         let perceptual = settings
@@ -67,12 +62,11 @@ impl Encoder for Bc7encEncoder {
             Quality::VerySlow => bc7e::params_init_veryslow(perceptual),
         };
 
-        let pixels = image::tile_to_blocks(raw_image, 4, 4);
+        let pixels = tile_to_blocks(data, width, height, stride, 4, 4, 4);
         let pixels: &[u32] = bytemuck::cast_slice(&pixels);
-        let num_blocks = raw_image
-            .width
+        let num_blocks = width
             .div_ceil(4)
-            .checked_mul(raw_image.height.div_ceil(4))
+            .checked_mul(height.div_ceil(4))
             .expect("block count overflow") as usize;
         let compressed = bc7e::compress_blocks_alloc(num_blocks, pixels, &params);
         Ok(bytemuck::cast_vec(compressed))

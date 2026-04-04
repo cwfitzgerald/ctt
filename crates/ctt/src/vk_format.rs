@@ -1,4 +1,23 @@
-use crate::format::{ChannelType, ColorSpace, CompressedFormat, PixelComponents, PixelFormat};
+use crate::surface::ColorSpace;
+
+/// Channel data type for uncompressed formats.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ChannelKind {
+    U8,
+    U16,
+    F16,
+    F32,
+}
+
+impl ChannelKind {
+    pub fn byte_size(self) -> usize {
+        match self {
+            Self::U8 => 1,
+            Self::U16 | Self::F16 => 2,
+            Self::F32 => 4,
+        }
+    }
+}
 
 /// Extension trait providing introspection and utility methods on [`ktx2::Format`].
 pub trait FormatExt {
@@ -18,6 +37,9 @@ pub trait FormatExt {
     /// Number of color channels. Returns `None` for unknown formats.
     fn channel_count(&self) -> Option<usize>;
 
+    /// Channel data type for uncompressed formats. Returns `None` for compressed or unknown formats.
+    fn channel_kind(&self) -> Option<ChannelKind>;
+
     /// Strip any sRGB variant to its UNORM/UFLOAT base and return the color space separately.
     ///
     /// For example, `R8G8B8A8_SRGB` becomes `(R8G8B8A8_UNORM, Srgb)`.
@@ -28,15 +50,6 @@ pub trait FormatExt {
     ///
     /// Returns the sRGB variant when `cs == Srgb` and one exists, otherwise returns `self`.
     fn denormalize(&self, cs: ColorSpace) -> ktx2::Format;
-
-    /// Convert from the legacy [`CompressedFormat`] + [`ColorSpace`] to [`ktx2::Format`].
-    fn from_compressed(compressed: CompressedFormat, cs: ColorSpace) -> ktx2::Format;
-
-    /// Convert from the legacy [`PixelFormat`] to [`ktx2::Format`].
-    ///
-    /// The color space component of `PixelFormat` is used to select the sRGB variant when
-    /// applicable (only for U8 formats).
-    fn from_pixel_format(pf: PixelFormat) -> ktx2::Format;
 }
 
 impl FormatExt for ktx2::Format {
@@ -582,69 +595,33 @@ impl FormatExt for ktx2::Format {
         }
     }
 
-    fn from_compressed(compressed: CompressedFormat, cs: ColorSpace) -> ktx2::Format {
+    fn channel_kind(&self) -> Option<ChannelKind> {
         use ktx2::Format as F;
-        let base = match compressed {
-            CompressedFormat::Bc1 => F::BC1_RGBA_UNORM_BLOCK,
-            CompressedFormat::Bc2 => F::BC2_UNORM_BLOCK,
-            CompressedFormat::Bc3 => F::BC3_UNORM_BLOCK,
-            CompressedFormat::Bc4 => F::BC4_UNORM_BLOCK,
-            CompressedFormat::Bc4s => F::BC4_SNORM_BLOCK,
-            CompressedFormat::Bc5 => F::BC5_UNORM_BLOCK,
-            CompressedFormat::Bc5s => F::BC5_SNORM_BLOCK,
-            CompressedFormat::Bc6h => F::BC6H_UFLOAT_BLOCK,
-            CompressedFormat::Bc6hSf => F::BC6H_SFLOAT_BLOCK,
-            CompressedFormat::Bc7 => F::BC7_UNORM_BLOCK,
-            CompressedFormat::Etc1 => F::ETC2_R8G8B8_UNORM_BLOCK,
-            CompressedFormat::Astc {
-                block_width,
-                block_height,
-            } => match (block_width, block_height) {
-                (4, 4) => F::ASTC_4x4_UNORM_BLOCK,
-                (5, 4) => F::ASTC_5x4_UNORM_BLOCK,
-                (5, 5) => F::ASTC_5x5_UNORM_BLOCK,
-                (6, 5) => F::ASTC_6x5_UNORM_BLOCK,
-                (6, 6) => F::ASTC_6x6_UNORM_BLOCK,
-                (8, 5) => F::ASTC_8x5_UNORM_BLOCK,
-                (8, 6) => F::ASTC_8x6_UNORM_BLOCK,
-                (8, 8) => F::ASTC_8x8_UNORM_BLOCK,
-                (10, 5) => F::ASTC_10x5_UNORM_BLOCK,
-                (10, 6) => F::ASTC_10x6_UNORM_BLOCK,
-                (10, 8) => F::ASTC_10x8_UNORM_BLOCK,
-                (10, 10) => F::ASTC_10x10_UNORM_BLOCK,
-                (12, 10) => F::ASTC_12x10_UNORM_BLOCK,
-                (12, 12) => F::ASTC_12x12_UNORM_BLOCK,
-                // Unsupported ASTC block sizes fall back to 4x4
-                _ => F::ASTC_4x4_UNORM_BLOCK,
-            },
-        };
-        base.denormalize(cs)
-    }
+        Some(match *self {
+            F::R8_UNORM | F::R8_SNORM | F::R8_UINT | F::R8_SINT | F::R8_SRGB
+            | F::R8G8_UNORM | F::R8G8_SNORM | F::R8G8_UINT | F::R8G8_SINT | F::R8G8_SRGB
+            | F::R8G8B8_UNORM | F::R8G8B8_SNORM | F::R8G8B8_UINT | F::R8G8B8_SINT | F::R8G8B8_SRGB
+            | F::B8G8R8_UNORM | F::B8G8R8_SNORM | F::B8G8R8_UINT | F::B8G8R8_SINT | F::B8G8R8_SRGB
+            | F::R8G8B8A8_UNORM | F::R8G8B8A8_SNORM | F::R8G8B8A8_UINT | F::R8G8B8A8_SINT | F::R8G8B8A8_SRGB
+            | F::B8G8R8A8_UNORM | F::B8G8R8A8_SNORM | F::B8G8R8A8_UINT | F::B8G8R8A8_SINT | F::B8G8R8A8_SRGB
+            => ChannelKind::U8,
 
-    fn from_pixel_format(pf: PixelFormat) -> ktx2::Format {
-        use ktx2::Format as F;
-        let base = match (pf.components, pf.channel_type) {
-            (PixelComponents::R, ChannelType::U8) => F::R8_UNORM,
-            (PixelComponents::R, ChannelType::U16) => F::R16_UNORM,
-            (PixelComponents::R, ChannelType::F16) => F::R16_SFLOAT,
-            (PixelComponents::R, ChannelType::F32) => F::R32_SFLOAT,
+            F::R16_UNORM | F::R16_SNORM | F::R16_UINT | F::R16_SINT
+            | F::R16G16_UNORM | F::R16G16_SNORM | F::R16G16_UINT | F::R16G16_SINT
+            | F::R16G16B16_UNORM | F::R16G16B16_SNORM | F::R16G16B16_UINT | F::R16G16B16_SINT
+            | F::R16G16B16A16_UNORM | F::R16G16B16A16_SNORM | F::R16G16B16A16_UINT | F::R16G16B16A16_SINT
+            => ChannelKind::U16,
 
-            (PixelComponents::Rg, ChannelType::U8) => F::R8G8_UNORM,
-            (PixelComponents::Rg, ChannelType::U16) => F::R16G16_UNORM,
-            (PixelComponents::Rg, ChannelType::F16) => F::R16G16_SFLOAT,
-            (PixelComponents::Rg, ChannelType::F32) => F::R32G32_SFLOAT,
+            F::R16_SFLOAT | F::R16G16_SFLOAT | F::R16G16B16_SFLOAT | F::R16G16B16A16_SFLOAT
+            => ChannelKind::F16,
 
-            (PixelComponents::Rgb, ChannelType::U8) => F::R8G8B8_UNORM,
-            (PixelComponents::Rgb, ChannelType::U16) => F::R16G16B16_UNORM,
-            (PixelComponents::Rgb, ChannelType::F16) => F::R16G16B16_SFLOAT,
-            (PixelComponents::Rgb, ChannelType::F32) => F::R32G32B32_SFLOAT,
+            F::R32_SFLOAT | F::R32G32_SFLOAT | F::R32G32B32_SFLOAT | F::R32G32B32A32_SFLOAT
+            | F::R32_UINT | F::R32_SINT | F::R32G32_UINT | F::R32G32_SINT
+            | F::R32G32B32_UINT | F::R32G32B32_SINT | F::R32G32B32A32_UINT | F::R32G32B32A32_SINT
+            => ChannelKind::F32,
 
-            (PixelComponents::Rgba, ChannelType::U8) => F::R8G8B8A8_UNORM,
-            (PixelComponents::Rgba, ChannelType::U16) => F::R16G16B16A16_UNORM,
-            (PixelComponents::Rgba, ChannelType::F16) => F::R16G16B16A16_SFLOAT,
-            (PixelComponents::Rgba, ChannelType::F32) => F::R32G32B32A32_SFLOAT,
-        };
-        base.denormalize(pf.color_space)
+            _ => return None,
+        })
     }
 }
 
@@ -754,48 +731,6 @@ mod tests {
         assert_eq!(F::R8G8B8A8_UNORM.channel_count(), Some(4));
         assert_eq!(F::BC4_UNORM_BLOCK.channel_count(), Some(1));
         assert_eq!(F::BC7_UNORM_BLOCK.channel_count(), Some(4));
-    }
-
-    #[test]
-    fn from_compressed_bc7_srgb() {
-        assert_eq!(
-            ktx2::Format::from_compressed(CompressedFormat::Bc7, ColorSpace::Srgb),
-            F::BC7_SRGB_BLOCK
-        );
-    }
-
-    #[test]
-    fn from_compressed_astc() {
-        assert_eq!(
-            ktx2::Format::from_compressed(
-                CompressedFormat::Astc {
-                    block_width: 8,
-                    block_height: 8
-                },
-                ColorSpace::Linear
-            ),
-            F::ASTC_8x8_UNORM_BLOCK
-        );
-    }
-
-    #[test]
-    fn from_pixel_format_rgba8_srgb() {
-        let pf = PixelFormat {
-            components: PixelComponents::Rgba,
-            channel_type: ChannelType::U8,
-            color_space: ColorSpace::Srgb,
-        };
-        assert_eq!(ktx2::Format::from_pixel_format(pf), F::R8G8B8A8_SRGB);
-    }
-
-    #[test]
-    fn from_pixel_format_r32f_linear() {
-        let pf = PixelFormat {
-            components: PixelComponents::R,
-            channel_type: ChannelType::F32,
-            color_space: ColorSpace::Linear,
-        };
-        assert_eq!(ktx2::Format::from_pixel_format(pf), F::R32_SFLOAT);
     }
 
     #[test]

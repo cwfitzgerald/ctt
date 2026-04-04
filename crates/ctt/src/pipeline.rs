@@ -1,4 +1,4 @@
-use crate::conversion_graph::{build_default_graph, ConversionGraph, FormatState};
+use crate::conversion_graph::{ConversionGraph, FormatState, build_default_graph};
 use crate::error::{Error, Result};
 use crate::surface::Image;
 use crate::transform_node::Transform;
@@ -96,9 +96,7 @@ impl Pipeline {
         // For now, we assume all branches produce the same format (validated during assembly).
         let post_assembly_state = if resolved_inputs.is_empty() {
             if errors.is_empty() {
-                errors.push(Error::UnsupportedFormat(
-                    "pipeline has no inputs".into(),
-                ));
+                errors.push(Error::UnsupportedFormat("pipeline has no inputs".into()));
             }
             return Err(errors);
         } else {
@@ -145,9 +143,7 @@ impl ResolvedPipeline {
 
         // Assembly.
         let mut image = match self.assembly {
-            AssemblyNode::Identity => {
-                images.into_iter().next().expect("validated during resolve")
-            }
+            AssemblyNode::Identity => images.into_iter().next().expect("validated during resolve"),
             AssemblyNode::Cubemap => {
                 if images.len() != 6 {
                     return Err(Error::CubemapFaceCount(images.len()));
@@ -241,8 +237,7 @@ fn resolve_transform_chain(
                     // Insert conversion transforms for each hop.
                     let mut hop_from = current_state;
                     for hop_to in &path {
-                        let converter =
-                            graph.get_converter(hop_from, *hop_to).cloned();
+                        let converter = graph.get_converter(hop_from, *hop_to).cloned();
                         match converter {
                             Some(conv) => {
                                 resolved.push(Box::new(FormatConvertTransform::new(
@@ -274,8 +269,11 @@ fn resolve_transform_chain(
         }
 
         // Track format through this transform.
-        let (fmt, cs, alpha) =
-            transform.output_format(current_state.format, current_state.color_space, current_state.alpha);
+        let (fmt, cs, alpha) = transform.output_format(
+            current_state.format,
+            current_state.color_space,
+            current_state.alpha,
+        );
         current_state = FormatState::new(fmt, cs, alpha);
 
         // Add the original transform after any conversions.
@@ -303,7 +301,8 @@ fn input_format_state(input: &InputNode) -> FormatState {
 fn branch_output_state(branch: &ResolvedBranch) -> FormatState {
     let mut state = input_format_state(&branch.input);
     for transform in &branch.transforms {
-        let (fmt, cs, alpha) = transform.output_format(state.format, state.color_space, state.alpha);
+        let (fmt, cs, alpha) =
+            transform.output_format(state.format, state.color_space, state.alpha);
         state = FormatState::new(fmt, cs, alpha);
     }
     state
@@ -324,7 +323,7 @@ fn execute_branch(branch: ResolvedBranch) -> Result<Image> {
 mod tests {
     use super::*;
     use crate::alpha::AlphaMode;
-    use crate::format::ColorSpace;
+    use crate::surface::ColorSpace;
 
     fn make_test_image(format: ktx2::Format, cs: ColorSpace) -> Image {
         use crate::surface::Surface;

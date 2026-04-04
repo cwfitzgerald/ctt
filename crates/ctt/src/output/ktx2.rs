@@ -110,7 +110,7 @@ pub fn encode_ktx2_image(image: &crate::surface::Image) -> crate::error::Result<
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::format::ColorSpace;
+    use crate::surface::ColorSpace;
     use ktx2::Format as F;
 
     #[test]

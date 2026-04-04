@@ -1,7 +1,7 @@
 use crate::constraint::FormatConstraint;
 use crate::alpha::AlphaMode;
 use crate::error::Result;
-use crate::format::ColorSpace;
+use crate::surface::ColorSpace;
 use crate::surface::Image;
 
 /// Describes the layer/mip structure of an image without the actual data.

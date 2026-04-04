@@ -1,5 +1,5 @@
 use crate::alpha::AlphaMode;
-use crate::format::ColorSpace;
+use crate::surface::ColorSpace;
 
 /// Describes the format requirements of a transform node.
 ///

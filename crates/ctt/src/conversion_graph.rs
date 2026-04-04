@@ -5,8 +5,8 @@ use std::cmp::Reverse;
 use crate::alpha::AlphaMode;
 use crate::constraint::FormatConstraint;
 use crate::error::Result;
-use crate::format::ColorSpace;
-use crate::surface::Surface;
+use crate::surface::{ColorSpace, Surface};
+use crate::vk_format::{ChannelKind, FormatExt};
 
 /// Type alias for a surface conversion function.
 pub type SurfaceConverter = Arc<dyn Fn(&Surface) -> Result<Surface> + Send + Sync>;
@@ -111,10 +111,6 @@ impl ConversionGraph {
     }
 
     /// Find the shortest path from `from` to any state satisfying `constraint`.
-    ///
-    /// Returns the sequence of intermediate states (excluding `from`, including the target),
-    /// or `None` if no path exists. Returns an empty vec if `from` already satisfies the
-    /// constraint.
     pub fn find_path_to_constraint(
         &self,
         from: FormatState,
@@ -186,64 +182,151 @@ impl ConversionGraph {
     }
 }
 
-/// Build the default conversion graph with edges ported from the existing `convert_image` logic.
-///
-/// This covers conversions between the 16 basic uncompressed formats:
-/// `{R, RG, RGB, RGBA} × {U8, U16, F16, F32}`, all at `Linear` color space and `Straight` alpha.
-///
-/// Color space and alpha mode conversions can be added later as additional edges.
-pub fn build_default_graph() -> ConversionGraph {
-    use crate::format::{ChannelType, PixelComponents, PixelFormat};
-    use crate::transform::convert::convert_image;
-    use crate::vk_format::FormatExt;
+// ---- Format conversion logic (merged from transform/convert.rs) ----
 
-    let components = [
-        PixelComponents::R,
-        PixelComponents::Rg,
-        PixelComponents::Rgb,
-        PixelComponents::Rgba,
-    ];
-    let channel_types = [ChannelType::U8, ChannelType::U16, ChannelType::F16, ChannelType::F32];
+/// Convert a surface to a different uncompressed format.
+///
+/// Supports channel extraction (RGBA->R, RGBA->RG), channel expansion
+/// (R->RGBA, RG->RGBA, RGB->RGBA), and bit-depth conversion between
+/// U8, U16, F16, and F32.
+pub fn convert_surface(surface: &Surface, target: ktx2::Format) -> Result<Surface> {
+    if surface.format == target {
+        return Ok(surface.clone());
+    }
 
-    // Build all 16 (format, pixel_format) pairs
-    let mut formats: Vec<(ktx2::Format, PixelFormat)> = Vec::with_capacity(16);
-    for &comp in &components {
-        for &ct in &channel_types {
-            let pf = PixelFormat {
-                components: comp,
-                channel_type: ct,
-                color_space: ColorSpace::Linear,
-            };
-            let vk = ktx2::Format::from_pixel_format(pf);
-            let (vk, _) = vk.normalize();
-            formats.push((vk, pf));
+    let src_cc = surface.format.channel_count().expect("unknown src channel count");
+    let src_ck = surface.format.channel_kind().expect("unknown src channel kind");
+    let src_cs = src_ck.byte_size();
+    let src_bpp = src_cc * src_cs;
+
+    let dst_cc = target.channel_count().expect("unknown dst channel count");
+    let dst_ck = target.channel_kind().expect("unknown dst channel kind");
+    let dst_cs = dst_ck.byte_size();
+    let dst_bpp = dst_cc * dst_cs;
+
+    let width = surface.width as usize;
+    let height = surface.height as usize;
+    let src_stride = surface.stride as usize;
+    let dst_stride = width * dst_bpp;
+
+    let mut out = vec![0u8; dst_stride * height];
+
+    for y in 0..height {
+        for x in 0..width {
+            let src_off = y * src_stride + x * src_bpp;
+            let dst_off = y * dst_stride + x * dst_bpp;
+
+            for dst_ch in 0..dst_cc {
+                let val = if dst_ch < src_cc {
+                    let ch_off = src_off + dst_ch * src_cs;
+                    read_channel(&surface.data, ch_off, src_ck)
+                } else {
+                    // Expansion: alpha defaults to max, others to 0.
+                    if dst_ch == 3 { 1.0 } else { 0.0 }
+                };
+
+                let ch_off = dst_off + dst_ch * dst_cs;
+                write_channel(&mut out, ch_off, dst_ck, val);
+            }
         }
     }
 
+    Ok(Surface {
+        data: out,
+        width: surface.width,
+        height: surface.height,
+        stride: dst_stride as u32,
+        format: target,
+        color_space: surface.color_space,
+        alpha: surface.alpha,
+    })
+}
+
+/// Read a single channel value as f64, normalized to [0, 1] for integer types.
+fn read_channel(data: &[u8], offset: usize, ck: ChannelKind) -> f64 {
+    match ck {
+        ChannelKind::U8 => data[offset] as f64 / 255.0,
+        ChannelKind::U16 => {
+            let v = u16::from_le_bytes([data[offset], data[offset + 1]]);
+            v as f64 / 65535.0
+        }
+        ChannelKind::F16 => {
+            let bits = u16::from_le_bytes([data[offset], data[offset + 1]]);
+            half::f16::from_bits(bits).to_f64()
+        }
+        ChannelKind::F32 => {
+            let bytes = [
+                data[offset],
+                data[offset + 1],
+                data[offset + 2],
+                data[offset + 3],
+            ];
+            f32::from_le_bytes(bytes) as f64
+        }
+    }
+}
+
+/// Write a single channel value (f64, normalized [0,1] for integer types).
+fn write_channel(data: &mut [u8], offset: usize, ck: ChannelKind, val: f64) {
+    match ck {
+        ChannelKind::U8 => {
+            data[offset] = (val.clamp(0.0, 1.0) * 255.0).round() as u8;
+        }
+        ChannelKind::U16 => {
+            let v = (val.clamp(0.0, 1.0) * 65535.0).round() as u16;
+            data[offset..offset + 2].copy_from_slice(&v.to_le_bytes());
+        }
+        ChannelKind::F16 => {
+            let h = half::f16::from_f64(val);
+            data[offset..offset + 2].copy_from_slice(&h.to_le_bytes());
+        }
+        ChannelKind::F32 => {
+            let v = val as f32;
+            data[offset..offset + 4].copy_from_slice(&v.to_le_bytes());
+        }
+    }
+}
+
+/// Build the default conversion graph with edges between the 16 basic uncompressed formats:
+/// `{R, RG, RGB, RGBA} x {U8, U16, F16, F32}`, all at `Linear` color space and `Straight` alpha.
+pub fn build_default_graph() -> ConversionGraph {
+    use ktx2::Format as F;
+
+    let formats = [
+        F::R8_UNORM,
+        F::R16_UNORM,
+        F::R16_SFLOAT,
+        F::R32_SFLOAT,
+        F::R8G8_UNORM,
+        F::R16G16_UNORM,
+        F::R16G16_SFLOAT,
+        F::R32G32_SFLOAT,
+        F::R8G8B8_UNORM,
+        F::R16G16B16_UNORM,
+        F::R16G16B16_SFLOAT,
+        F::R32G32B32_SFLOAT,
+        F::R8G8B8A8_UNORM,
+        F::R16G16B16A16_UNORM,
+        F::R16G16B16A16_SFLOAT,
+        F::R32G32B32A32_SFLOAT,
+    ];
+
     let mut graph = ConversionGraph::new();
 
-    for &(src_vk, src_pf) in &formats {
-        for &(dst_vk, dst_pf) in &formats {
-            if src_vk == dst_vk {
+    for &src in &formats {
+        for &dst in &formats {
+            if src == dst {
                 continue;
             }
 
-            let cost = conversion_cost(src_pf, dst_pf);
+            let cost = conversion_cost(src, dst);
 
-            let converter: SurfaceConverter = {
-                Arc::new(move |surface: &Surface| {
-                    let raw = surface.to_raw_image()?;
-                    let converted = convert_image(&raw, dst_pf)?;
-                    let mut result = Surface::from_raw_image(converted);
-                    // Preserve the original color space and alpha
-                    result.color_space = surface.color_space;
-                    result.alpha = surface.alpha;
-                    Ok(result)
-                })
-            };
+            let converter: SurfaceConverter = Arc::new(move |surface: &Surface| {
+                convert_surface(surface, dst)
+            });
 
-            let from = FormatState::new(src_vk, ColorSpace::Linear, AlphaMode::Straight);
-            let to = FormatState::new(dst_vk, ColorSpace::Linear, AlphaMode::Straight);
+            let from = FormatState::new(src, ColorSpace::Linear, AlphaMode::Straight);
+            let to = FormatState::new(dst, ColorSpace::Linear, AlphaMode::Straight);
 
             graph.add_edge(
                 from,
@@ -259,45 +342,36 @@ pub fn build_default_graph() -> ConversionGraph {
     graph
 }
 
-/// Compute the cost of converting between two pixel formats.
-///
-/// Heuristics:
-/// - Same components, different bit depth (U8 <-> U16): 5
-/// - Same components, to/from F32: 10
-/// - Involving F16: +15 penalty (CPU math is slow)
-/// - Channel expansion/reduction: 20
-/// - Combined changes: sum of costs
-fn conversion_cost(from: PixelFormat, to: PixelFormat) -> u32 {
-    use crate::format::ChannelType;
-
+/// Compute the cost of converting between two formats.
+fn conversion_cost(from: ktx2::Format, to: ktx2::Format) -> u32 {
     let mut cost = 0u32;
 
-    // Channel count change
-    if from.components != to.components {
+    let from_cc = from.channel_count().unwrap_or(4);
+    let to_cc = to.channel_count().unwrap_or(4);
+    if from_cc != to_cc {
         cost += 20;
     }
 
-    // Bit depth change
-    if from.channel_type != to.channel_type {
-        let type_cost = match (from.channel_type, to.channel_type) {
-            (ChannelType::U8, ChannelType::U16) | (ChannelType::U16, ChannelType::U8) => 5,
-            (ChannelType::F16, _) | (_, ChannelType::F16) => 15,
+    let from_ck = from.channel_kind();
+    let to_ck = to.channel_kind();
+    if from_ck != to_ck {
+        let type_cost = match (from_ck, to_ck) {
+            (Some(ChannelKind::U8), Some(ChannelKind::U16))
+            | (Some(ChannelKind::U16), Some(ChannelKind::U8)) => 5,
+            (Some(ChannelKind::F16), _) | (_, Some(ChannelKind::F16)) => 15,
             _ => 10,
         };
         cost += type_cost;
     }
 
-    // Prefer smaller output formats for memory bandwidth
-    let dst_size = to.bytes_per_pixel();
-    let src_size = from.bytes_per_pixel();
+    let dst_size = to.bytes_per_pixel().unwrap_or(4);
+    let src_size = from.bytes_per_pixel().unwrap_or(4);
     if dst_size > src_size {
         cost += (dst_size - src_size) as u32;
     }
 
     cost
 }
-
-use crate::format::PixelFormat;
 
 #[cfg(test)]
 mod tests {
@@ -340,7 +414,6 @@ mod tests {
         let path = graph.find_path(rgba8_linear(), rgba32f_linear());
         assert!(path.is_some());
         let path = path.unwrap();
-        // Should be a direct hop (or short path)
         assert!(!path.is_empty());
         assert_eq!(*path.last().unwrap(), rgba32f_linear());
     }
@@ -383,7 +456,6 @@ mod tests {
     #[test]
     fn find_path_to_constraint_picks_cheapest() {
         let graph = build_default_graph();
-        // Constraint accepts both RGBA8 and RGBA32F — should pick RGBA8 (cheaper from R8)
         let constraint = FormatConstraint {
             formats: Some(vec![
                 ktx2::Format::R8G8B8A8_UNORM,
@@ -395,14 +467,12 @@ mod tests {
         let path = graph.find_path_to_constraint(r8_linear(), &constraint);
         assert!(path.is_some());
         let target = path.unwrap().last().unwrap().format;
-        // RGBA8 should be cheaper than RGBA32F from R8
         assert_eq!(target, ktx2::Format::R8G8B8A8_UNORM);
     }
 
     #[test]
     fn no_path_for_impossible_constraint() {
         let graph = build_default_graph();
-        // sRGB color space constraint — no edges convert color space yet
         let constraint = FormatConstraint {
             formats: None,
             color_spaces: Some(vec![ColorSpace::Srgb]),
@@ -415,7 +485,6 @@ mod tests {
     #[test]
     fn prefers_non_f16_path() {
         let graph = build_default_graph();
-        // Going from RGBA8 to RGBA32F should not route through F16 due to cost penalty
         let path = graph.find_path(rgba8_linear(), rgba32f_linear());
         let path = path.unwrap();
         for state in &path[..path.len().saturating_sub(1)] {
@@ -436,7 +505,6 @@ mod tests {
     #[test]
     fn get_converter_returns_none_for_missing() {
         let graph = build_default_graph();
-        // No direct edge from linear to sRGB
         let srgb_state = FormatState::new(
             ktx2::Format::R8G8B8A8_UNORM,
             ColorSpace::Srgb,
@@ -458,5 +526,69 @@ mod tests {
             alpha_modes: None,
         };
         assert!(!state.satisfies(&c));
+    }
+
+    #[test]
+    fn convert_surface_no_op_when_same_format() {
+        let surface = Surface {
+            data: vec![10, 20, 30, 255],
+            width: 1,
+            height: 1,
+            stride: 4,
+            format: ktx2::Format::R8G8B8A8_UNORM,
+            color_space: ColorSpace::Linear,
+            alpha: AlphaMode::Straight,
+        };
+        let result = convert_surface(&surface, ktx2::Format::R8G8B8A8_UNORM).unwrap();
+        assert_eq!(result.data, surface.data);
+    }
+
+    #[test]
+    fn convert_surface_rgba8_to_r8() {
+        let surface = Surface {
+            data: vec![100, 150, 200, 255],
+            width: 1,
+            height: 1,
+            stride: 4,
+            format: ktx2::Format::R8G8B8A8_UNORM,
+            color_space: ColorSpace::Linear,
+            alpha: AlphaMode::Straight,
+        };
+        let result = convert_surface(&surface, ktx2::Format::R8_UNORM).unwrap();
+        assert_eq!(result.data, vec![100]);
+    }
+
+    #[test]
+    fn convert_surface_r8_to_rgba8() {
+        let surface = Surface {
+            data: vec![100],
+            width: 1,
+            height: 1,
+            stride: 1,
+            format: ktx2::Format::R8_UNORM,
+            color_space: ColorSpace::Linear,
+            alpha: AlphaMode::Straight,
+        };
+        let result = convert_surface(&surface, ktx2::Format::R8G8B8A8_UNORM).unwrap();
+        // R=100, G=0, B=0, A=255
+        assert_eq!(result.data, vec![100, 0, 0, 255]);
+    }
+
+    #[test]
+    fn convert_surface_u8_to_u16_roundtrip() {
+        let surface = Surface {
+            data: vec![128, 0, 0, 255],
+            width: 1,
+            height: 1,
+            stride: 4,
+            format: ktx2::Format::R8G8B8A8_UNORM,
+            color_space: ColorSpace::Linear,
+            alpha: AlphaMode::Straight,
+        };
+        let u16_surface = convert_surface(&surface, ktx2::Format::R16G16B16A16_UNORM).unwrap();
+        assert_eq!(u16_surface.data.len(), 8);
+
+        let back = convert_surface(&u16_surface, ktx2::Format::R8G8B8A8_UNORM).unwrap();
+        assert_eq!(back.data, surface.data);
     }
 }

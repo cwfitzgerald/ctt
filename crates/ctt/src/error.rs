@@ -1,5 +1,3 @@
-use crate::format::CompressedFormat;
-
 pub type Result<T> = std::result::Result<T, Error>;
 
 #[derive(Debug, thiserror::Error)]
@@ -9,9 +7,6 @@ pub enum Error {
 
     #[error("unsupported format: {0}")]
     UnsupportedFormat(String),
-
-    #[error("compression not implemented for {0}")]
-    CompressionNotImplemented(CompressedFormat),
 
     #[error("invalid swizzle: {0}")]
     InvalidSwizzle(String),

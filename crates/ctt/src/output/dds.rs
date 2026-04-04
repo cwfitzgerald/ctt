@@ -1,7 +1,7 @@
 use ddsfile::{AlphaMode, Caps2, D3D10ResourceDimension, Dds, DxgiFormat, NewDxgiParams};
 
 use crate::error::{Error, Result};
-use crate::format::ColorSpace;
+use crate::surface::ColorSpace;
 use crate::vk_format::FormatExt as _;
 
 /// Map a `ktx2::Format` + `ColorSpace` to a DXGI format.
