@@ -1,6 +1,6 @@
+use std::cmp::Reverse;
 use std::collections::{BinaryHeap, HashMap};
 use std::sync::Arc;
-use std::cmp::Reverse;
 
 use crate::alpha::AlphaMode;
 use crate::constraint::FormatConstraint;
@@ -152,11 +152,7 @@ impl ConversionGraph {
     }
 
     /// Look up the converter function for a direct single-hop conversion.
-    pub fn get_converter(
-        &self,
-        from: FormatState,
-        to: FormatState,
-    ) -> Option<&SurfaceConverter> {
+    pub fn get_converter(&self, from: FormatState, to: FormatState) -> Option<&SurfaceConverter> {
         self.edges.get(&from)?.iter().find_map(|edge| {
             if edge.target == to {
                 Some(&edge.converter)
@@ -194,8 +190,14 @@ pub fn convert_surface(surface: &Surface, target: ktx2::Format) -> Result<Surfac
         return Ok(surface.clone());
     }
 
-    let src_cc = surface.format.channel_count().expect("unknown src channel count");
-    let src_ck = surface.format.channel_kind().expect("unknown src channel kind");
+    let src_cc = surface
+        .format
+        .channel_count()
+        .expect("unknown src channel count");
+    let src_ck = surface
+        .format
+        .channel_kind()
+        .expect("unknown src channel kind");
     let src_cs = src_ck.byte_size();
     let src_bpp = src_cc * src_cs;
 
@@ -334,9 +336,8 @@ pub fn build_default_graph() -> ConversionGraph {
 
             let cost = conversion_cost(src, dst);
 
-            let converter: SurfaceConverter = Arc::new(move |surface: &Surface| {
-                convert_surface(surface, dst)
-            });
+            let converter: SurfaceConverter =
+                Arc::new(move |surface: &Surface| convert_surface(surface, dst));
 
             let from = FormatState::new(src, ColorSpace::Linear, AlphaMode::Straight);
             let to = FormatState::new(dst, ColorSpace::Linear, AlphaMode::Straight);
@@ -502,7 +503,8 @@ mod tests {
         let path = path.unwrap();
         for state in &path[..path.len().saturating_sub(1)] {
             assert_ne!(
-                state.format, ktx2::Format::R16G16B16A16_SFLOAT,
+                state.format,
+                ktx2::Format::R16G16B16A16_SFLOAT,
                 "path should not route through F16"
             );
         }

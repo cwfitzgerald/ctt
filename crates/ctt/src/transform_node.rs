@@ -1,5 +1,5 @@
-use crate::constraint::FormatConstraint;
 use crate::alpha::AlphaMode;
+use crate::constraint::FormatConstraint;
 use crate::error::Result;
 use crate::surface::ColorSpace;
 use crate::surface::Image;

@@ -6,16 +6,14 @@ use std::sync::Arc;
 
 use clap::Parser;
 
+use ctt::cubemap::{CubemapInput, split_cubemap};
 use ctt::encoder::{EncoderRegistry, Quality};
 use ctt::error::Error;
-use ctt::pipeline::{
-    AssemblyNode, InputBranch, InputNode, OutputNode, Pipeline, PipelineOutput,
-};
+use ctt::pipeline::{AssemblyNode, InputBranch, InputNode, OutputNode, Pipeline, PipelineOutput};
 use ctt::surface::{ColorSpace, Image, Surface};
-use ctt::cubemap::{CubemapInput, split_cubemap};
-use ctt::transforms::swizzle::{Swizzle, SwizzleChannel};
 use ctt::transforms::compress::CompressTransform;
 use ctt::transforms::swizzle::SwizzleTransform;
+use ctt::transforms::swizzle::{Swizzle, SwizzleChannel};
 use ctt::vk_format::FormatExt;
 
 use args::{Args, ColorSpaceArg, ContainerArg, CubemapLayoutArg, QualityArg};
@@ -89,14 +87,12 @@ fn run(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
     } else {
         let inputs: Vec<InputBranch> = surfaces
             .into_iter()
-            .map(|surface| {
-                InputBranch {
-                    input: InputNode::Raw(Image {
-                        surfaces: vec![vec![surface]],
-                        is_cubemap: false,
-                    }),
-                    transforms: Vec::new(),
-                }
+            .map(|surface| InputBranch {
+                input: InputNode::Raw(Image {
+                    surfaces: vec![vec![surface]],
+                    is_cubemap: false,
+                }),
+                transforms: Vec::new(),
             })
             .collect();
 
@@ -140,7 +136,7 @@ fn run(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
     let output_bytes = match resolved.execute()? {
         PipelineOutput::Encoded(bytes) => bytes,
         PipelineOutput::Raw(_) => {
-            return Err(Error::OutputEncoding("unexpected raw output".into()).into())
+            return Err(Error::OutputEncoding("unexpected raw output".into()).into());
         }
     };
 
@@ -176,21 +172,33 @@ fn print_encoder_table(registry: &EncoderRegistry) {
                 let (bw, bh) = f.block_size().unwrap();
                 let is_astc = matches!(
                     (bw, bh),
-                    (4, 4) | (5, 4) | (5, 5) | (6, 5) | (6, 6) | (8, 5) | (8, 6) | (8, 8)
-                    | (10, 5) | (10, 6) | (10, 8) | (10, 10) | (12, 10) | (12, 12)
+                    (4, 4)
+                        | (5, 4)
+                        | (5, 5)
+                        | (6, 5)
+                        | (6, 6)
+                        | (8, 5)
+                        | (8, 6)
+                        | (8, 8)
+                        | (10, 5)
+                        | (10, 6)
+                        | (10, 8)
+                        | (10, 10)
+                        | (12, 10)
+                        | (12, 12)
                 ) && !matches!(
                     f,
                     ctt::ktx2::Format::BC1_RGBA_UNORM_BLOCK
-                    | ctt::ktx2::Format::BC2_UNORM_BLOCK
-                    | ctt::ktx2::Format::BC3_UNORM_BLOCK
-                    | ctt::ktx2::Format::BC4_UNORM_BLOCK
-                    | ctt::ktx2::Format::BC4_SNORM_BLOCK
-                    | ctt::ktx2::Format::BC5_UNORM_BLOCK
-                    | ctt::ktx2::Format::BC5_SNORM_BLOCK
-                    | ctt::ktx2::Format::BC6H_UFLOAT_BLOCK
-                    | ctt::ktx2::Format::BC6H_SFLOAT_BLOCK
-                    | ctt::ktx2::Format::BC7_UNORM_BLOCK
-                    | ctt::ktx2::Format::ETC2_R8G8B8_UNORM_BLOCK
+                        | ctt::ktx2::Format::BC2_UNORM_BLOCK
+                        | ctt::ktx2::Format::BC3_UNORM_BLOCK
+                        | ctt::ktx2::Format::BC4_UNORM_BLOCK
+                        | ctt::ktx2::Format::BC4_SNORM_BLOCK
+                        | ctt::ktx2::Format::BC5_UNORM_BLOCK
+                        | ctt::ktx2::Format::BC5_SNORM_BLOCK
+                        | ctt::ktx2::Format::BC6H_UFLOAT_BLOCK
+                        | ctt::ktx2::Format::BC6H_SFLOAT_BLOCK
+                        | ctt::ktx2::Format::BC7_UNORM_BLOCK
+                        | ctt::ktx2::Format::ETC2_R8G8B8_UNORM_BLOCK
                 );
 
                 if is_astc {
@@ -327,14 +335,12 @@ fn build_cubemap_inputs(
     let faces = split_cubemap(cubemap_input)?;
     let inputs: Vec<InputBranch> = faces
         .into_iter()
-        .map(|face| {
-            InputBranch {
-                input: InputNode::Raw(Image {
-                    surfaces: vec![vec![face]],
-                    is_cubemap: false,
-                }),
-                transforms: Vec::new(),
-            }
+        .map(|face| InputBranch {
+            input: InputNode::Raw(Image {
+                surfaces: vec![vec![face]],
+                is_cubemap: false,
+            }),
+            transforms: Vec::new(),
         })
         .collect();
 

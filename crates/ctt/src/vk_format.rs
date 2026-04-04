@@ -193,30 +193,14 @@ impl FormatExt for ktx2::Format {
             | F::EAC_R11G11_SNORM_BLOCK => (4, 4),
 
             // ASTC
-            F::ASTC_4x4_UNORM_BLOCK | F::ASTC_4x4_SRGB_BLOCK | F::ASTC_4x4_SFLOAT_BLOCK => {
-                (4, 4)
-            }
-            F::ASTC_5x4_UNORM_BLOCK | F::ASTC_5x4_SRGB_BLOCK | F::ASTC_5x4_SFLOAT_BLOCK => {
-                (5, 4)
-            }
-            F::ASTC_5x5_UNORM_BLOCK | F::ASTC_5x5_SRGB_BLOCK | F::ASTC_5x5_SFLOAT_BLOCK => {
-                (5, 5)
-            }
-            F::ASTC_6x5_UNORM_BLOCK | F::ASTC_6x5_SRGB_BLOCK | F::ASTC_6x5_SFLOAT_BLOCK => {
-                (6, 5)
-            }
-            F::ASTC_6x6_UNORM_BLOCK | F::ASTC_6x6_SRGB_BLOCK | F::ASTC_6x6_SFLOAT_BLOCK => {
-                (6, 6)
-            }
-            F::ASTC_8x5_UNORM_BLOCK | F::ASTC_8x5_SRGB_BLOCK | F::ASTC_8x5_SFLOAT_BLOCK => {
-                (8, 5)
-            }
-            F::ASTC_8x6_UNORM_BLOCK | F::ASTC_8x6_SRGB_BLOCK | F::ASTC_8x6_SFLOAT_BLOCK => {
-                (8, 6)
-            }
-            F::ASTC_8x8_UNORM_BLOCK | F::ASTC_8x8_SRGB_BLOCK | F::ASTC_8x8_SFLOAT_BLOCK => {
-                (8, 8)
-            }
+            F::ASTC_4x4_UNORM_BLOCK | F::ASTC_4x4_SRGB_BLOCK | F::ASTC_4x4_SFLOAT_BLOCK => (4, 4),
+            F::ASTC_5x4_UNORM_BLOCK | F::ASTC_5x4_SRGB_BLOCK | F::ASTC_5x4_SFLOAT_BLOCK => (5, 4),
+            F::ASTC_5x5_UNORM_BLOCK | F::ASTC_5x5_SRGB_BLOCK | F::ASTC_5x5_SFLOAT_BLOCK => (5, 5),
+            F::ASTC_6x5_UNORM_BLOCK | F::ASTC_6x5_SRGB_BLOCK | F::ASTC_6x5_SFLOAT_BLOCK => (6, 5),
+            F::ASTC_6x6_UNORM_BLOCK | F::ASTC_6x6_SRGB_BLOCK | F::ASTC_6x6_SFLOAT_BLOCK => (6, 6),
+            F::ASTC_8x5_UNORM_BLOCK | F::ASTC_8x5_SRGB_BLOCK | F::ASTC_8x5_SFLOAT_BLOCK => (8, 5),
+            F::ASTC_8x6_UNORM_BLOCK | F::ASTC_8x6_SRGB_BLOCK | F::ASTC_8x6_SFLOAT_BLOCK => (8, 6),
+            F::ASTC_8x8_UNORM_BLOCK | F::ASTC_8x8_SRGB_BLOCK | F::ASTC_8x8_SFLOAT_BLOCK => (8, 8),
             F::ASTC_10x5_UNORM_BLOCK | F::ASTC_10x5_SRGB_BLOCK | F::ASTC_10x5_SFLOAT_BLOCK => {
                 (10, 5)
             }
@@ -226,15 +210,15 @@ impl FormatExt for ktx2::Format {
             F::ASTC_10x8_UNORM_BLOCK | F::ASTC_10x8_SRGB_BLOCK | F::ASTC_10x8_SFLOAT_BLOCK => {
                 (10, 8)
             }
-            F::ASTC_10x10_UNORM_BLOCK
-            | F::ASTC_10x10_SRGB_BLOCK
-            | F::ASTC_10x10_SFLOAT_BLOCK => (10, 10),
-            F::ASTC_12x10_UNORM_BLOCK
-            | F::ASTC_12x10_SRGB_BLOCK
-            | F::ASTC_12x10_SFLOAT_BLOCK => (12, 10),
-            F::ASTC_12x12_UNORM_BLOCK
-            | F::ASTC_12x12_SRGB_BLOCK
-            | F::ASTC_12x12_SFLOAT_BLOCK => (12, 12),
+            F::ASTC_10x10_UNORM_BLOCK | F::ASTC_10x10_SRGB_BLOCK | F::ASTC_10x10_SFLOAT_BLOCK => {
+                (10, 10)
+            }
+            F::ASTC_12x10_UNORM_BLOCK | F::ASTC_12x10_SRGB_BLOCK | F::ASTC_12x10_SFLOAT_BLOCK => {
+                (12, 10)
+            }
+            F::ASTC_12x12_UNORM_BLOCK | F::ASTC_12x12_SRGB_BLOCK | F::ASTC_12x12_SFLOAT_BLOCK => {
+                (12, 12)
+            }
 
             _ => return None,
         })
@@ -597,29 +581,70 @@ impl FormatExt for ktx2::Format {
     fn channel_kind(&self) -> Option<ChannelKind> {
         use ktx2::Format as F;
         Some(match *self {
-            F::R8_UNORM | F::R8_SNORM | F::R8_UINT | F::R8_SINT | F::R8_SRGB
-            | F::R8G8_UNORM | F::R8G8_SNORM | F::R8G8_UINT | F::R8G8_SINT | F::R8G8_SRGB
-            | F::R8G8B8_UNORM | F::R8G8B8_SNORM | F::R8G8B8_UINT | F::R8G8B8_SINT | F::R8G8B8_SRGB
-            | F::B8G8R8_UNORM | F::B8G8R8_SNORM | F::B8G8R8_UINT | F::B8G8R8_SINT | F::B8G8R8_SRGB
-            | F::R8G8B8A8_UNORM | F::R8G8B8A8_SNORM | F::R8G8B8A8_UINT | F::R8G8B8A8_SINT | F::R8G8B8A8_SRGB
-            | F::B8G8R8A8_UNORM | F::B8G8R8A8_SNORM | F::B8G8R8A8_UINT | F::B8G8R8A8_SINT | F::B8G8R8A8_SRGB
-            => ChannelKind::U8,
+            F::R8_UNORM
+            | F::R8_SNORM
+            | F::R8_UINT
+            | F::R8_SINT
+            | F::R8_SRGB
+            | F::R8G8_UNORM
+            | F::R8G8_SNORM
+            | F::R8G8_UINT
+            | F::R8G8_SINT
+            | F::R8G8_SRGB
+            | F::R8G8B8_UNORM
+            | F::R8G8B8_SNORM
+            | F::R8G8B8_UINT
+            | F::R8G8B8_SINT
+            | F::R8G8B8_SRGB
+            | F::B8G8R8_UNORM
+            | F::B8G8R8_SNORM
+            | F::B8G8R8_UINT
+            | F::B8G8R8_SINT
+            | F::B8G8R8_SRGB
+            | F::R8G8B8A8_UNORM
+            | F::R8G8B8A8_SNORM
+            | F::R8G8B8A8_UINT
+            | F::R8G8B8A8_SINT
+            | F::R8G8B8A8_SRGB
+            | F::B8G8R8A8_UNORM
+            | F::B8G8R8A8_SNORM
+            | F::B8G8R8A8_UINT
+            | F::B8G8R8A8_SINT
+            | F::B8G8R8A8_SRGB => ChannelKind::U8,
 
-            F::R16_UNORM | F::R16_SNORM | F::R16_UINT | F::R16_SINT
-            | F::R16G16_UNORM | F::R16G16_SNORM | F::R16G16_UINT | F::R16G16_SINT
-            | F::R16G16B16_UNORM | F::R16G16B16_SNORM | F::R16G16B16_UINT | F::R16G16B16_SINT
-            | F::R16G16B16A16_UNORM | F::R16G16B16A16_SNORM | F::R16G16B16A16_UINT | F::R16G16B16A16_SINT
-            => ChannelKind::U16,
+            F::R16_UNORM
+            | F::R16_SNORM
+            | F::R16_UINT
+            | F::R16_SINT
+            | F::R16G16_UNORM
+            | F::R16G16_SNORM
+            | F::R16G16_UINT
+            | F::R16G16_SINT
+            | F::R16G16B16_UNORM
+            | F::R16G16B16_SNORM
+            | F::R16G16B16_UINT
+            | F::R16G16B16_SINT
+            | F::R16G16B16A16_UNORM
+            | F::R16G16B16A16_SNORM
+            | F::R16G16B16A16_UINT
+            | F::R16G16B16A16_SINT => ChannelKind::U16,
 
-            F::R16_SFLOAT | F::R16G16_SFLOAT | F::R16G16B16_SFLOAT | F::R16G16B16A16_SFLOAT
-            => ChannelKind::F16,
+            F::R16_SFLOAT | F::R16G16_SFLOAT | F::R16G16B16_SFLOAT | F::R16G16B16A16_SFLOAT => {
+                ChannelKind::F16
+            }
 
-            F::R32_SFLOAT | F::R32G32_SFLOAT | F::R32G32B32_SFLOAT | F::R32G32B32A32_SFLOAT
-            => ChannelKind::F32,
+            F::R32_SFLOAT | F::R32G32_SFLOAT | F::R32G32B32_SFLOAT | F::R32G32B32A32_SFLOAT => {
+                ChannelKind::F32
+            }
 
-            F::R32_UINT | F::R32_SINT | F::R32G32_UINT | F::R32G32_SINT
-            | F::R32G32B32_UINT | F::R32G32B32_SINT | F::R32G32B32A32_UINT | F::R32G32B32A32_SINT
-            => ChannelKind::U32,
+            F::R32_UINT
+            | F::R32_SINT
+            | F::R32G32_UINT
+            | F::R32G32_SINT
+            | F::R32G32B32_UINT
+            | F::R32G32B32_SINT
+            | F::R32G32B32A32_UINT
+            | F::R32G32B32A32_SINT => ChannelKind::U32,
 
             _ => return None,
         })
@@ -755,11 +780,7 @@ mod tests {
         for fmt in srgb_astc {
             let (base, cs) = fmt.normalize();
             assert_eq!(cs, ColorSpace::Srgb, "expected sRGB for {fmt:?}");
-            assert_eq!(
-                base.denormalize(cs),
-                fmt,
-                "roundtrip failed for {fmt:?}"
-            );
+            assert_eq!(base.denormalize(cs), fmt, "roundtrip failed for {fmt:?}");
         }
     }
 }

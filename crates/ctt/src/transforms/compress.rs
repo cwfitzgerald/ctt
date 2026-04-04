@@ -46,10 +46,7 @@ impl CompressTransform {
                 })
         } else {
             self.registry.find(self.target_format).ok_or_else(|| {
-                Error::UnsupportedFormat(format!(
-                    "no encoder supports {:?}",
-                    self.target_format
-                ))
+                Error::UnsupportedFormat(format!("no encoder supports {:?}", self.target_format))
             })
         }
     }

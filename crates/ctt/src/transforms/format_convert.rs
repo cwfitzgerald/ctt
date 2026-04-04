@@ -49,7 +49,11 @@ impl Transform for FormatConvertTransform {
         _cs: ColorSpace,
         _alpha: AlphaMode,
     ) -> (ktx2::Format, ColorSpace, AlphaMode) {
-        (self.target_format, self.target_color_space, self.target_alpha)
+        (
+            self.target_format,
+            self.target_color_space,
+            self.target_alpha,
+        )
     }
 
     fn output_layout(&self, input: &LayoutInfo) -> LayoutInfo {

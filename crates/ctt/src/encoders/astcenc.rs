@@ -51,9 +51,8 @@ impl Encoder for AstcencEncoder {
     ) -> Result<Vec<u8>> {
         let (base, color_space) = format.normalize();
 
-        let (block_width, block_height) = base
-            .block_size()
-            .expect("ASTC format must have block size");
+        let (block_width, block_height) =
+            base.block_size().expect("ASTC format must have block size");
 
         let profile = match color_space {
             ColorSpace::Srgb => astc::astcenc_profile_ASTCENC_PRF_LDR_SRGB,
