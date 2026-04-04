@@ -3,7 +3,7 @@ use crate::constraint::FormatConstraint;
 use crate::error::{Error, Result};
 use crate::surface::{ColorSpace, Image, Surface};
 use crate::transform_node::{LayoutInfo, Transform};
-use crate::vk_format::FormatExt;
+use crate::vk_format::{ChannelKind, FormatExt};
 
 /// A single channel source for swizzling.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -54,15 +54,15 @@ pub fn apply_swizzle(surface: &mut Surface, swizzle: &Swizzle) -> Result<()> {
     let width = surface.width as usize;
     let height = surface.height as usize;
     let stride = surface.stride as usize;
-    let bpp = surface
+    let ck = surface
         .format
-        .bytes_per_pixel()
-        .expect("swizzle requires uncompressed format");
-    let cs = bpp / 4; // 4 channels
+        .channel_kind()
+        .ok_or_else(|| Error::InvalidSwizzle("unknown format channel kind".into()))?;
+    let cs = ck.byte_size();
     let pixel_bytes = 4 * cs;
 
     // Pre-compute the "one" value for this channel type.
-    let one = one_value(cs);
+    let one = one_value(ck);
 
     let mut tmp = vec![0u8; pixel_bytes];
 
@@ -101,13 +101,14 @@ pub fn apply_swizzle(surface: &mut Surface, swizzle: &Swizzle) -> Result<()> {
     Ok(())
 }
 
-/// Returns the byte representation of "1.0" / max value for a given channel byte size.
-fn one_value(channel_byte_size: usize) -> Vec<u8> {
-    match channel_byte_size {
-        1 => vec![255],
-        2 => u16::MAX.to_le_bytes().to_vec(),
-        4 => 1.0f32.to_le_bytes().to_vec(),
-        _ => unreachable!(),
+/// Returns the byte representation of "1.0" / max value for a given channel kind.
+fn one_value(ck: ChannelKind) -> Vec<u8> {
+    match ck {
+        ChannelKind::U8 => vec![255],
+        ChannelKind::U16 => u16::MAX.to_le_bytes().to_vec(),
+        ChannelKind::F16 => half::f16::from_f64(1.0).to_le_bytes().to_vec(),
+        ChannelKind::F32 => 1.0f32.to_le_bytes().to_vec(),
+        ChannelKind::U32 => u32::MAX.to_le_bytes().to_vec(),
     }
 }
 

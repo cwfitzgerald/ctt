@@ -7,6 +7,7 @@ pub enum ChannelKind {
     U16,
     F16,
     F32,
+    U32,
 }
 
 impl ChannelKind {
@@ -14,7 +15,7 @@ impl ChannelKind {
         match self {
             Self::U8 => 1,
             Self::U16 | Self::F16 => 2,
-            Self::F32 => 4,
+            Self::F32 | Self::U32 => 4,
         }
     }
 }
@@ -55,10 +56,8 @@ pub trait FormatExt {
 impl FormatExt for ktx2::Format {
     fn is_compressed(&self) -> bool {
         let v = self.value();
-        // BC1 RGB through ASTC 12x12 sRGB
+        // BC1 RGB through ASTC 12x12 sRGB (includes ETC2/EAC at 147-156)
         (131..=184).contains(&v)
-            // EAC formats
-            || (153..=156).contains(&v)
             // ASTC SFLOAT extension
             || (1000066000..=1000066013).contains(&v)
     }
@@ -616,9 +615,11 @@ impl FormatExt for ktx2::Format {
             => ChannelKind::F16,
 
             F::R32_SFLOAT | F::R32G32_SFLOAT | F::R32G32B32_SFLOAT | F::R32G32B32A32_SFLOAT
-            | F::R32_UINT | F::R32_SINT | F::R32G32_UINT | F::R32G32_SINT
-            | F::R32G32B32_UINT | F::R32G32B32_SINT | F::R32G32B32A32_UINT | F::R32G32B32A32_SINT
             => ChannelKind::F32,
+
+            F::R32_UINT | F::R32_SINT | F::R32G32_UINT | F::R32G32_SINT
+            | F::R32G32B32_UINT | F::R32G32B32_SINT | F::R32G32B32A32_UINT | F::R32G32B32A32_SINT
+            => ChannelKind::U32,
 
             _ => return None,
         })

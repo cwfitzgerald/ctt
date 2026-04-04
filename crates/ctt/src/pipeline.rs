@@ -93,15 +93,25 @@ impl Pipeline {
         }
 
         // Determine the format state after assembly.
-        // For now, we assume all branches produce the same format (validated during assembly).
         let post_assembly_state = if resolved_inputs.is_empty() {
             if errors.is_empty() {
                 errors.push(Error::UnsupportedFormat("pipeline has no inputs".into()));
             }
             return Err(errors);
         } else {
-            // Get format state from first branch's output
-            branch_output_state(&resolved_inputs[0])
+            let first_state = branch_output_state(&resolved_inputs[0]);
+            // Validate all branches produce the same format state.
+            for (i, branch) in resolved_inputs.iter().enumerate().skip(1) {
+                let state = branch_output_state(branch);
+                if state != first_state {
+                    errors.push(Error::UnsupportedFormat(format!(
+                        "input[{i}] produces {:?} but input[0] produces {:?}; \
+                         all branches must produce the same format for assembly",
+                        state, first_state
+                    )));
+                }
+            }
+            first_state
         };
 
         // Resolve post-assembly transforms.

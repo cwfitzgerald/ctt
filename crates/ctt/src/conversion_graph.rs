@@ -263,6 +263,15 @@ fn read_channel(data: &[u8], offset: usize, ck: ChannelKind) -> f64 {
             ];
             f32::from_le_bytes(bytes) as f64
         }
+        ChannelKind::U32 => {
+            let bytes = [
+                data[offset],
+                data[offset + 1],
+                data[offset + 2],
+                data[offset + 3],
+            ];
+            u32::from_le_bytes(bytes) as f64 / u32::MAX as f64
+        }
     }
 }
 
@@ -282,6 +291,10 @@ fn write_channel(data: &mut [u8], offset: usize, ck: ChannelKind, val: f64) {
         }
         ChannelKind::F32 => {
             let v = val as f32;
+            data[offset..offset + 4].copy_from_slice(&v.to_le_bytes());
+        }
+        ChannelKind::U32 => {
+            let v = (val.clamp(0.0, 1.0) * u32::MAX as f64).round() as u32;
             data[offset..offset + 4].copy_from_slice(&v.to_le_bytes());
         }
     }
