@@ -5,10 +5,10 @@ const KTX2_MAGIC: [u8; 12] = [
     0xAB, 0x4B, 0x54, 0x58, 0x20, 0x32, 0x30, 0xBB, 0x0D, 0x0A, 0x1A, 0x0A,
 ];
 
-/// Encode an [`Image`] as a KTX2 file.
+/// Encode an [`Image`](crate::surface::Image) as a KTX2 file.
 ///
 /// Uses the `ktx2::Format` from the first surface directly as the VkFormat value,
-/// recombined with the surface's color space via [`FormatExt::denormalize`].
+/// recombined with the surface's color space via [`FormatExt::denormalize`](crate::vk_format::FormatExt::denormalize).
 pub fn encode_ktx2_image(image: &crate::surface::Image) -> crate::error::Result<Vec<u8>> {
     let first = &image.surfaces[0][0];
     let vk_format = first.format.denormalize(first.color_space);

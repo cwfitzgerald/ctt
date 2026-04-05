@@ -46,7 +46,7 @@ pub fn vk_format_to_dxgi(format: ktx2::Format, color_space: ColorSpace) -> Resul
     }
 }
 
-/// Encode an [`Image`] as a DDS file.
+/// Encode an [`Image`](crate::surface::Image) as a DDS file.
 pub fn encode_dds_image(image: &crate::surface::Image) -> Result<Vec<u8>> {
     let first = &image.surfaces[0][0];
     let dxgi_format = vk_format_to_dxgi(first.format, first.color_space)?;
