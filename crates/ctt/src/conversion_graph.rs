@@ -761,15 +761,30 @@ pub fn build_default_graph() -> ConversionGraph {
             F::R32_SFLOAT,
         ),
         (
-            &[F::R8G8_UNORM, F::R16G16_UNORM, F::R16G16_SFLOAT, F::R32G32_SFLOAT],
+            &[
+                F::R8G8_UNORM,
+                F::R16G16_UNORM,
+                F::R16G16_SFLOAT,
+                F::R32G32_SFLOAT,
+            ],
             F::R32G32_SFLOAT,
         ),
         (
-            &[F::R8G8B8_UNORM, F::R16G16B16_UNORM, F::R16G16B16_SFLOAT, F::R32G32B32_SFLOAT],
+            &[
+                F::R8G8B8_UNORM,
+                F::R16G16B16_UNORM,
+                F::R16G16B16_SFLOAT,
+                F::R32G32B32_SFLOAT,
+            ],
             F::R32G32B32_SFLOAT,
         ),
         (
-            &[F::R8G8B8A8_UNORM, F::R16G16B16A16_UNORM, F::R16G16B16A16_SFLOAT, F::R32G32B32A32_SFLOAT],
+            &[
+                F::R8G8B8A8_UNORM,
+                F::R16G16B16A16_UNORM,
+                F::R16G16B16A16_SFLOAT,
+                F::R32G32B32A32_SFLOAT,
+            ],
             F::R32G32B32A32_SFLOAT,
         ),
     ];
@@ -790,8 +805,9 @@ pub fn build_default_graph() -> ConversionGraph {
                 {
                     let from = FormatState::new(src_fmt, ColorSpace::Srgb, alpha);
                     let to = FormatState::new(f32_fmt, ColorSpace::Linear, alpha);
-                    let converter: SurfaceConverter =
-                        Arc::new(move |surface: &Surface| srgb_to_linear(surface, f32_fmt, has_alpha));
+                    let converter: SurfaceConverter = Arc::new(move |surface: &Surface| {
+                        srgb_to_linear(surface, f32_fmt, has_alpha)
+                    });
                     graph.add_exact_edge(
                         from,
                         ExactEdge {
@@ -807,8 +823,9 @@ pub fn build_default_graph() -> ConversionGraph {
                     let cost = conversion_cost(f32_fmt, src_fmt).saturating_sub(5);
                     let from = FormatState::new(f32_fmt, ColorSpace::Linear, alpha);
                     let to = FormatState::new(src_fmt, ColorSpace::Srgb, alpha);
-                    let converter: SurfaceConverter =
-                        Arc::new(move |surface: &Surface| linear_to_srgb(surface, src_fmt, has_alpha));
+                    let converter: SurfaceConverter = Arc::new(move |surface: &Surface| {
+                        linear_to_srgb(surface, src_fmt, has_alpha)
+                    });
                     graph.add_exact_edge(
                         from,
                         ExactEdge {
@@ -1143,13 +1160,11 @@ mod tests {
             alpha: AlphaMode::Straight,
         };
 
-        let linear =
-            srgb_to_linear(&surface, ktx2::Format::R32G32B32A32_SFLOAT, true).unwrap();
+        let linear = srgb_to_linear(&surface, ktx2::Format::R32G32B32A32_SFLOAT, true).unwrap();
         assert_eq!(linear.color_space, ColorSpace::Linear);
         assert_eq!(linear.format, ktx2::Format::R32G32B32A32_SFLOAT);
 
-        let back =
-            linear_to_srgb(&linear, ktx2::Format::R16G16B16A16_SFLOAT, true).unwrap();
+        let back = linear_to_srgb(&linear, ktx2::Format::R16G16B16A16_SFLOAT, true).unwrap();
         assert_eq!(back.color_space, ColorSpace::Srgb);
         assert_eq!(back.format, ktx2::Format::R16G16B16A16_SFLOAT);
 

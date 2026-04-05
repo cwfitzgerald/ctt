@@ -13,9 +13,9 @@ use ctt::error::Error;
 use ctt::pipeline::{AssemblyNode, InputBranch, InputNode, OutputNode, Pipeline, PipelineOutput};
 use ctt::surface::{ColorSpace, Image, Surface};
 use ctt::transforms::compress::CompressTransform;
+use ctt::transforms::output_state::OutputStateTransform;
 use ctt::transforms::swizzle::SwizzleTransform;
 use ctt::transforms::swizzle::{Swizzle, SwizzleChannel};
-use ctt::transforms::output_state::OutputStateTransform;
 use ctt::vk_format::FormatExt;
 
 use args::{AlphaModeArg, Args, ColorSpaceArg, ContainerArg, CubemapLayoutArg, QualityArg};

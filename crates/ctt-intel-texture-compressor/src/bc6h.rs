@@ -50,7 +50,11 @@ pub fn compress_blocks(settings: &EncodeSettings, surface: &RgbaF16Surface) -> V
 ///
 /// Panics if `blocks.len()` does not equal [`calc_output_size`] for the given
 /// surface dimensions.
-pub fn compress_blocks_into(settings: &EncodeSettings, surface: &RgbaF16Surface, blocks: &mut [u8]) {
+pub fn compress_blocks_into(
+    settings: &EncodeSettings,
+    surface: &RgbaF16Surface,
+    blocks: &mut [u8],
+) {
     assert_eq!(
         blocks.len(),
         calc_output_size(surface.width, surface.height)
