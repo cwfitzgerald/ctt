@@ -1,3 +1,5 @@
+use std::fmt;
+
 use crate::alpha::AlphaMode;
 use crate::vk_format::FormatExt;
 
@@ -7,6 +9,15 @@ pub enum ColorSpace {
     #[default]
     Srgb,
     Linear,
+}
+
+impl fmt::Display for ColorSpace {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Srgb => f.write_str("srgb"),
+            Self::Linear => f.write_str("linear"),
+        }
+    }
 }
 
 /// A single 2D image surface — either raw pixels or compressed blocks.

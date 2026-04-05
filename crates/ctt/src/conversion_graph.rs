@@ -2,11 +2,98 @@ use std::cmp::Reverse;
 use std::collections::{BinaryHeap, HashMap};
 use std::sync::Arc;
 
+use std::fmt;
+
 use crate::alpha::AlphaMode;
 use crate::constraint::FormatConstraint;
 use crate::error::Result;
 use crate::surface::{ColorSpace, Surface};
 use crate::vk_format::{ChannelKind, FormatExt};
+
+/// The reason a format conversion is lossy.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LossyReason {
+    /// Channel count reduced (e.g. RGBA → R).
+    ChannelCountReduction { from: usize, to: usize },
+    /// Channel kind conversion loses precision (e.g. f32 → u16).
+    ChannelKindPrecisionLoss { from: ChannelKind, to: ChannelKind },
+    /// Color space changed at the same channel precision (e.g. u8 sRGB → u8 linear).
+    ColorSpaceChangeAtSamePrecision {
+        from_cs: ColorSpace,
+        to_cs: ColorSpace,
+        kind: ChannelKind,
+    },
+}
+
+impl fmt::Display for LossyReason {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::ChannelCountReduction { from, to } => {
+                write!(f, "channel count reduced from {from} to {to}")
+            }
+            Self::ChannelKindPrecisionLoss { from, to } => {
+                write!(f, "{from:?} to {to:?} loses precision")
+            }
+            Self::ColorSpaceChangeAtSamePrecision {
+                from_cs,
+                to_cs,
+                kind,
+            } => {
+                write!(f, "{from_cs} to {to_cs} at {kind:?} precision is lossy")
+            }
+        }
+    }
+}
+
+/// Check whether a conversion from `from` to `to` is lossless.
+///
+/// Returns `Ok(())` if lossless, or `Err(LossyReason)` explaining why it is lossy.
+pub fn check_lossless(from: FormatState, to: FormatState) -> std::result::Result<(), LossyReason> {
+    let from_cc = from.format.channel_count().unwrap_or(0);
+    let to_cc = to.format.channel_count().unwrap_or(0);
+
+    // Rule 1: channel count reduction.
+    if to_cc < from_cc {
+        return Err(LossyReason::ChannelCountReduction {
+            from: from_cc,
+            to: to_cc,
+        });
+    }
+
+    let from_ck = from.format.channel_kind();
+    let to_ck = to.format.channel_kind();
+
+    if let (Some(fk), Some(tk)) = (from_ck, to_ck) {
+        // Rule 2: channel kind precision loss.
+        if !is_lossless_kind_conversion(fk, tk) {
+            return Err(LossyReason::ChannelKindPrecisionLoss { from: fk, to: tk });
+        }
+
+        // Rule 3: color space change at same precision.
+        if from.color_space != to.color_space && fk == tk {
+            return Err(LossyReason::ColorSpaceChangeAtSamePrecision {
+                from_cs: from.color_space,
+                to_cs: to.color_space,
+                kind: fk,
+            });
+        }
+    }
+
+    Ok(())
+}
+
+/// Returns `true` if the channel kind conversion preserves all values.
+fn is_lossless_kind_conversion(from: ChannelKind, to: ChannelKind) -> bool {
+    use ChannelKind::*;
+    matches!(
+        (from, to),
+        (U8, U8 | U16 | U32 | F16 | F32)
+            | (U16, U16 | U32 | F32)
+            | (F16, F16 | F32)
+            | (F32, F32)
+            | (U32, U32)
+    )
+}
 
 /// Type alias for a surface conversion function.
 pub type SurfaceConverter = Arc<dyn Fn(&Surface) -> Result<Surface> + Send + Sync>;
@@ -17,6 +104,16 @@ pub struct FormatState {
     pub format: ktx2::Format,
     pub color_space: ColorSpace,
     pub alpha: AlphaMode,
+}
+
+impl fmt::Display for FormatState {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "{:?} ({}, {})",
+            self.format, self.color_space, self.alpha
+        )
+    }
 }
 
 impl FormatState {
@@ -605,5 +702,127 @@ mod tests {
 
         let back = convert_surface(&u16_surface, ktx2::Format::R8G8B8A8_UNORM).unwrap();
         assert_eq!(back.data, surface.data);
+    }
+
+    // ---- check_lossless tests ----
+
+    fn state(format: ktx2::Format, cs: ColorSpace) -> FormatState {
+        FormatState::new(format, cs, AlphaMode::Straight)
+    }
+
+    #[test]
+    fn lossless_u8_to_f32() {
+        assert!(
+            check_lossless(
+                state(ktx2::Format::R8G8B8A8_UNORM, ColorSpace::Linear),
+                state(ktx2::Format::R32G32B32A32_SFLOAT, ColorSpace::Linear),
+            )
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn lossy_u16_to_f16() {
+        let result = check_lossless(
+            state(ktx2::Format::R16G16B16A16_UNORM, ColorSpace::Linear),
+            state(ktx2::Format::R16G16B16A16_SFLOAT, ColorSpace::Linear),
+        );
+        assert!(matches!(
+            result,
+            Err(LossyReason::ChannelKindPrecisionLoss { .. })
+        ));
+    }
+
+    #[test]
+    fn lossy_u32_to_f32() {
+        let result = check_lossless(
+            state(ktx2::Format::R32_UINT, ColorSpace::Linear),
+            state(ktx2::Format::R32_SFLOAT, ColorSpace::Linear),
+        );
+        assert!(matches!(
+            result,
+            Err(LossyReason::ChannelKindPrecisionLoss { .. })
+        ));
+    }
+
+    #[test]
+    fn lossy_f32_to_f16() {
+        let result = check_lossless(
+            state(ktx2::Format::R32G32B32A32_SFLOAT, ColorSpace::Linear),
+            state(ktx2::Format::R16G16B16A16_SFLOAT, ColorSpace::Linear),
+        );
+        assert!(matches!(
+            result,
+            Err(LossyReason::ChannelKindPrecisionLoss { .. })
+        ));
+    }
+
+    #[test]
+    fn lossy_channel_count_reduction() {
+        let result = check_lossless(
+            state(ktx2::Format::R8G8B8A8_UNORM, ColorSpace::Linear),
+            state(ktx2::Format::R8_UNORM, ColorSpace::Linear),
+        );
+        assert!(matches!(
+            result,
+            Err(LossyReason::ChannelCountReduction { from: 4, to: 1 })
+        ));
+    }
+
+    #[test]
+    fn lossless_channel_count_expansion() {
+        assert!(
+            check_lossless(
+                state(ktx2::Format::R8_UNORM, ColorSpace::Linear),
+                state(ktx2::Format::R8G8B8A8_UNORM, ColorSpace::Linear),
+            )
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn lossy_srgb_to_linear_same_precision() {
+        let result = check_lossless(
+            state(ktx2::Format::R8G8B8A8_UNORM, ColorSpace::Srgb),
+            state(ktx2::Format::R8G8B8A8_UNORM, ColorSpace::Linear),
+        );
+        assert!(matches!(
+            result,
+            Err(LossyReason::ColorSpaceChangeAtSamePrecision { .. })
+        ));
+    }
+
+    #[test]
+    fn lossless_srgb_to_linear_higher_precision() {
+        assert!(
+            check_lossless(
+                state(ktx2::Format::R8G8B8A8_UNORM, ColorSpace::Srgb),
+                state(ktx2::Format::R32G32B32A32_SFLOAT, ColorSpace::Linear),
+            )
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn lossy_linear_to_srgb_same_precision() {
+        let result = check_lossless(
+            state(ktx2::Format::R32G32B32A32_SFLOAT, ColorSpace::Linear),
+            state(ktx2::Format::R32G32B32A32_SFLOAT, ColorSpace::Srgb),
+        );
+        assert!(matches!(
+            result,
+            Err(LossyReason::ColorSpaceChangeAtSamePrecision { .. })
+        ));
+    }
+
+    #[test]
+    fn lossless_identity() {
+        assert!(
+            check_lossless(
+                state(ktx2::Format::R8G8B8A8_UNORM, ColorSpace::Linear),
+                state(ktx2::Format::R8G8B8A8_UNORM, ColorSpace::Linear),
+            )
+            .is_ok()
+        );
     }
 }

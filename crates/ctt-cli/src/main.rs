@@ -125,6 +125,7 @@ fn run(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
         assembly,
         transforms,
         output: output_node,
+        allow_lossy_intermediates: args.allow_lossy_intermediates,
     };
 
     // Resolve and execute.

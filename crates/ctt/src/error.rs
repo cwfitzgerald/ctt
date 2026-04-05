@@ -28,4 +28,14 @@ pub enum Error {
 
     #[error("unsupported pixel format conversion: {0}")]
     UnsupportedConversion(String),
+
+    #[error(
+        "lossy auto-conversion from {from} to {to} required by transform '{transform}': {reason}"
+    )]
+    LossyConversion {
+        from: String,
+        to: String,
+        transform: String,
+        reason: String,
+    },
 }

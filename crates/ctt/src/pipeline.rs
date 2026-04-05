@@ -1,4 +1,4 @@
-use crate::conversion_graph::{ConversionGraph, FormatState, build_default_graph};
+use crate::conversion_graph::{ConversionGraph, FormatState, build_default_graph, check_lossless};
 use crate::error::{Error, Result};
 use crate::surface::Image;
 use crate::transform_node::Transform;
@@ -42,6 +42,10 @@ pub struct Pipeline {
     pub assembly: AssemblyNode,
     pub transforms: Vec<Box<dyn Transform>>,
     pub output: OutputNode,
+    /// If `false` (the default), auto-inserted format conversions that lose
+    /// precision will produce errors during [`Pipeline::resolve`]. Set to `true`
+    /// to suppress these errors.
+    pub allow_lossy_intermediates: bool,
 }
 
 /// A fully resolved pipeline ready for execution.
@@ -81,12 +85,13 @@ impl Pipeline {
         self,
         graph: &ConversionGraph,
     ) -> std::result::Result<ResolvedPipeline, Vec<Error>> {
+        let allow_lossy = self.allow_lossy_intermediates;
         let mut errors = Vec::new();
 
         // Resolve each input branch.
         let mut resolved_inputs = Vec::with_capacity(self.inputs.len());
         for (branch_idx, branch) in self.inputs.into_iter().enumerate() {
-            match resolve_branch(branch, graph, &format!("input[{branch_idx}]")) {
+            match resolve_branch(branch, graph, &format!("input[{branch_idx}]"), allow_lossy) {
                 Ok(resolved) => resolved_inputs.push(resolved),
                 Err(mut errs) => errors.append(&mut errs),
             }
@@ -105,9 +110,8 @@ impl Pipeline {
                 let state = branch_output_state(branch);
                 if state != first_state {
                     errors.push(Error::UnsupportedFormat(format!(
-                        "input[{i}] produces {:?} but input[0] produces {:?}; \
+                        "input[{i}] produces {state} but input[0] produces {first_state}; \
                          all branches must produce the same format for assembly",
-                        state, first_state
                     )));
                 }
             }
@@ -120,6 +124,7 @@ impl Pipeline {
             post_assembly_state,
             graph,
             "post-assembly",
+            allow_lossy,
         ) {
             Ok((transforms, _final_state)) => transforms,
             Err(mut errs) => {
@@ -209,11 +214,12 @@ fn resolve_branch(
     branch: InputBranch,
     graph: &ConversionGraph,
     label: &str,
+    allow_lossy: bool,
 ) -> std::result::Result<ResolvedBranch, Vec<Error>> {
     let input_state = input_format_state(&branch.input);
 
     let (transforms, _final_state) =
-        resolve_transform_chain(branch.transforms, input_state, graph, label)?;
+        resolve_transform_chain(branch.transforms, input_state, graph, label, allow_lossy)?;
 
     Ok(ResolvedBranch {
         input: branch.input,
@@ -232,6 +238,7 @@ fn resolve_transform_chain(
     initial_state: FormatState,
     graph: &ConversionGraph,
     label: &str,
+    allow_lossy: bool,
 ) -> ResolveResult {
     let mut errors = Vec::new();
     let mut resolved: Vec<Box<dyn Transform>> = Vec::new();
@@ -247,9 +254,23 @@ fn resolve_transform_chain(
                     // Insert conversion transforms for each hop.
                     let mut hop_from = current_state;
                     for hop_to in &path {
+                        log::debug!(
+                            "{label}: auto-convert {hop_from} -> {hop_to} for '{}'",
+                            transform.name(),
+                        );
                         let converter = graph.get_converter(hop_from, *hop_to).cloned();
                         match converter {
                             Some(conv) => {
+                                if !allow_lossy {
+                                    if let Err(reason) = check_lossless(hop_from, *hop_to) {
+                                        errors.push(Error::LossyConversion {
+                                            from: hop_from.to_string(),
+                                            to: hop_to.to_string(),
+                                            transform: transform.name().to_string(),
+                                            reason: reason.to_string(),
+                                        });
+                                    }
+                                }
                                 resolved.push(Box::new(FormatConvertTransform::new(
                                     hop_to.format,
                                     hop_to.color_space,
@@ -259,8 +280,7 @@ fn resolve_transform_chain(
                             }
                             None => {
                                 errors.push(Error::UnsupportedConversion(format!(
-                                    "{label}: no converter for {:?} -> {:?}",
-                                    hop_from, hop_to
+                                    "{label}: no converter for {hop_from} -> {hop_to}",
                                 )));
                             }
                         }
@@ -270,8 +290,7 @@ fn resolve_transform_chain(
                 }
                 None => {
                     errors.push(Error::UnsupportedConversion(format!(
-                        "{label}: no conversion path from {:?} to satisfy constraint of '{}'",
-                        current_state,
+                        "{label}: no conversion path from {current_state} to satisfy constraint of '{}'",
                         transform.name()
                     )));
                 }
@@ -285,6 +304,7 @@ fn resolve_transform_chain(
             current_state.alpha,
         );
         current_state = FormatState::new(fmt, cs, alpha);
+        log::debug!("{label}: '{}' -> {current_state}", transform.name());
 
         // Add the original transform after any conversions.
         resolved.push(transform);
@@ -293,6 +313,8 @@ fn resolve_transform_chain(
     if !errors.is_empty() {
         return Err(errors);
     }
+
+    log::debug!("{label}: resolved {n} transform(s)", n = resolved.len());
 
     Ok((resolved, current_state))
 }
@@ -366,6 +388,7 @@ mod tests {
             assembly: AssemblyNode::Identity,
             transforms: Vec::new(),
             output: OutputNode::Raw,
+            allow_lossy_intermediates: false,
         };
 
         let resolved = pipeline.resolve().unwrap();
@@ -386,6 +409,7 @@ mod tests {
             assembly: AssemblyNode::Identity,
             transforms: Vec::new(),
             output: OutputNode::Raw,
+            allow_lossy_intermediates: false,
         };
 
         let result = pipeline.resolve();
