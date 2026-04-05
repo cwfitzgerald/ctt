@@ -2,16 +2,19 @@ mod args;
 
 use std::fs;
 use std::process::ExitCode;
+use std::sync::Arc;
 
 use clap::Parser;
 
-use ctt::config::{CompressConfig, OutputFormat};
+use ctt::cubemap::{CubemapInput, split_cubemap};
 use ctt::encoder::{EncoderRegistry, Quality};
 use ctt::error::Error;
-use ctt::format::{ChannelType, ColorSpace, CompressedFormat, PixelComponents, PixelFormat};
-use ctt::image::{ImageLayout, RawImage};
-use ctt::transform::cubemap::{CubemapInput, split_cubemap};
-use ctt::transform::swizzle::{Swizzle, SwizzleChannel};
+use ctt::pipeline::{AssemblyNode, InputBranch, InputNode, OutputNode, Pipeline, PipelineOutput};
+use ctt::surface::{ColorSpace, Image, Surface};
+use ctt::transforms::compress::CompressTransform;
+use ctt::transforms::swizzle::SwizzleTransform;
+use ctt::transforms::swizzle::{Swizzle, SwizzleChannel};
+use ctt::vk_format::FormatExt;
 
 use args::{Args, ColorSpaceArg, ContainerArg, CubemapLayoutArg, QualityArg};
 
@@ -46,7 +49,7 @@ fn setup_logger(verbose: u8) {
 }
 
 fn run(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
-    let registry = EncoderRegistry::default_registry();
+    let registry = Arc::new(EncoderRegistry::default_registry());
 
     if args.list_encoders {
         print_encoder_table(&registry);
@@ -61,47 +64,82 @@ fn run(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
         ColorSpaceArg::Linear => ColorSpace::Linear,
     };
 
-    let (encoder_name, format) = parse_format(format_str, &registry)?;
-    let output_format = match args.container {
-        ContainerArg::Dds => OutputFormat::Dds,
-        ContainerArg::Ktx2 => OutputFormat::Ktx2,
+    let (encoder_name, target_format) = parse_format(format_str, &registry)?;
+    let output_node = match args.container {
+        ContainerArg::Dds => OutputNode::Dds,
+        ContainerArg::Ktx2 => OutputNode::Ktx2,
     };
     let swizzle = args.swizzle.as_deref().map(parse_swizzle).transpose()?;
     let quality = map_quality(args.quality);
 
-    let encoder_settings = build_encoder_settings(args);
+    log::info!(
+        "Format: {target_format:?}, container: {output_node:?}, quality: {quality:?}, color space: {color_space:?}",
+    );
 
-    let config = CompressConfig {
-        format,
-        output_format,
-        swizzle,
-        color_space,
+    // Load input images.
+    log::info!("Loading {} input image(s)", args.input.len());
+    let surfaces = load_images(&args.input, color_space)?;
+
+    // Build input branches and assembly.
+    let (inputs, assembly) = if args.cubemap {
+        log::info!("Cubemap mode, layout: {:?}", args.cubemap_layout);
+        build_cubemap_inputs(surfaces, args.cubemap_layout)?
+    } else {
+        let inputs: Vec<InputBranch> = surfaces
+            .into_iter()
+            .map(|surface| InputBranch {
+                input: InputNode::Raw(Image {
+                    surfaces: vec![vec![surface]],
+                    is_cubemap: false,
+                }),
+                transforms: Vec::new(),
+            })
+            .collect();
+
+        let assembly = if inputs.len() == 1 {
+            AssemblyNode::Identity
+        } else {
+            AssemblyNode::Array
+        };
+        (inputs, assembly)
+    };
+
+    // Build post-assembly transforms.
+    let mut transforms: Vec<Box<dyn ctt::transform_node::Transform>> = Vec::new();
+
+    if let Some(ref swizzle) = swizzle {
+        transforms.push(Box::new(SwizzleTransform::new(*swizzle)));
+    }
+
+    let encoder_settings = build_encoder_settings(args);
+    transforms.push(Box::new(CompressTransform::new(
+        target_format,
         quality,
         encoder_name,
         encoder_settings,
+        Arc::clone(&registry),
+    )));
+
+    let pipeline = Pipeline {
+        inputs,
+        assembly,
+        transforms,
+        output: output_node,
+        allow_lossy_intermediates: args.allow_lossy_intermediates,
     };
 
-    log::info!(
-        "Format: {format}, container: {output_format:?}, quality: {quality:?}, color space: {color_space:?}",
-    );
+    // Resolve and execute.
+    let resolved = pipeline.resolve().map_err(|errors| {
+        let messages: Vec<String> = errors.iter().map(|e| e.to_string()).collect();
+        Error::UnsupportedFormat(messages.join("; "))
+    })?;
 
-    // Load input images in their native format.
-    log::info!("Loading {} input image(s)", args.input.len());
-    let images = load_images(&args.input, color_space)?;
-
-    // Build layout.
-    let layout = if args.cubemap {
-        log::info!("Cubemap mode, layout: {:?}", args.cubemap_layout);
-        build_cubemap_layout(images, args.cubemap_layout)?
-    } else {
-        ImageLayout {
-            layers: images.into_iter().map(|img| vec![img]).collect(),
-            is_cubemap: false,
+    let output_bytes = match resolved.execute()? {
+        PipelineOutput::Encoded(bytes) => bytes,
+        PipelineOutput::Raw(_) => {
+            return Err(Error::OutputEncoding("unexpected raw output".into()).into());
         }
     };
-
-    // Run pipeline.
-    let output_bytes = ctt::pipeline::run(&config, layout)?;
 
     // Write output.
     fs::write(output, &output_bytes)?;
@@ -129,15 +167,51 @@ fn print_encoder_table(registry: &EncoderRegistry) {
     for (i, encoder) in encoders.iter().enumerate() {
         let mut formats = Vec::new();
         let mut has_astc = false;
-        for f in encoder.supported_formats() {
-            match f {
-                CompressedFormat::Astc { .. } => {
+        for &f in encoder.supported_formats() {
+            if f.block_size().is_some() && f.is_compressed() {
+                // Check if it's an ASTC format by block size > 4x4 or by name pattern
+                let (bw, bh) = f.block_size().unwrap();
+                let is_astc = matches!(
+                    (bw, bh),
+                    (4, 4)
+                        | (5, 4)
+                        | (5, 5)
+                        | (6, 5)
+                        | (6, 6)
+                        | (8, 5)
+                        | (8, 6)
+                        | (8, 8)
+                        | (10, 5)
+                        | (10, 6)
+                        | (10, 8)
+                        | (10, 10)
+                        | (12, 10)
+                        | (12, 12)
+                ) && !matches!(
+                    f,
+                    ctt::ktx2::Format::BC1_RGBA_UNORM_BLOCK
+                        | ctt::ktx2::Format::BC2_UNORM_BLOCK
+                        | ctt::ktx2::Format::BC3_UNORM_BLOCK
+                        | ctt::ktx2::Format::BC4_UNORM_BLOCK
+                        | ctt::ktx2::Format::BC4_SNORM_BLOCK
+                        | ctt::ktx2::Format::BC5_UNORM_BLOCK
+                        | ctt::ktx2::Format::BC5_SNORM_BLOCK
+                        | ctt::ktx2::Format::BC6H_UFLOAT_BLOCK
+                        | ctt::ktx2::Format::BC6H_SFLOAT_BLOCK
+                        | ctt::ktx2::Format::BC7_UNORM_BLOCK
+                        | ctt::ktx2::Format::ETC2_R8G8B8_UNORM_BLOCK
+                );
+
+                if is_astc {
                     if !has_astc {
                         formats.push("astc".to_string());
                         has_astc = true;
                     }
+                } else {
+                    formats.push(format_short_name(f));
                 }
-                other => formats.push(format!("{other:?}").to_lowercase()),
+            } else {
+                formats.push(format_short_name(f));
             }
         }
         println!(
@@ -154,99 +228,124 @@ fn print_encoder_table(registry: &EncoderRegistry) {
     println!("ASTC formats use astc_WxH (e.g. astc_4x4, astc_8x8, astc_12x12).");
 }
 
+/// Short display name for a compressed format.
+fn format_short_name(format: ctt::ktx2::Format) -> String {
+    use ctt::ktx2::Format as F;
+    match format {
+        F::BC1_RGBA_UNORM_BLOCK | F::BC1_RGB_UNORM_BLOCK => "bc1".into(),
+        F::BC2_UNORM_BLOCK => "bc2".into(),
+        F::BC3_UNORM_BLOCK => "bc3".into(),
+        F::BC4_UNORM_BLOCK => "bc4".into(),
+        F::BC4_SNORM_BLOCK => "bc4s".into(),
+        F::BC5_UNORM_BLOCK => "bc5".into(),
+        F::BC5_SNORM_BLOCK => "bc5s".into(),
+        F::BC6H_UFLOAT_BLOCK => "bc6h".into(),
+        F::BC6H_SFLOAT_BLOCK => "bc6hsf".into(),
+        F::BC7_UNORM_BLOCK => "bc7".into(),
+        F::ETC2_R8G8B8_UNORM_BLOCK => "etc1".into(),
+        _ => format!("{format:?}").to_lowercase(),
+    }
+}
+
 fn load_images(
     paths: &[std::path::PathBuf],
     color_space: ColorSpace,
-) -> Result<Vec<RawImage>, Box<dyn std::error::Error>> {
-    let mut images = Vec::with_capacity(paths.len());
+) -> Result<Vec<Surface>, Box<dyn std::error::Error>> {
+    let mut surfaces = Vec::with_capacity(paths.len());
     for path in paths {
         let img = image::open(path)?;
 
-        let raw = match img.color() {
+        let surface = match img.color() {
             image::ColorType::Rgb32F | image::ColorType::Rgba32F => {
                 let rgba = img.to_rgba32f();
                 let (width, height) = rgba.dimensions();
                 let stride = width * 4 * 4; // 4 channels * 4 bytes
-                RawImage {
+                Surface {
                     data: bytemuck::cast_slice(rgba.as_raw()).to_vec(),
                     width,
                     height,
                     stride,
-                    pixel_format: PixelFormat {
-                        components: PixelComponents::Rgba,
-                        channel_type: ChannelType::F32,
-                        color_space,
-                    },
+                    format: ctt::ktx2::Format::R32G32B32A32_SFLOAT,
+                    color_space,
+                    alpha: ctt::alpha::AlphaMode::Straight,
                 }
             }
             image::ColorType::Rgb16 | image::ColorType::Rgba16 => {
                 let rgba = img.to_rgba16();
                 let (width, height) = rgba.dimensions();
                 let stride = width * 4 * 2; // 4 channels * 2 bytes
-                RawImage {
+                Surface {
                     data: bytemuck::cast_slice(rgba.as_raw()).to_vec(),
                     width,
                     height,
                     stride,
-                    pixel_format: PixelFormat {
-                        components: PixelComponents::Rgba,
-                        channel_type: ChannelType::U16,
-                        color_space,
-                    },
+                    format: ctt::ktx2::Format::R16G16B16A16_UNORM,
+                    color_space,
+                    alpha: ctt::alpha::AlphaMode::Straight,
                 }
             }
             _ => {
                 let rgba = img.to_rgba8();
                 let (width, height) = rgba.dimensions();
                 let stride = width * 4;
-                RawImage {
+                Surface {
                     data: rgba.into_raw(),
                     width,
                     height,
                     stride,
-                    pixel_format: PixelFormat {
-                        components: PixelComponents::Rgba,
-                        channel_type: ChannelType::U8,
-                        color_space,
-                    },
+                    format: ctt::ktx2::Format::R8G8B8A8_UNORM,
+                    color_space,
+                    alpha: ctt::alpha::AlphaMode::Straight,
                 }
             }
         };
 
         log::debug!(
-            "Loaded {}: {}x{}, {}",
+            "Loaded {}: {}x{}, {:?}",
             path.display(),
-            raw.width,
-            raw.height,
-            raw.pixel_format
+            surface.width,
+            surface.height,
+            surface.format,
         );
-        images.push(raw);
+        surfaces.push(surface);
     }
-    Ok(images)
+    Ok(surfaces)
 }
 
-fn build_cubemap_layout(
-    images: Vec<RawImage>,
+/// Build cubemap input branches from loaded surfaces.
+fn build_cubemap_inputs(
+    surfaces: Vec<Surface>,
     layout_arg: CubemapLayoutArg,
-) -> Result<ImageLayout, Box<dyn std::error::Error>> {
-    let cubemap_input = if images.len() == 6 {
-        CubemapInput::SeparateFaces(images.try_into().map_err(|_| Error::CubemapFaceCount(0))?)
-    } else if images.len() == 1 {
-        let img = images.into_iter().next().unwrap();
+) -> Result<(Vec<InputBranch>, AssemblyNode), Box<dyn std::error::Error>> {
+    let cubemap_input = if surfaces.len() == 6 {
+        CubemapInput::SeparateFaces(Box::new(
+            surfaces
+                .try_into()
+                .map_err(|_| Error::CubemapFaceCount(0))?,
+        ))
+    } else if surfaces.len() == 1 {
+        let surface = surfaces.into_iter().next().unwrap();
         match layout_arg {
-            CubemapLayoutArg::Cross => CubemapInput::Cross(img),
-            CubemapLayoutArg::Strip => CubemapInput::Strip(img),
+            CubemapLayoutArg::Cross => CubemapInput::Cross(surface),
+            CubemapLayoutArg::Strip => CubemapInput::Strip(surface),
         }
     } else {
-        return Err(Error::CubemapFaceCount(images.len()).into());
+        return Err(Error::CubemapFaceCount(surfaces.len()).into());
     };
 
     let faces = split_cubemap(cubemap_input)?;
-    let layers = faces.into_iter().map(|face| vec![face]).collect();
-    Ok(ImageLayout {
-        layers,
-        is_cubemap: true,
-    })
+    let inputs: Vec<InputBranch> = faces
+        .into_iter()
+        .map(|face| InputBranch {
+            input: InputNode::Raw(Image {
+                surfaces: vec![vec![face]],
+                is_cubemap: false,
+            }),
+            transforms: Vec::new(),
+        })
+        .collect();
+
+    Ok((inputs, AssemblyNode::Cubemap))
 }
 
 fn map_quality(q: QualityArg) -> Quality {
@@ -270,11 +369,11 @@ fn build_encoder_settings(args: &Args) -> Option<Box<dyn ctt::encoder::EncoderSe
 
 /// Parse a format string, optionally with an encoder prefix (e.g., "intel_bc7", "bc7e_bc7").
 ///
-/// Returns `(optional_encoder_name, compressed_format)`.
+/// Returns `(optional_encoder_name, target_ktx2_format)`.
 fn parse_format(
     s: &str,
     registry: &EncoderRegistry,
-) -> Result<(Option<String>, CompressedFormat), Error> {
+) -> Result<(Option<String>, ctt::ktx2::Format), Error> {
     let lower = s.to_lowercase();
 
     // Derive encoder prefixes from the registry, sorted longest-first
@@ -301,19 +400,20 @@ fn parse_format(
     Ok((None, format))
 }
 
-fn parse_bare_format(lower: &str, original: &str) -> Result<CompressedFormat, Error> {
+fn parse_bare_format(lower: &str, original: &str) -> Result<ctt::ktx2::Format, Error> {
+    use ctt::ktx2::Format as F;
     match lower {
-        "bc1" => Ok(CompressedFormat::Bc1),
-        "bc2" => Ok(CompressedFormat::Bc2),
-        "bc3" => Ok(CompressedFormat::Bc3),
-        "bc4" => Ok(CompressedFormat::Bc4),
-        "bc4s" => Ok(CompressedFormat::Bc4s),
-        "bc5" => Ok(CompressedFormat::Bc5),
-        "bc5s" => Ok(CompressedFormat::Bc5s),
-        "bc6h" => Ok(CompressedFormat::Bc6h),
-        "bc6hsf" | "bc6h_sf" => Ok(CompressedFormat::Bc6hSf),
-        "bc7" => Ok(CompressedFormat::Bc7),
-        "etc1" => Ok(CompressedFormat::Etc1),
+        "bc1" => Ok(F::BC1_RGBA_UNORM_BLOCK),
+        "bc2" => Ok(F::BC2_UNORM_BLOCK),
+        "bc3" => Ok(F::BC3_UNORM_BLOCK),
+        "bc4" => Ok(F::BC4_UNORM_BLOCK),
+        "bc4s" => Ok(F::BC4_SNORM_BLOCK),
+        "bc5" => Ok(F::BC5_UNORM_BLOCK),
+        "bc5s" => Ok(F::BC5_SNORM_BLOCK),
+        "bc6h" => Ok(F::BC6H_UFLOAT_BLOCK),
+        "bc6hsf" | "bc6h_sf" => Ok(F::BC6H_SFLOAT_BLOCK),
+        "bc7" => Ok(F::BC7_UNORM_BLOCK),
+        "etc1" => Ok(F::ETC2_R8G8B8_UNORM_BLOCK),
         other => {
             if let Some(rest) = other.strip_prefix("astc_") {
                 let (w, h) = rest
@@ -325,15 +425,34 @@ fn parse_bare_format(lower: &str, original: &str) -> Result<CompressedFormat, Er
                 let block_height: u8 = h
                     .parse()
                     .map_err(|_| Error::UnsupportedFormat(original.into()))?;
-                Ok(CompressedFormat::Astc {
-                    block_width,
-                    block_height,
-                })
+                astc_format(block_width, block_height)
+                    .ok_or_else(|| Error::UnsupportedFormat(original.into()))
             } else {
                 Err(Error::UnsupportedFormat(original.into()))
             }
         }
     }
+}
+
+fn astc_format(block_width: u8, block_height: u8) -> Option<ctt::ktx2::Format> {
+    use ctt::ktx2::Format as F;
+    Some(match (block_width, block_height) {
+        (4, 4) => F::ASTC_4x4_UNORM_BLOCK,
+        (5, 4) => F::ASTC_5x4_UNORM_BLOCK,
+        (5, 5) => F::ASTC_5x5_UNORM_BLOCK,
+        (6, 5) => F::ASTC_6x5_UNORM_BLOCK,
+        (6, 6) => F::ASTC_6x6_UNORM_BLOCK,
+        (8, 5) => F::ASTC_8x5_UNORM_BLOCK,
+        (8, 6) => F::ASTC_8x6_UNORM_BLOCK,
+        (8, 8) => F::ASTC_8x8_UNORM_BLOCK,
+        (10, 5) => F::ASTC_10x5_UNORM_BLOCK,
+        (10, 6) => F::ASTC_10x6_UNORM_BLOCK,
+        (10, 8) => F::ASTC_10x8_UNORM_BLOCK,
+        (10, 10) => F::ASTC_10x10_UNORM_BLOCK,
+        (12, 10) => F::ASTC_12x10_UNORM_BLOCK,
+        (12, 12) => F::ASTC_12x12_UNORM_BLOCK,
+        _ => return None,
+    })
 }
 
 fn parse_swizzle(s: &str) -> Result<Swizzle, Error> {

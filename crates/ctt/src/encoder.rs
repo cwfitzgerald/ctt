@@ -1,8 +1,7 @@
 use std::any::Any;
 
 use crate::error::Result;
-use crate::format::{ColorSpace, CompressedFormat, PixelFormat};
-use crate::image::RawImage;
+use crate::surface::Surface;
 
 /// Universal quality preset all encoders understand.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
@@ -22,29 +21,29 @@ pub trait EncoderSettings: Any + Send + Sync {
     fn as_any(&self) -> &dyn Any;
 }
 
-/// An encoder backend that can compress raw images.
+/// An encoder backend that can compress pixel data into block-compressed formats.
 pub trait Encoder: Send + Sync {
     /// Short name used as prefix in format strings (e.g., "intel", "bc7e").
     fn name(&self) -> &str;
 
-    /// Formats this encoder supports.
-    fn supported_formats(&self) -> &[CompressedFormat];
+    /// Compressed formats this encoder supports (normalized, i.e. UNORM/UFLOAT variants).
+    fn supported_formats(&self) -> &[ktx2::Format];
 
-    /// What pixel format this encoder needs for a given compressed format.
-    fn required_input_format(
-        &self,
-        format: CompressedFormat,
-        color_space: ColorSpace,
-    ) -> PixelFormat;
+    /// What uncompressed format this encoder needs as input for a given compressed format.
+    ///
+    /// `format` is the normalized target format (e.g. `BC7_UNORM_BLOCK`).
+    fn required_input_format(&self, format: ktx2::Format) -> ktx2::Format;
 
     /// Compress a single image.
     ///
+    /// `surface` is the uncompressed input surface.
+    /// `format` may be the sRGB variant to indicate color space (call `.normalize()` to recover).
     /// `quality` is the universal quality level.
     /// `settings` is an optional encoder-specific settings object (downcast by impl).
     fn compress(
         &self,
-        image: &RawImage,
-        format: CompressedFormat,
+        surface: &Surface,
+        format: ktx2::Format,
         quality: Quality,
         settings: Option<&dyn EncoderSettings>,
     ) -> Result<Vec<u8>>;
@@ -85,7 +84,7 @@ impl EncoderRegistry {
     }
 
     /// Find best encoder for a format (first registered that supports it).
-    pub fn find(&self, format: CompressedFormat) -> Option<&dyn Encoder> {
+    pub fn find(&self, format: ktx2::Format) -> Option<&dyn Encoder> {
         self.encoders
             .iter()
             .find(|e| e.supported_formats().contains(&format))
@@ -93,7 +92,7 @@ impl EncoderRegistry {
     }
 
     /// Find encoder by name + format (for "intel_bc7", "bc7e_bc7" style).
-    pub fn find_by_name(&self, name: &str, format: CompressedFormat) -> Option<&dyn Encoder> {
+    pub fn find_by_name(&self, name: &str, format: ktx2::Format) -> Option<&dyn Encoder> {
         self.encoders
             .iter()
             .find(|e| e.name() == name && e.supported_formats().contains(&format))
@@ -110,7 +109,7 @@ impl EncoderRegistry {
         let mut formats = Vec::new();
         for encoder in &self.encoders {
             for &fmt in encoder.supported_formats() {
-                formats.push(format!("{}_{}", encoder.name(), fmt).to_lowercase());
+                formats.push(format!("{}_{:?}", encoder.name(), fmt).to_lowercase());
             }
         }
         formats
