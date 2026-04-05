@@ -14,14 +14,16 @@ pub struct Args {
     #[arg(short, long, required_unless_present = "list_encoders")]
     pub output: Option<PathBuf>,
 
-    /// Compression format. Bare (bc1, bc7) or prefixed with encoder (intel_bc7, bc7e_bc7).
+    /// Target format. Bare (bc1, bc7) or prefixed with encoder (intel_bc7, bc7e_bc7).
     /// ASTC formats use astc_WxH (e.g. astc_4x4, astc_8x8, astc_12x12).
-    #[arg(short, long, required_unless_present = "list_encoders")]
+    /// Uncompressed formats use WebGPU (rgba8unorm) or Vulkan (r8g8b8a8_unorm) names.
+    /// If omitted, the input format is preserved without compression.
+    #[arg(short, long)]
     pub format: Option<String>,
 
-    /// Output container format.
-    #[arg(short, long, default_value = "ktx2")]
-    pub container: ContainerArg,
+    /// Output container format. Inferred from the output file extension when omitted.
+    #[arg(short, long)]
+    pub container: Option<ContainerArg>,
 
     /// Treat input as a cubemap.
     #[arg(long)]
@@ -38,9 +40,21 @@ pub struct Args {
     #[arg(long)]
     pub swizzle: Option<String>,
 
-    /// Color space of the input. Used for selecting output color space and performing mipmap generation.
-    #[arg(long, default_value = "srgb")]
-    pub color_space: ColorSpaceArg,
+    /// Color space of the input image(s).
+    #[arg(long, visible_alias = "ic", default_value = "srgb")]
+    pub input_color_space: ColorSpaceArg,
+
+    /// Alpha mode of the input image(s).
+    #[arg(long, visible_alias = "ia", default_value = "straight")]
+    pub input_alpha: AlphaModeArg,
+
+    /// Desired color space of the output. If omitted, matches the input.
+    #[arg(long, visible_alias = "oc")]
+    pub output_color_space: Option<ColorSpaceArg>,
+
+    /// Desired alpha mode of the output. If omitted, matches the input.
+    #[arg(long, visible_alias = "oa")]
+    pub output_alpha: Option<AlphaModeArg>,
 
     /// Compression quality preset.
     #[arg(long, default_value = "basic")]
@@ -83,6 +97,13 @@ pub enum CubemapLayoutArg {
 pub enum ColorSpaceArg {
     Srgb,
     Linear,
+}
+
+#[derive(Debug, Clone, Copy, clap::ValueEnum)]
+pub enum AlphaModeArg {
+    Straight,
+    Premultiplied,
+    Opaque,
 }
 
 #[derive(Debug, Clone, Copy, clap::ValueEnum)]

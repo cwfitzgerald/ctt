@@ -1,4 +1,5 @@
 mod args;
+mod format;
 
 use std::fs;
 use std::process::ExitCode;
@@ -12,11 +13,13 @@ use ctt::error::Error;
 use ctt::pipeline::{AssemblyNode, InputBranch, InputNode, OutputNode, Pipeline, PipelineOutput};
 use ctt::surface::{ColorSpace, Image, Surface};
 use ctt::transforms::compress::CompressTransform;
+use ctt::transforms::output_state::OutputStateTransform;
 use ctt::transforms::swizzle::SwizzleTransform;
 use ctt::transforms::swizzle::{Swizzle, SwizzleChannel};
 use ctt::vk_format::FormatExt;
 
-use args::{Args, ColorSpaceArg, ContainerArg, CubemapLayoutArg, QualityArg};
+use args::{AlphaModeArg, Args, ColorSpaceArg, ContainerArg, CubemapLayoutArg, QualityArg};
+use format::{ParsedFormat, format_short_name, parse_format};
 
 fn main() -> ExitCode {
     let args = Args::parse();
@@ -56,29 +59,44 @@ fn run(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
 
-    let format_str = args.format.as_deref().unwrap();
     let output = args.output.as_ref().unwrap();
 
-    let color_space = match args.color_space {
-        ColorSpaceArg::Srgb => ColorSpace::Srgb,
-        ColorSpaceArg::Linear => ColorSpace::Linear,
-    };
+    let input_color_space = map_color_space(args.input_color_space);
+    let input_alpha = map_alpha_mode(args.input_alpha);
+    let output_color_space = args.output_color_space.map(map_color_space);
+    let output_alpha = args.output_alpha.map(map_alpha_mode);
 
-    let (encoder_name, target_format) = parse_format(format_str, &registry)?;
-    let output_node = match args.container {
-        ContainerArg::Dds => OutputNode::Dds,
-        ContainerArg::Ktx2 => OutputNode::Ktx2,
-    };
+    let parsed_format = args
+        .format
+        .as_deref()
+        .map(|s| parse_format(s, &registry))
+        .transpose()?;
+
+    let output_node = resolve_container(args.container, output)?;
     let swizzle = args.swizzle.as_deref().map(parse_swizzle).transpose()?;
     let quality = map_quality(args.quality);
 
-    log::info!(
-        "Format: {target_format:?}, container: {output_node:?}, quality: {quality:?}, color space: {color_space:?}",
-    );
-
     // Load input images.
     log::info!("Loading {} input image(s)", args.input.len());
-    let surfaces = load_images(&args.input, color_space)?;
+    let surfaces = load_images(&args.input, input_color_space, input_alpha)?;
+
+    let display_format = match &parsed_format {
+        Some(ParsedFormat::Compressed { format, .. })
+        | Some(ParsedFormat::Uncompressed(format)) => *format,
+        None => surfaces[0].format,
+    };
+    match &parsed_format {
+        Some(ParsedFormat::Compressed { .. }) => {
+            log::info!(
+                "Format: {display_format:?}, container: {output_node:?}, quality: {quality:?}, color space: {input_color_space:?}, alpha: {input_alpha:?}",
+            );
+        }
+        _ => {
+            log::info!(
+                "Format: {display_format:?}, container: {output_node:?}, color space: {input_color_space:?}, alpha: {input_alpha:?}",
+            );
+        }
+    }
 
     // Build input branches and assembly.
     let (inputs, assembly) = if args.cubemap {
@@ -111,14 +129,48 @@ fn run(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
         transforms.push(Box::new(SwizzleTransform::new(*swizzle)));
     }
 
-    let encoder_settings = build_encoder_settings(args);
-    transforms.push(Box::new(CompressTransform::new(
-        target_format,
-        quality,
-        encoder_name,
-        encoder_settings,
-        Arc::clone(&registry),
-    )));
+    match parsed_format {
+        Some(ParsedFormat::Compressed {
+            encoder_name,
+            format: target_format,
+        }) => {
+            // Insert output state before compression so the data is in the
+            // desired color space / alpha mode when it reaches the encoder.
+            if output_color_space.is_some() || output_alpha.is_some() {
+                transforms.push(Box::new(OutputStateTransform::new(
+                    None,
+                    output_color_space,
+                    output_alpha,
+                )));
+            }
+            let encoder_settings = build_encoder_settings(args);
+            transforms.push(Box::new(CompressTransform::new(
+                target_format,
+                quality,
+                encoder_name,
+                encoder_settings,
+                Arc::clone(&registry),
+            )));
+        }
+        Some(ParsedFormat::Uncompressed(target_format)) => {
+            transforms.push(Box::new(OutputStateTransform::new(
+                Some(target_format),
+                output_color_space,
+                output_alpha,
+            )));
+        }
+        None => {
+            // Only insert an output state transform if the user requested a
+            // specific output color space or alpha mode.
+            if output_color_space.is_some() || output_alpha.is_some() {
+                transforms.push(Box::new(OutputStateTransform::new(
+                    None,
+                    output_color_space,
+                    output_alpha,
+                )));
+            }
+        }
+    }
 
     let pipeline = Pipeline {
         inputs,
@@ -149,6 +201,35 @@ fn run(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
         output_bytes.len()
     );
     Ok(())
+}
+
+/// Resolve the container format from the explicit flag or the output file extension.
+fn resolve_container(
+    explicit: Option<ContainerArg>,
+    output: &std::path::Path,
+) -> Result<OutputNode, Error> {
+    if let Some(container) = explicit {
+        return Ok(match container {
+            ContainerArg::Dds => OutputNode::Dds,
+            ContainerArg::Ktx2 => OutputNode::Ktx2,
+        });
+    }
+
+    let ext = output
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_lowercase());
+
+    match ext.as_deref() {
+        Some("dds") => Ok(OutputNode::Dds),
+        Some("ktx2") => Ok(OutputNode::Ktx2),
+        Some(other) => Err(Error::UnsupportedFormat(format!(
+            "cannot infer container from extension '.{other}'; use --container or a .dds/.ktx2 extension"
+        ))),
+        None => Err(Error::UnsupportedFormat(
+            "output path has no extension; use --container or a .dds/.ktx2 extension".into(),
+        )),
+    }
 }
 
 fn print_encoder_table(registry: &EncoderRegistry) {
@@ -226,30 +307,13 @@ fn print_encoder_table(registry: &EncoderRegistry) {
     println!("Use a bare format name (e.g. bc7) to use the highest-priority encoder,");
     println!("or prefix with the encoder name (e.g. intel_bc7) to choose explicitly.");
     println!("ASTC formats use astc_WxH (e.g. astc_4x4, astc_8x8, astc_12x12).");
-}
-
-/// Short display name for a compressed format.
-fn format_short_name(format: ctt::ktx2::Format) -> String {
-    use ctt::ktx2::Format as F;
-    match format {
-        F::BC1_RGBA_UNORM_BLOCK | F::BC1_RGB_UNORM_BLOCK => "bc1".into(),
-        F::BC2_UNORM_BLOCK => "bc2".into(),
-        F::BC3_UNORM_BLOCK => "bc3".into(),
-        F::BC4_UNORM_BLOCK => "bc4".into(),
-        F::BC4_SNORM_BLOCK => "bc4s".into(),
-        F::BC5_UNORM_BLOCK => "bc5".into(),
-        F::BC5_SNORM_BLOCK => "bc5s".into(),
-        F::BC6H_UFLOAT_BLOCK => "bc6h".into(),
-        F::BC6H_SFLOAT_BLOCK => "bc6hsf".into(),
-        F::BC7_UNORM_BLOCK => "bc7".into(),
-        F::ETC2_R8G8B8_UNORM_BLOCK => "etc1".into(),
-        _ => format!("{format:?}").to_lowercase(),
-    }
+    println!("Uncompressed formats use WebGPU (rgba8unorm) or Vulkan (r8g8b8a8_unorm) names.");
 }
 
 fn load_images(
     paths: &[std::path::PathBuf],
     color_space: ColorSpace,
+    alpha: ctt::alpha::AlphaMode,
 ) -> Result<Vec<Surface>, Box<dyn std::error::Error>> {
     let mut surfaces = Vec::with_capacity(paths.len());
     for path in paths {
@@ -267,7 +331,7 @@ fn load_images(
                     stride,
                     format: ctt::ktx2::Format::R32G32B32A32_SFLOAT,
                     color_space,
-                    alpha: ctt::alpha::AlphaMode::Straight,
+                    alpha,
                 }
             }
             image::ColorType::Rgb16 | image::ColorType::Rgba16 => {
@@ -281,7 +345,7 @@ fn load_images(
                     stride,
                     format: ctt::ktx2::Format::R16G16B16A16_UNORM,
                     color_space,
-                    alpha: ctt::alpha::AlphaMode::Straight,
+                    alpha,
                 }
             }
             _ => {
@@ -295,7 +359,7 @@ fn load_images(
                     stride,
                     format: ctt::ktx2::Format::R8G8B8A8_UNORM,
                     color_space,
-                    alpha: ctt::alpha::AlphaMode::Straight,
+                    alpha,
                 }
             }
         };
@@ -367,92 +431,19 @@ fn build_encoder_settings(args: &Args) -> Option<Box<dyn ctt::encoder::EncoderSe
     None
 }
 
-/// Parse a format string, optionally with an encoder prefix (e.g., "intel_bc7", "bc7e_bc7").
-///
-/// Returns `(optional_encoder_name, target_ktx2_format)`.
-fn parse_format(
-    s: &str,
-    registry: &EncoderRegistry,
-) -> Result<(Option<String>, ctt::ktx2::Format), Error> {
-    let lower = s.to_lowercase();
-
-    // Derive encoder prefixes from the registry, sorted longest-first
-    // so that longer names match before shorter ones (e.g. "astcenc" before "astc").
-    let mut prefixes: Vec<String> = registry
-        .encoders()
-        .iter()
-        .map(|e| e.name().to_string())
-        .collect();
-    prefixes.sort_by_key(|p| std::cmp::Reverse(p.len()));
-
-    for prefix in &prefixes {
-        if let Some(rest) = lower
-            .strip_prefix(prefix.as_str())
-            .and_then(|r| r.strip_prefix('_'))
-        {
-            let format = parse_bare_format(rest, s)?;
-            return Ok((Some(prefix.to_string()), format));
-        }
-    }
-
-    // No prefix — parse as bare format.
-    let format = parse_bare_format(&lower, s)?;
-    Ok((None, format))
-}
-
-fn parse_bare_format(lower: &str, original: &str) -> Result<ctt::ktx2::Format, Error> {
-    use ctt::ktx2::Format as F;
-    match lower {
-        "bc1" => Ok(F::BC1_RGBA_UNORM_BLOCK),
-        "bc2" => Ok(F::BC2_UNORM_BLOCK),
-        "bc3" => Ok(F::BC3_UNORM_BLOCK),
-        "bc4" => Ok(F::BC4_UNORM_BLOCK),
-        "bc4s" => Ok(F::BC4_SNORM_BLOCK),
-        "bc5" => Ok(F::BC5_UNORM_BLOCK),
-        "bc5s" => Ok(F::BC5_SNORM_BLOCK),
-        "bc6h" => Ok(F::BC6H_UFLOAT_BLOCK),
-        "bc6hsf" | "bc6h_sf" => Ok(F::BC6H_SFLOAT_BLOCK),
-        "bc7" => Ok(F::BC7_UNORM_BLOCK),
-        "etc1" => Ok(F::ETC2_R8G8B8_UNORM_BLOCK),
-        other => {
-            if let Some(rest) = other.strip_prefix("astc_") {
-                let (w, h) = rest
-                    .split_once('x')
-                    .ok_or_else(|| Error::UnsupportedFormat(original.into()))?;
-                let block_width: u8 = w
-                    .parse()
-                    .map_err(|_| Error::UnsupportedFormat(original.into()))?;
-                let block_height: u8 = h
-                    .parse()
-                    .map_err(|_| Error::UnsupportedFormat(original.into()))?;
-                astc_format(block_width, block_height)
-                    .ok_or_else(|| Error::UnsupportedFormat(original.into()))
-            } else {
-                Err(Error::UnsupportedFormat(original.into()))
-            }
-        }
+fn map_color_space(cs: ColorSpaceArg) -> ColorSpace {
+    match cs {
+        ColorSpaceArg::Srgb => ColorSpace::Srgb,
+        ColorSpaceArg::Linear => ColorSpace::Linear,
     }
 }
 
-fn astc_format(block_width: u8, block_height: u8) -> Option<ctt::ktx2::Format> {
-    use ctt::ktx2::Format as F;
-    Some(match (block_width, block_height) {
-        (4, 4) => F::ASTC_4x4_UNORM_BLOCK,
-        (5, 4) => F::ASTC_5x4_UNORM_BLOCK,
-        (5, 5) => F::ASTC_5x5_UNORM_BLOCK,
-        (6, 5) => F::ASTC_6x5_UNORM_BLOCK,
-        (6, 6) => F::ASTC_6x6_UNORM_BLOCK,
-        (8, 5) => F::ASTC_8x5_UNORM_BLOCK,
-        (8, 6) => F::ASTC_8x6_UNORM_BLOCK,
-        (8, 8) => F::ASTC_8x8_UNORM_BLOCK,
-        (10, 5) => F::ASTC_10x5_UNORM_BLOCK,
-        (10, 6) => F::ASTC_10x6_UNORM_BLOCK,
-        (10, 8) => F::ASTC_10x8_UNORM_BLOCK,
-        (10, 10) => F::ASTC_10x10_UNORM_BLOCK,
-        (12, 10) => F::ASTC_12x10_UNORM_BLOCK,
-        (12, 12) => F::ASTC_12x12_UNORM_BLOCK,
-        _ => return None,
-    })
+fn map_alpha_mode(a: AlphaModeArg) -> ctt::alpha::AlphaMode {
+    match a {
+        AlphaModeArg::Straight => ctt::alpha::AlphaMode::Straight,
+        AlphaModeArg::Premultiplied => ctt::alpha::AlphaMode::Premultiplied,
+        AlphaModeArg::Opaque => ctt::alpha::AlphaMode::Opaque,
+    }
 }
 
 fn parse_swizzle(s: &str) -> Result<Swizzle, Error> {

@@ -253,7 +253,7 @@ fn resolve_transform_chain(
                 Some(path) => {
                     // Insert conversion transforms for each hop.
                     let mut hop_from = current_state;
-                    for hop_to in &path {
+                    for (hop_idx, hop_to) in path.iter().enumerate() {
                         log::debug!(
                             "{label}: auto-convert {hop_from} -> {hop_to} for '{}'",
                             transform.name(),
@@ -261,10 +261,14 @@ fn resolve_transform_chain(
                         let converter = graph.get_converter(hop_from, *hop_to).cloned();
                         match converter {
                             Some(conv) => {
-                                if !allow_lossy {
-                                    if let Err(reason) = check_lossless(hop_from, *hop_to) {
+                                // Check for spurious precision loss in intermediate
+                                // hops. The final hop is the intentional target, so
+                                // it is exempt — the user chose that precision.
+                                let is_last = hop_idx == path.len() - 1;
+                                if !allow_lossy && !is_last {
+                                    if let Err(reason) = check_lossless(initial_state, *hop_to) {
                                         errors.push(Error::LossyConversion {
-                                            from: hop_from.to_string(),
+                                            from: initial_state.to_string(),
                                             to: hop_to.to_string(),
                                             transform: transform.name().to_string(),
                                             reason: reason.to_string(),
