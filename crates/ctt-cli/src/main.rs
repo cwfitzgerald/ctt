@@ -15,10 +15,10 @@ use ctt::surface::{ColorSpace, Image, Surface};
 use ctt::transforms::compress::CompressTransform;
 use ctt::transforms::swizzle::SwizzleTransform;
 use ctt::transforms::swizzle::{Swizzle, SwizzleChannel};
-use ctt::transforms::target_format::TargetFormatTransform;
+use ctt::transforms::output_state::OutputStateTransform;
 use ctt::vk_format::FormatExt;
 
-use args::{Args, ColorSpaceArg, ContainerArg, CubemapLayoutArg, QualityArg};
+use args::{AlphaModeArg, Args, ColorSpaceArg, ContainerArg, CubemapLayoutArg, QualityArg};
 use format::{ParsedFormat, format_short_name, parse_format};
 
 fn main() -> ExitCode {
@@ -61,10 +61,10 @@ fn run(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
 
     let output = args.output.as_ref().unwrap();
 
-    let color_space = match args.color_space {
-        ColorSpaceArg::Srgb => ColorSpace::Srgb,
-        ColorSpaceArg::Linear => ColorSpace::Linear,
-    };
+    let input_color_space = map_color_space(args.input_color_space);
+    let input_alpha = map_alpha_mode(args.input_alpha);
+    let output_color_space = args.output_color_space.map(map_color_space);
+    let output_alpha = args.output_alpha.map(map_alpha_mode);
 
     let parsed_format = args
         .format
@@ -78,7 +78,7 @@ fn run(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
 
     // Load input images.
     log::info!("Loading {} input image(s)", args.input.len());
-    let surfaces = load_images(&args.input, color_space)?;
+    let surfaces = load_images(&args.input, input_color_space, input_alpha)?;
 
     let display_format = match &parsed_format {
         Some(ParsedFormat::Compressed { format, .. })
@@ -88,12 +88,12 @@ fn run(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
     match &parsed_format {
         Some(ParsedFormat::Compressed { .. }) => {
             log::info!(
-                "Format: {display_format:?}, container: {output_node:?}, quality: {quality:?}, color space: {color_space:?}",
+                "Format: {display_format:?}, container: {output_node:?}, quality: {quality:?}, color space: {input_color_space:?}, alpha: {input_alpha:?}",
             );
         }
         _ => {
             log::info!(
-                "Format: {display_format:?}, container: {output_node:?}, color space: {color_space:?}",
+                "Format: {display_format:?}, container: {output_node:?}, color space: {input_color_space:?}, alpha: {input_alpha:?}",
             );
         }
     }
@@ -134,6 +134,15 @@ fn run(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
             encoder_name,
             format: target_format,
         }) => {
+            // Insert output state before compression so the data is in the
+            // desired color space / alpha mode when it reaches the encoder.
+            if output_color_space.is_some() || output_alpha.is_some() {
+                transforms.push(Box::new(OutputStateTransform::new(
+                    None,
+                    output_color_space,
+                    output_alpha,
+                )));
+            }
             let encoder_settings = build_encoder_settings(args);
             transforms.push(Box::new(CompressTransform::new(
                 target_format,
@@ -144,10 +153,22 @@ fn run(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
             )));
         }
         Some(ParsedFormat::Uncompressed(target_format)) => {
-            transforms.push(Box::new(TargetFormatTransform::new(target_format)));
+            transforms.push(Box::new(OutputStateTransform::new(
+                Some(target_format),
+                output_color_space,
+                output_alpha,
+            )));
         }
         None => {
-            // Passthrough — no format transforms.
+            // Only insert an output state transform if the user requested a
+            // specific output color space or alpha mode.
+            if output_color_space.is_some() || output_alpha.is_some() {
+                transforms.push(Box::new(OutputStateTransform::new(
+                    None,
+                    output_color_space,
+                    output_alpha,
+                )));
+            }
         }
     }
 
@@ -292,6 +313,7 @@ fn print_encoder_table(registry: &EncoderRegistry) {
 fn load_images(
     paths: &[std::path::PathBuf],
     color_space: ColorSpace,
+    alpha: ctt::alpha::AlphaMode,
 ) -> Result<Vec<Surface>, Box<dyn std::error::Error>> {
     let mut surfaces = Vec::with_capacity(paths.len());
     for path in paths {
@@ -309,7 +331,7 @@ fn load_images(
                     stride,
                     format: ctt::ktx2::Format::R32G32B32A32_SFLOAT,
                     color_space,
-                    alpha: ctt::alpha::AlphaMode::Straight,
+                    alpha,
                 }
             }
             image::ColorType::Rgb16 | image::ColorType::Rgba16 => {
@@ -323,7 +345,7 @@ fn load_images(
                     stride,
                     format: ctt::ktx2::Format::R16G16B16A16_UNORM,
                     color_space,
-                    alpha: ctt::alpha::AlphaMode::Straight,
+                    alpha,
                 }
             }
             _ => {
@@ -337,7 +359,7 @@ fn load_images(
                     stride,
                     format: ctt::ktx2::Format::R8G8B8A8_UNORM,
                     color_space,
-                    alpha: ctt::alpha::AlphaMode::Straight,
+                    alpha,
                 }
             }
         };
@@ -407,6 +429,21 @@ fn build_encoder_settings(args: &Args) -> Option<Box<dyn ctt::encoder::EncoderSe
         return Some(Box::new(ctt::encoders::ispc::IspcSettings { alpha: true }));
     }
     None
+}
+
+fn map_color_space(cs: ColorSpaceArg) -> ColorSpace {
+    match cs {
+        ColorSpaceArg::Srgb => ColorSpace::Srgb,
+        ColorSpaceArg::Linear => ColorSpace::Linear,
+    }
+}
+
+fn map_alpha_mode(a: AlphaModeArg) -> ctt::alpha::AlphaMode {
+    match a {
+        AlphaModeArg::Straight => ctt::alpha::AlphaMode::Straight,
+        AlphaModeArg::Premultiplied => ctt::alpha::AlphaMode::Premultiplied,
+        AlphaModeArg::Opaque => ctt::alpha::AlphaMode::Opaque,
+    }
 }
 
 fn parse_swizzle(s: &str) -> Result<Swizzle, Error> {

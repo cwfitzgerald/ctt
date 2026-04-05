@@ -40,9 +40,21 @@ pub struct Args {
     #[arg(long)]
     pub swizzle: Option<String>,
 
-    /// Color space of the input. Used for selecting output color space and performing mipmap generation.
-    #[arg(long, default_value = "srgb")]
-    pub color_space: ColorSpaceArg,
+    /// Color space of the input image(s).
+    #[arg(long, visible_alias = "ic", default_value = "srgb")]
+    pub input_color_space: ColorSpaceArg,
+
+    /// Alpha mode of the input image(s).
+    #[arg(long, visible_alias = "ia", default_value = "straight")]
+    pub input_alpha: AlphaModeArg,
+
+    /// Desired color space of the output. If omitted, matches the input.
+    #[arg(long, visible_alias = "oc")]
+    pub output_color_space: Option<ColorSpaceArg>,
+
+    /// Desired alpha mode of the output. If omitted, matches the input.
+    #[arg(long, visible_alias = "oa")]
+    pub output_alpha: Option<AlphaModeArg>,
 
     /// Compression quality preset.
     #[arg(long, default_value = "basic")]
@@ -85,6 +97,13 @@ pub enum CubemapLayoutArg {
 pub enum ColorSpaceArg {
     Srgb,
     Linear,
+}
+
+#[derive(Debug, Clone, Copy, clap::ValueEnum)]
+pub enum AlphaModeArg {
+    Straight,
+    Premultiplied,
+    Opaque,
 }
 
 #[derive(Debug, Clone, Copy, clap::ValueEnum)]
