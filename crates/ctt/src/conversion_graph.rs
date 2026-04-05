@@ -258,7 +258,22 @@ impl ConversionGraph {
         from: FormatState,
         constraint: &FormatConstraint,
     ) -> Option<Vec<FormatState>> {
-        if from.satisfies(constraint) {
+        // A goal state must satisfy the constraint AND preserve any properties
+        // that the constraint leaves unconstrained (color space, alpha mode).
+        let is_goal = |state: &FormatState| -> bool {
+            if !state.satisfies(constraint) {
+                return false;
+            }
+            if constraint.color_spaces.is_none() && state.color_space != from.color_space {
+                return false;
+            }
+            if constraint.alpha_modes.is_none() && state.alpha != from.alpha {
+                return false;
+            }
+            true
+        };
+
+        if is_goal(&from) {
             return Some(Vec::new());
         }
 
@@ -270,7 +285,7 @@ impl ConversionGraph {
         heap.push(Reverse((0, from)));
 
         while let Some(Reverse((cost, state))) = heap.pop() {
-            if state != from && state.satisfies(constraint) {
+            if state != from && is_goal(&state) {
                 return Some(Self::reconstruct_path(&prev, from, state));
             }
 
@@ -474,32 +489,42 @@ fn srgb_oetf(c: f64) -> f64 {
     }
 }
 
-/// Convert a surface from sRGB u8 unorm to linear f32.
+/// Convert a surface from sRGB to linear.
 ///
-/// RGB channels get the sRGB EOTF applied; alpha (if present) is treated as already linear
-/// and is just rescaled.
+/// Reads from any format and writes to the given target format.
+/// RGB channels get the sRGB EOTF applied; alpha (if present) is treated as already linear.
 fn srgb_to_linear(surface: &Surface, target: ktx2::Format, has_alpha: bool) -> Result<Surface> {
     let src_cc = surface
         .format
         .channel_count()
         .expect("unknown src channel count");
+    let src_ck = surface
+        .format
+        .channel_kind()
+        .expect("unknown src channel kind");
+    let src_cs = src_ck.byte_size();
+    let src_bpp = src_cc * src_cs;
+
     let dst_cc = target.channel_count().expect("unknown dst channel count");
+    let dst_ck = target.channel_kind().expect("unknown dst channel kind");
+    let dst_cs = dst_ck.byte_size();
+    let dst_bpp = dst_cc * dst_cs;
 
     let width = surface.width as usize;
     let height = surface.height as usize;
     let src_stride = surface.stride as usize;
-    let dst_stride = width * dst_cc * 4; // f32 = 4 bytes
+    let dst_stride = width * dst_bpp;
 
     let mut out = vec![0u8; dst_stride * height];
 
     for y in 0..height {
         for x in 0..width {
-            let src_off = y * src_stride + x * src_cc;
-            let dst_off = y * dst_stride + x * dst_cc * 4;
+            let src_off = y * src_stride + x * src_bpp;
+            let dst_off = y * dst_stride + x * dst_bpp;
 
             for ch in 0..dst_cc {
                 let val = if ch < src_cc {
-                    let raw = surface.data[src_off + ch] as f64 / 255.0;
+                    let raw = read_channel(&surface.data, src_off + ch * src_cs, src_ck);
                     if has_alpha && ch == 3 {
                         raw // alpha is linear
                     } else {
@@ -511,9 +536,7 @@ fn srgb_to_linear(surface: &Surface, target: ktx2::Format, has_alpha: bool) -> R
                     0.0
                 };
 
-                let v = val as f32;
-                let off = dst_off + ch * 4;
-                out[off..off + 4].copy_from_slice(&v.to_le_bytes());
+                write_channel(&mut out, dst_off + ch * dst_cs, dst_ck, val);
             }
         }
     }
@@ -529,39 +552,42 @@ fn srgb_to_linear(surface: &Surface, target: ktx2::Format, has_alpha: bool) -> R
     })
 }
 
-/// Convert a surface from linear f32 to sRGB u8 unorm.
+/// Convert a surface from linear to sRGB.
 ///
-/// RGB channels get the inverse sRGB EOTF applied; alpha (if present) is treated as linear
-/// and is just rescaled.
+/// Reads from any format and writes to the given target format.
+/// RGB channels get the inverse sRGB EOTF applied; alpha (if present) is treated as linear.
 fn linear_to_srgb(surface: &Surface, target: ktx2::Format, has_alpha: bool) -> Result<Surface> {
     let src_cc = surface
         .format
         .channel_count()
         .expect("unknown src channel count");
+    let src_ck = surface
+        .format
+        .channel_kind()
+        .expect("unknown src channel kind");
+    let src_cs = src_ck.byte_size();
+    let src_bpp = src_cc * src_cs;
+
     let dst_cc = target.channel_count().expect("unknown dst channel count");
+    let dst_ck = target.channel_kind().expect("unknown dst channel kind");
+    let dst_cs = dst_ck.byte_size();
+    let dst_bpp = dst_cc * dst_cs;
 
     let width = surface.width as usize;
     let height = surface.height as usize;
     let src_stride = surface.stride as usize;
-    let dst_stride = width * dst_cc; // u8 = 1 byte
+    let dst_stride = width * dst_bpp;
 
     let mut out = vec![0u8; dst_stride * height];
 
     for y in 0..height {
         for x in 0..width {
-            let src_off = y * src_stride + x * src_cc * 4;
-            let dst_off = y * dst_stride + x * dst_cc;
+            let src_off = y * src_stride + x * src_bpp;
+            let dst_off = y * dst_stride + x * dst_bpp;
 
             for ch in 0..dst_cc {
                 let linear = if ch < src_cc {
-                    let off = src_off + ch * 4;
-                    let bytes = [
-                        surface.data[off],
-                        surface.data[off + 1],
-                        surface.data[off + 2],
-                        surface.data[off + 3],
-                    ];
-                    f32::from_le_bytes(bytes) as f64
+                    read_channel(&surface.data, src_off + ch * src_cs, src_ck)
                 } else if ch == 3 {
                     1.0
                 } else {
@@ -574,7 +600,7 @@ fn linear_to_srgb(surface: &Surface, target: ktx2::Format, has_alpha: bool) -> R
                     srgb_oetf(linear)
                 };
 
-                out[dst_off + ch] = (encoded.clamp(0.0, 1.0) * 255.0).round() as u8;
+                write_channel(&mut out, dst_off + ch * dst_cs, dst_ck, encoded);
             }
         }
     }
@@ -724,12 +750,28 @@ pub fn build_default_graph() -> ConversionGraph {
         }
     }
 
-    // sRGB ↔ linear exact edges (u8 unorm srgb ↔ f32 linear, alpha stays linear).
-    let srgb_pairs = [
-        (F::R8_UNORM, F::R32_SFLOAT),
-        (F::R8G8_UNORM, F::R32G32_SFLOAT),
-        (F::R8G8B8_UNORM, F::R32G32B32_SFLOAT),
-        (F::R8G8B8A8_UNORM, F::R32G32B32A32_SFLOAT),
+    // sRGB ↔ linear exact edges.
+    //
+    // All edges go through F32: (any_fmt, sRGB) → (f32_fmt, Linear) and
+    // (f32_fmt, Linear) → (any_fmt, sRGB). This keeps the edge count manageable
+    // while supporting all format combinations via the graph.
+    let srgb_groups: &[(&[ktx2::Format], ktx2::Format)] = &[
+        (
+            &[F::R8_UNORM, F::R16_UNORM, F::R16_SFLOAT, F::R32_SFLOAT],
+            F::R32_SFLOAT,
+        ),
+        (
+            &[F::R8G8_UNORM, F::R16G16_UNORM, F::R16G16_SFLOAT, F::R32G32_SFLOAT],
+            F::R32G32_SFLOAT,
+        ),
+        (
+            &[F::R8G8B8_UNORM, F::R16G16B16_UNORM, F::R16G16B16_SFLOAT, F::R32G32B32_SFLOAT],
+            F::R32G32B32_SFLOAT,
+        ),
+        (
+            &[F::R8G8B8A8_UNORM, F::R16G16B16A16_UNORM, F::R16G16B16A16_SFLOAT, F::R32G32B32A32_SFLOAT],
+            F::R32G32B32A32_SFLOAT,
+        ),
     ];
 
     for alpha in [
@@ -737,39 +779,45 @@ pub fn build_default_graph() -> ConversionGraph {
         AlphaMode::Premultiplied,
         AlphaMode::Opaque,
     ] {
-        for &(u8_fmt, f32_fmt) in &srgb_pairs {
-            let has_alpha = u8_fmt.channel_count().unwrap_or(0) == 4;
+        for (fmts, f32_fmt) in srgb_groups {
+            let has_alpha = f32_fmt.channel_count().unwrap_or(0) == 4;
+            let f32_fmt = *f32_fmt;
 
-            // sRGB u8 → linear f32
-            {
-                let from = FormatState::new(u8_fmt, ColorSpace::Srgb, alpha);
-                let to = FormatState::new(f32_fmt, ColorSpace::Linear, alpha);
-                let converter: SurfaceConverter =
-                    Arc::new(move |surface: &Surface| srgb_to_linear(surface, f32_fmt, has_alpha));
-                graph.add_exact_edge(
-                    from,
-                    ExactEdge {
-                        target: to,
-                        cost: 10,
-                        converter,
-                    },
-                );
-            }
+            for &src_fmt in *fmts {
+                let cost = conversion_cost(src_fmt, f32_fmt).saturating_sub(5);
 
-            // linear f32 → sRGB u8
-            {
-                let from = FormatState::new(f32_fmt, ColorSpace::Linear, alpha);
-                let to = FormatState::new(u8_fmt, ColorSpace::Srgb, alpha);
-                let converter: SurfaceConverter =
-                    Arc::new(move |surface: &Surface| linear_to_srgb(surface, u8_fmt, has_alpha));
-                graph.add_exact_edge(
-                    from,
-                    ExactEdge {
-                        target: to,
-                        cost: 10,
-                        converter,
-                    },
-                );
+                // sRGB src → linear f32
+                {
+                    let from = FormatState::new(src_fmt, ColorSpace::Srgb, alpha);
+                    let to = FormatState::new(f32_fmt, ColorSpace::Linear, alpha);
+                    let converter: SurfaceConverter =
+                        Arc::new(move |surface: &Surface| srgb_to_linear(surface, f32_fmt, has_alpha));
+                    graph.add_exact_edge(
+                        from,
+                        ExactEdge {
+                            target: to,
+                            cost,
+                            converter,
+                        },
+                    );
+                }
+
+                // linear f32 → sRGB src
+                {
+                    let cost = conversion_cost(f32_fmt, src_fmt).saturating_sub(5);
+                    let from = FormatState::new(f32_fmt, ColorSpace::Linear, alpha);
+                    let to = FormatState::new(src_fmt, ColorSpace::Srgb, alpha);
+                    let converter: SurfaceConverter =
+                        Arc::new(move |surface: &Surface| linear_to_srgb(surface, src_fmt, has_alpha));
+                    graph.add_exact_edge(
+                        from,
+                        ExactEdge {
+                            target: to,
+                            cost,
+                            converter,
+                        },
+                    );
+                }
             }
         }
     }
@@ -1067,6 +1115,53 @@ mod tests {
                 "channel {i}: {} vs {}",
                 back.data[i],
                 surface.data[i],
+            );
+        }
+    }
+
+    #[test]
+    fn srgb_roundtrip_f16_surface() {
+        // 1x1 pixel: sRGB values stored as F16
+        let r = half::f16::from_f64(128.0 / 255.0);
+        let g = half::f16::from_f64(64.0 / 255.0);
+        let b = half::f16::from_f64(32.0 / 255.0);
+        let a = half::f16::from_f64(200.0 / 255.0);
+
+        let mut data = vec![0u8; 8];
+        data[0..2].copy_from_slice(&r.to_le_bytes());
+        data[2..4].copy_from_slice(&g.to_le_bytes());
+        data[4..6].copy_from_slice(&b.to_le_bytes());
+        data[6..8].copy_from_slice(&a.to_le_bytes());
+
+        let surface = Surface {
+            data,
+            width: 1,
+            height: 1,
+            stride: 8,
+            format: ktx2::Format::R16G16B16A16_SFLOAT,
+            color_space: ColorSpace::Srgb,
+            alpha: AlphaMode::Straight,
+        };
+
+        let linear =
+            srgb_to_linear(&surface, ktx2::Format::R32G32B32A32_SFLOAT, true).unwrap();
+        assert_eq!(linear.color_space, ColorSpace::Linear);
+        assert_eq!(linear.format, ktx2::Format::R32G32B32A32_SFLOAT);
+
+        let back =
+            linear_to_srgb(&linear, ktx2::Format::R16G16B16A16_SFLOAT, true).unwrap();
+        assert_eq!(back.color_space, ColorSpace::Srgb);
+        assert_eq!(back.format, ktx2::Format::R16G16B16A16_SFLOAT);
+
+        // Should round-trip within F16 precision.
+        for i in 0..4 {
+            let orig = half::f16::from_le_bytes([surface.data[i * 2], surface.data[i * 2 + 1]]);
+            let result = half::f16::from_le_bytes([back.data[i * 2], back.data[i * 2 + 1]]);
+            assert!(
+                (orig.to_f64() - result.to_f64()).abs() < 1e-3,
+                "channel {i}: {} vs {}",
+                orig,
+                result,
             );
         }
     }
