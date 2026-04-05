@@ -81,7 +81,8 @@ fn run(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
     let surfaces = load_images(&args.input, color_space)?;
 
     let display_format = match &parsed_format {
-        Some(ParsedFormat::Compressed { format, .. }) | Some(ParsedFormat::Uncompressed(format)) => *format,
+        Some(ParsedFormat::Compressed { format, .. })
+        | Some(ParsedFormat::Uncompressed(format)) => *format,
         None => surfaces[0].format,
     };
     match &parsed_format {
