@@ -14,14 +14,16 @@ pub struct Args {
     #[arg(short, long, required_unless_present = "list_encoders")]
     pub output: Option<PathBuf>,
 
-    /// Compression format. Bare (bc1, bc7) or prefixed with encoder (intel_bc7, bc7e_bc7).
+    /// Target format. Bare (bc1, bc7) or prefixed with encoder (intel_bc7, bc7e_bc7).
     /// ASTC formats use astc_WxH (e.g. astc_4x4, astc_8x8, astc_12x12).
-    #[arg(short, long, required_unless_present = "list_encoders")]
+    /// Uncompressed formats use WebGPU (rgba8unorm) or Vulkan (r8g8b8a8_unorm) names.
+    /// If omitted, the input format is preserved without compression.
+    #[arg(short, long)]
     pub format: Option<String>,
 
-    /// Output container format.
-    #[arg(short, long, default_value = "ktx2")]
-    pub container: ContainerArg,
+    /// Output container format. Inferred from the output file extension when omitted.
+    #[arg(short, long)]
+    pub container: Option<ContainerArg>,
 
     /// Treat input as a cubemap.
     #[arg(long)]
