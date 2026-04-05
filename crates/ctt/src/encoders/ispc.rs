@@ -42,7 +42,7 @@ impl Encoder for IspcEncoder {
         match format {
             F::BC4_UNORM_BLOCK => F::R8_UNORM,
             F::BC5_UNORM_BLOCK => F::R8G8_UNORM,
-            F::BC6H_UFLOAT_BLOCK => F::R16G16B16A16_UNORM,
+            F::BC6H_UFLOAT_BLOCK => F::R16G16B16A16_SFLOAT,
             _ => F::R8G8B8A8_UNORM,
         }
     }
@@ -80,7 +80,7 @@ impl Encoder for IspcEncoder {
                 Ok(itc::bc5::compress_blocks(&surface))
             }
             F::BC6H_UFLOAT_BLOCK => {
-                let surface = itc::Rgba16Surface::new(data, width, height, stride);
+                let surface = itc::RgbaF16Surface::new(data, width, height, stride);
                 let settings = bc6h_settings(quality);
                 Ok(itc::bc6h::compress_blocks(&settings, &surface))
             }

@@ -26,14 +26,14 @@ pub mod etc1;
 /// | [`RSurface`] | 1 | `R8` (1 byte/pixel) | [`bc4`] |
 /// | [`RgSurface`] | 2 | `R8 G8` interleaved (2 bytes/pixel) | [`bc5`] |
 /// | [`RgbaSurface`] | 4 | `R8 G8 B8 A8` interleaved (4 bytes/pixel) | [`bc1`], [`bc3`], [`bc7`], [`etc1`] |
-/// | [`Rgba16Surface`] | 8 | `R16 G16 B16 A16` interleaved (8 bytes/pixel) | [`bc6h`] |
+/// | [`RgbaF16Surface`] | 8 | `R16 G16 B16 A16` interleaved (8 bytes/pixel) | [`bc6h`] |
 #[derive(Debug, Copy, Clone)]
 pub struct Surface<'a, const COMPONENTS: usize> {
     /// The raw pixel data for the image.
     ///
     /// The byte interpretation depends on the encoder that consumes this
     /// surface. For most formats, each byte is one u8 channel sample. For
-    /// [`bc6h`], every two bytes form a little-endian u16 channel sample.
+    /// [`bc6h`], every two bytes form a little-endian f16 channel sample.
     ///
     /// The data does not need to be tightly packed, but if it isn't, `stride`
     /// must differ from `width * COMPONENTS`.
@@ -114,7 +114,6 @@ pub type RSurface<'a> = Surface<'a, 1>;
 
 /// 4-channel, 16-bit surface: `R16 G16 B16 A16` — 8 bytes per pixel.
 ///
-/// Each channel is a little-endian unsigned 16-bit integer (u16) in the range
-/// `0..=65535`. The alpha channel is present in the layout but ignored by
-/// [`bc6h`].
-pub type Rgba16Surface<'a> = Surface<'a, 8>;
+/// Each channel is a little-endian IEEE 754 binary16 (half-precision) float.
+/// The alpha channel is present in the layout but ignored by [`bc6h`].
+pub type RgbaF16Surface<'a> = Surface<'a, 8>;
