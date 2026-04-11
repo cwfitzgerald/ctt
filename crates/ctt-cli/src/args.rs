@@ -76,6 +76,19 @@ pub struct Args {
     #[arg(long)]
     pub list_encoders: bool,
 
+    /// Generate mipmaps.
+    #[arg(long)]
+    pub mipmap: bool,
+
+    /// Number of mip levels (including the base). Requires --mipmap.
+    /// If omitted, generates the full chain down to 1×1.
+    #[arg(long, requires = "mipmap")]
+    pub mipmap_count: Option<usize>,
+
+    /// Filter used for mipmap downsampling. Requires --mipmap.
+    #[arg(long, default_value = "catmull-rom", requires = "mipmap")]
+    pub mipmap_filter: MipmapFilterArg,
+
     /// Increase logging verbosity (-v = debug, -vv = trace).
     #[arg(short, action = clap::ArgAction::Count)]
     pub verbose: u8,
@@ -114,4 +127,13 @@ pub enum QualityArg {
     Basic,
     Slow,
     VerySlow,
+}
+
+#[derive(Debug, Clone, Copy, clap::ValueEnum)]
+pub enum MipmapFilterArg {
+    Nearest,
+    Triangle,
+    CatmullRom,
+    Gaussian,
+    Lanczos3,
 }

@@ -5,7 +5,7 @@ use crate::constraint::FormatConstraint;
 use crate::encoder::{Encoder, EncoderRegistry, EncoderSettings, Quality};
 use crate::error::{Error, Result};
 use crate::surface::{ColorSpace, Image, Surface};
-use crate::transform_node::{LayoutInfo, Transform};
+use crate::transforms::Transform;
 use crate::vk_format::FormatExt;
 
 /// A transform that compresses uncompressed surfaces using a block encoder.
@@ -83,10 +83,6 @@ impl Transform for CompressTransform {
         alpha: AlphaMode,
     ) -> (ktx2::Format, ColorSpace, AlphaMode) {
         (self.target_format, cs, alpha)
-    }
-
-    fn output_layout(&self, input: &LayoutInfo) -> LayoutInfo {
-        input.clone()
     }
 
     fn execute(&self, image: Image) -> Result<Image> {

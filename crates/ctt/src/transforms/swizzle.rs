@@ -2,7 +2,7 @@ use crate::alpha::AlphaMode;
 use crate::constraint::FormatConstraint;
 use crate::error::{Error, Result};
 use crate::surface::{ColorSpace, Image, Surface};
-use crate::transform_node::{LayoutInfo, Transform};
+use crate::transforms::Transform;
 use crate::vk_format::{ChannelKind, FormatExt};
 
 /// A single channel source for swizzling.
@@ -148,10 +148,6 @@ impl Transform for SwizzleTransform {
         alpha: AlphaMode,
     ) -> (ktx2::Format, ColorSpace, AlphaMode) {
         (input, cs, alpha)
-    }
-
-    fn output_layout(&self, input: &LayoutInfo) -> LayoutInfo {
-        input.clone()
     }
 
     fn execute(&self, mut image: Image) -> Result<Image> {

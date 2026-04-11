@@ -13,12 +13,15 @@ use ctt::error::Error;
 use ctt::pipeline::{AssemblyNode, InputBranch, InputNode, OutputNode, Pipeline, PipelineOutput};
 use ctt::surface::{ColorSpace, Image, Surface};
 use ctt::transforms::compress::CompressTransform;
+use ctt::transforms::mipmap::{MipmapFilter, MipmapTransform};
 use ctt::transforms::output_state::OutputStateTransform;
 use ctt::transforms::swizzle::SwizzleTransform;
 use ctt::transforms::swizzle::{Swizzle, SwizzleChannel};
 use ctt::vk_format::FormatExt;
 
-use args::{AlphaModeArg, Args, ColorSpaceArg, ContainerArg, CubemapLayoutArg, QualityArg};
+use args::{
+    AlphaModeArg, Args, ColorSpaceArg, ContainerArg, CubemapLayoutArg, MipmapFilterArg, QualityArg,
+};
 use format::{ParsedFormat, format_short_name, parse_format};
 
 fn main() -> ExitCode {
@@ -123,10 +126,15 @@ fn run(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
     };
 
     // Build post-assembly transforms.
-    let mut transforms: Vec<Box<dyn ctt::transform_node::Transform>> = Vec::new();
+    let mut transforms: Vec<Box<dyn ctt::transforms::Transform>> = Vec::new();
 
     if let Some(ref swizzle) = swizzle {
         transforms.push(Box::new(SwizzleTransform::new(*swizzle)));
+    }
+
+    if args.mipmap {
+        let filter = map_mipmap_filter(args.mipmap_filter);
+        transforms.push(Box::new(MipmapTransform::new(args.mipmap_count, filter)));
     }
 
     match parsed_format {
@@ -435,6 +443,16 @@ fn map_color_space(cs: ColorSpaceArg) -> ColorSpace {
     match cs {
         ColorSpaceArg::Srgb => ColorSpace::Srgb,
         ColorSpaceArg::Linear => ColorSpace::Linear,
+    }
+}
+
+fn map_mipmap_filter(f: MipmapFilterArg) -> MipmapFilter {
+    match f {
+        MipmapFilterArg::Nearest => MipmapFilter::Nearest,
+        MipmapFilterArg::Triangle => MipmapFilter::Triangle,
+        MipmapFilterArg::CatmullRom => MipmapFilter::CatmullRom,
+        MipmapFilterArg::Gaussian => MipmapFilter::Gaussian,
+        MipmapFilterArg::Lanczos3 => MipmapFilter::Lanczos3,
     }
 }
 

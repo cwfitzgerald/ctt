@@ -67,6 +67,6 @@ impl Encoder for Bc7encEncoder {
             .checked_mul(surface.height.div_ceil(4))
             .expect("block count overflow") as usize;
         let compressed = bc7e::compress_blocks_alloc(num_blocks, pixels, &params);
-        Ok(bytemuck::cast_vec(compressed))
+        Ok(bytemuck::cast_slice(&compressed).to_vec())
     }
 }

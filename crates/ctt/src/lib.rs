@@ -10,6 +10,5 @@ pub mod error;
 pub mod output;
 pub mod pipeline;
 pub mod surface;
-pub mod transform_node;
 pub mod transforms;
 pub mod vk_format;

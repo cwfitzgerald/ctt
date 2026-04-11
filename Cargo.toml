@@ -35,7 +35,11 @@ clap = { version = "4", features = ["derive"] }
 ddsfile = "0.5"
 fern = "0.7"
 half = "2"
-image = "0.25"
+image = { version = "0.25", default-features = false }
 ktx2 = "0.4"
 log = "0.4"
 thiserror = "2"
+
+[profile.profiling]
+inherits = "release"
+debug = true

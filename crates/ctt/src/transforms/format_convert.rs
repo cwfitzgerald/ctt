@@ -4,7 +4,7 @@ use crate::conversion_graph::SurfaceConverter;
 use crate::error::Result;
 use crate::surface::ColorSpace;
 use crate::surface::Image;
-use crate::transform_node::{LayoutInfo, Transform};
+use crate::transforms::Transform;
 
 /// A transform that converts between formats, inserted automatically by the pipeline resolver.
 ///
@@ -54,10 +54,6 @@ impl Transform for FormatConvertTransform {
             self.target_color_space,
             self.target_alpha,
         )
-    }
-
-    fn output_layout(&self, input: &LayoutInfo) -> LayoutInfo {
-        input.clone()
     }
 
     fn execute(&self, image: Image) -> Result<Image> {

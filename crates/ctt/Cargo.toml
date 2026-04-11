@@ -40,6 +40,7 @@ ctt-astcenc = { workspace = true, optional = true }
 ctt-compressonator = { workspace = true, optional = true }
 ddsfile = { workspace = true }
 half = { workspace = true }
+image = { workspace = true }
 ktx2 = { workspace = true }
 log = { workspace = true }
 thiserror = { workspace = true }

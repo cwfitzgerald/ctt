@@ -3,7 +3,7 @@ use crate::constraint::FormatConstraint;
 use crate::error::Result;
 use crate::surface::ColorSpace;
 use crate::surface::Image;
-use crate::transform_node::Transform;
+use crate::transforms::Transform;
 
 /// A no-op transform that constrains the pipeline to a specific uncompressed format.
 ///

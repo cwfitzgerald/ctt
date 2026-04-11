@@ -30,7 +30,7 @@ ctt = { workspace = true, features = [
   "encoder-intel",
 ] }
 clap = { workspace = true }
-image = { workspace = true }
+image = { workspace = true, features = ["default"] }
 bytemuck = { workspace = true }
 fern = { workspace = true }
 log = { workspace = true }

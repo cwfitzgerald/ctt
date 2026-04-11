@@ -1,7 +1,7 @@
 use crate::conversion_graph::{ConversionGraph, FormatState, build_default_graph, check_lossless};
 use crate::error::{Error, Result};
 use crate::surface::Image;
-use crate::transform_node::Transform;
+use crate::transforms::Transform;
 use crate::transforms::format_convert::FormatConvertTransform;
 
 /// An input source for the pipeline.
