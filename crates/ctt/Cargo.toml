@@ -34,15 +34,16 @@ ispc-build-from-source = [
 
 [dependencies]
 bytemuck = { workspace = true, features = ["extern_crate_alloc"] }
-ctt-intel-texture-compressor = { workspace = true, optional = true }
-ctt-bc7enc-rdo = { workspace = true, optional = true }
 ctt-astcenc = { workspace = true, optional = true }
+ctt-bc7enc-rdo = { workspace = true, optional = true }
 ctt-compressonator = { workspace = true, optional = true }
+ctt-intel-texture-compressor = { workspace = true, optional = true }
 ddsfile = { workspace = true }
 half = { workspace = true }
 image = { workspace = true }
 ktx2 = { workspace = true }
 log = { workspace = true }
+profiling = { workspace = true }
 thiserror = { workspace = true }
 
 [lints]

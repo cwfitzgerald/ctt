@@ -52,6 +52,7 @@ fn validate_uniform_faces(faces: &[Surface; 6]) -> Result<()> {
 /// ```
 /// Grid positions: +X=(2,1), -X=(0,1), +Y=(1,0), -Y=(1,2), +Z=(1,1), -Z=(3,1)
 fn split_cross(surface: &Surface) -> Result<[Surface; 6]> {
+    profiling::scope!("split_cross");
     let face_w = surface.width / 4;
     let face_h = surface.height / 3;
     if face_w == 0 || face_h == 0 {
@@ -80,6 +81,7 @@ fn split_cross(surface: &Surface) -> Result<[Surface; 6]> {
 
 /// Extract faces from a horizontal strip (6 faces side by side).
 fn split_strip(surface: &Surface) -> Result<[Surface; 6]> {
+    profiling::scope!("split_strip");
     let face_w = surface.width / 6;
     let face_h = surface.height;
     if face_w == 0 {
@@ -96,6 +98,7 @@ fn split_strip(surface: &Surface) -> Result<[Surface; 6]> {
 }
 
 fn extract_region(src: &Surface, src_x: u32, src_y: u32, width: u32, height: u32) -> Surface {
+    profiling::scope!("extract_region");
     let bpp = src
         .format
         .bytes_per_pixel()

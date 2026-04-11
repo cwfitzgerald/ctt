@@ -33,6 +33,7 @@ clap = { workspace = true }
 image = { workspace = true, features = ["default"] }
 bytemuck = { workspace = true }
 fern = { workspace = true }
+profiling = { workspace = true }
 log = { workspace = true }
 
 [lints]

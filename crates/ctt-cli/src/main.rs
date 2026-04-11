@@ -323,48 +323,142 @@ fn load_images(
     color_space: ColorSpace,
     alpha: ctt::alpha::AlphaMode,
 ) -> Result<Vec<Surface>, Box<dyn std::error::Error>> {
+    profiling::scope!("load_images");
     let mut surfaces = Vec::with_capacity(paths.len());
     for path in paths {
+        profiling::scope!("load image", &path.display().to_string());
         let img = image::open(path)?;
 
-        let surface = match img.color() {
-            image::ColorType::Rgb32F | image::ColorType::Rgba32F => {
-                let rgba = img.to_rgba32f();
-                let (width, height) = rgba.dimensions();
-                let stride = width * 4 * 4; // 4 channels * 4 bytes
+        let surface = match img {
+            image::DynamicImage::ImageLuma8(buf) => {
+                let (width, height) = buf.dimensions();
                 Surface {
-                    data: bytemuck::cast_slice(rgba.as_raw()).to_vec(),
+                    data: buf.into_raw(),
                     width,
                     height,
-                    stride,
-                    format: ctt::ktx2::Format::R32G32B32A32_SFLOAT,
+                    stride: width,
+                    format: ctt::ktx2::Format::R8_UNORM,
                     color_space,
                     alpha,
                 }
             }
-            image::ColorType::Rgb16 | image::ColorType::Rgba16 => {
-                let rgba = img.to_rgba16();
-                let (width, height) = rgba.dimensions();
-                let stride = width * 4 * 2; // 4 channels * 2 bytes
+            image::DynamicImage::ImageLumaA8(buf) => {
+                let (width, height) = buf.dimensions();
                 Surface {
-                    data: bytemuck::cast_slice(rgba.as_raw()).to_vec(),
+                    data: buf.into_raw(),
                     width,
                     height,
-                    stride,
+                    stride: width * 2,
+                    format: ctt::ktx2::Format::R8G8_UNORM,
+                    color_space,
+                    alpha,
+                }
+            }
+            image::DynamicImage::ImageRgb8(buf) => {
+                let (width, height) = buf.dimensions();
+                Surface {
+                    data: buf.into_raw(),
+                    width,
+                    height,
+                    stride: width * 3,
+                    format: ctt::ktx2::Format::R8G8B8_UNORM,
+                    color_space,
+                    alpha,
+                }
+            }
+            image::DynamicImage::ImageRgba8(buf) => {
+                let (width, height) = buf.dimensions();
+                Surface {
+                    data: buf.into_raw(),
+                    width,
+                    height,
+                    stride: width * 4,
+                    format: ctt::ktx2::Format::R8G8B8A8_UNORM,
+                    color_space,
+                    alpha,
+                }
+            }
+            image::DynamicImage::ImageLuma16(buf) => {
+                let (width, height) = buf.dimensions();
+                Surface {
+                    data: bytemuck::cast_slice(buf.as_raw()).to_vec(),
+                    width,
+                    height,
+                    stride: width * 2,
+                    format: ctt::ktx2::Format::R16_UNORM,
+                    color_space,
+                    alpha,
+                }
+            }
+            image::DynamicImage::ImageLumaA16(buf) => {
+                let (width, height) = buf.dimensions();
+                Surface {
+                    data: bytemuck::cast_slice(buf.as_raw()).to_vec(),
+                    width,
+                    height,
+                    stride: width * 4,
+                    format: ctt::ktx2::Format::R16G16_UNORM,
+                    color_space,
+                    alpha,
+                }
+            }
+            image::DynamicImage::ImageRgb16(buf) => {
+                let (width, height) = buf.dimensions();
+                Surface {
+                    data: bytemuck::cast_slice(buf.as_raw()).to_vec(),
+                    width,
+                    height,
+                    stride: width * 6,
+                    format: ctt::ktx2::Format::R16G16B16_UNORM,
+                    color_space,
+                    alpha,
+                }
+            }
+            image::DynamicImage::ImageRgba16(buf) => {
+                let (width, height) = buf.dimensions();
+                Surface {
+                    data: bytemuck::cast_slice(buf.as_raw()).to_vec(),
+                    width,
+                    height,
+                    stride: width * 8,
                     format: ctt::ktx2::Format::R16G16B16A16_UNORM,
                     color_space,
                     alpha,
                 }
             }
+            image::DynamicImage::ImageRgb32F(buf) => {
+                let (width, height) = buf.dimensions();
+                Surface {
+                    data: bytemuck::cast_slice(buf.as_raw()).to_vec(),
+                    width,
+                    height,
+                    stride: width * 12,
+                    format: ctt::ktx2::Format::R32G32B32_SFLOAT,
+                    color_space,
+                    alpha,
+                }
+            }
+            image::DynamicImage::ImageRgba32F(buf) => {
+                let (width, height) = buf.dimensions();
+                Surface {
+                    data: bytemuck::cast_slice(buf.as_raw()).to_vec(),
+                    width,
+                    height,
+                    stride: width * 16,
+                    format: ctt::ktx2::Format::R32G32B32A32_SFLOAT,
+                    color_space,
+                    alpha,
+                }
+            }
+            // DynamicImage is #[non_exhaustive]
             _ => {
                 let rgba = img.to_rgba8();
                 let (width, height) = rgba.dimensions();
-                let stride = width * 4;
                 Surface {
                     data: rgba.into_raw(),
                     width,
                     height,
-                    stride,
+                    stride: width * 4,
                     format: ctt::ktx2::Format::R8G8B8A8_UNORM,
                     color_space,
                     alpha,

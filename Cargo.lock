@@ -396,6 +396,7 @@ dependencies = [
  "image",
  "ktx2",
  "log",
+ "profiling",
  "thiserror",
 ]
 
@@ -432,6 +433,7 @@ dependencies = [
  "fern",
  "image",
  "log",
+ "profiling",
 ]
 
 [[package]]

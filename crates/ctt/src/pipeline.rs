@@ -85,6 +85,8 @@ impl Pipeline {
         self,
         graph: &ConversionGraph,
     ) -> std::result::Result<ResolvedPipeline, Vec<Error>> {
+        profiling::scope!("Pipeline::resolve");
+
         let allow_lossy = self.allow_lossy_intermediates;
         let mut errors = Vec::new();
 
@@ -149,6 +151,8 @@ impl Pipeline {
 impl ResolvedPipeline {
     /// Execute the resolved pipeline.
     pub fn execute(self) -> Result<PipelineOutput> {
+        profiling::scope!("ResolvedPipeline::execute");
+
         // Execute each input branch.
         let mut images: Vec<Image> = Vec::with_capacity(self.inputs.len());
         for branch in self.inputs {
@@ -191,16 +195,19 @@ impl ResolvedPipeline {
 
         // Execute post-assembly transforms.
         for transform in &self.transforms {
+            profiling::scope!("transform", transform.name());
             image = transform.execute(image)?;
         }
 
         // Output.
         match self.output {
             OutputNode::Dds => {
+                profiling::scope!("encode_dds");
                 let bytes = crate::output::dds::encode_dds_image(&image)?;
                 Ok(PipelineOutput::Encoded(bytes))
             }
             OutputNode::Ktx2 => {
+                profiling::scope!("encode_ktx2");
                 let bytes = crate::output::ktx2::encode_ktx2_image(&image)?;
                 Ok(PipelineOutput::Encoded(bytes))
             }
@@ -216,6 +223,7 @@ fn resolve_branch(
     label: &str,
     allow_lossy: bool,
 ) -> std::result::Result<ResolvedBranch, Vec<Error>> {
+    profiling::scope!("resolve input branch", label);
     let input_state = input_format_state(&branch.input);
 
     let (transforms, _final_state) =
@@ -240,6 +248,7 @@ fn resolve_transform_chain(
     label: &str,
     allow_lossy: bool,
 ) -> ResolveResult {
+    profiling::scope!("resolve transform chain", label);
     let mut errors = Vec::new();
     let mut resolved: Vec<Box<dyn Transform>> = Vec::new();
     let mut current_state = initial_state;
@@ -335,6 +344,7 @@ fn input_format_state(input: &InputNode) -> FormatState {
 
 /// Get the output format state of a resolved branch.
 fn branch_output_state(branch: &ResolvedBranch) -> FormatState {
+    profiling::scope!("branch_output_state");
     let mut state = input_format_state(&branch.input);
     for transform in &branch.transforms {
         let (fmt, cs, alpha) =
@@ -346,9 +356,11 @@ fn branch_output_state(branch: &ResolvedBranch) -> FormatState {
 
 /// Execute a resolved branch.
 fn execute_branch(branch: ResolvedBranch) -> Result<Image> {
+    profiling::scope!("input_branch");
     let InputNode::Raw(mut image) = branch.input;
 
     for transform in &branch.transforms {
+        profiling::scope!("transform", transform.name());
         image = transform.execute(image)?;
     }
 
