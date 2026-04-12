@@ -28,9 +28,15 @@ pub trait Transform: Send + Sync {
     fn execute(&self, image: Image) -> Result<Image>;
 }
 
-pub mod compress;
-pub mod format_convert;
-pub mod mipmap;
-pub mod output_state;
-pub mod swizzle;
-pub mod target_format;
+pub(crate) mod compress;
+pub(crate) mod format_convert;
+pub(crate) mod mipmap;
+pub(crate) mod output_state;
+pub(crate) mod swizzle;
+pub(crate) mod target_format;
+
+pub use compress::CompressTransform;
+pub use mipmap::MipmapTransform;
+pub use output_state::OutputStateTransform;
+pub use swizzle::{SwizzleTransform, apply_swizzle};
+pub use target_format::TargetFormatTransform;

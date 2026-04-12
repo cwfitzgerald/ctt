@@ -1,6 +1,6 @@
 use ctt_intel_texture_compressor as itc;
 
-use crate::encoder::{Encoder, EncoderSettings, Quality};
+use crate::encoders::{Encoder, EncoderSettings, Quality};
 use crate::error::Result;
 use crate::surface::Surface;
 use crate::vk_format::FormatExt as _;

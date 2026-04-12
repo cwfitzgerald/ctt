@@ -4,10 +4,7 @@ mod premultiplication;
 mod srgb;
 
 pub use default::build_default_graph;
-pub use graph::{
-    ConversionGraph, ExactEdge, FormatEdge, FormatState, LossyReason, SurfaceConverter,
-    check_lossless,
-};
+pub use graph::{ConversionGraph, FormatState, SurfaceConverter, check_lossless};
 
 use crate::error::Result;
 use crate::surface::Surface;

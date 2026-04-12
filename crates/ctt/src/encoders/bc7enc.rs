@@ -1,6 +1,6 @@
 use ctt_bc7enc_rdo::bc7e;
 
-use crate::encoder::{Encoder, EncoderSettings, Quality};
+use crate::encoders::{Encoder, EncoderSettings, Quality};
 use crate::error::{Error, Result};
 use crate::surface::Surface;
 

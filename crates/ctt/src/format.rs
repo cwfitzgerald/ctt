@@ -1,15 +1,20 @@
-use ctt::encoder::EncoderRegistry;
-use ctt::error::Error;
-use ctt::ktx2;
+use crate::encoders::EncoderRegistry;
+use crate::error::Error;
 
-/// The result of parsing a `--format` string.
-pub enum ParsedFormat {
-    /// A block-compressed format, optionally with a specific encoder.
+/// The target format for a conversion operation.
+///
+/// Use [`parse_format`] to construct this from a format string, or build
+/// it directly when you already know the target [`Format`](ktx2::Format).
+pub enum TargetFormat {
+    /// A block-compressed format, optionally targeting a specific encoder.
     Compressed {
+        /// Specific encoder backend to use (e.g. `"intel"`, `"bc7e"`).
+        /// If `None`, the highest-priority encoder that supports the format is used.
         encoder_name: Option<String>,
+        /// The target compressed format (e.g. `Format::BC7_UNORM_BLOCK`).
         format: ktx2::Format,
     },
-    /// An uncompressed pixel format (e.g. `rgba8unorm`, `r16g16b16a16_sfloat`).
+    /// An uncompressed pixel format (e.g. `Format::R8G8B8A8_UNORM`).
     Uncompressed(ktx2::Format),
 }
 
@@ -18,12 +23,12 @@ pub enum ParsedFormat {
 /// Compressed formats may have an encoder prefix (e.g. `intel_bc7`).
 /// Uncompressed formats accept both WebGPU-style (`rgba8unorm`) and Vulkan-style
 /// (`r8g8b8a8_unorm`) names.
-pub fn parse_format(s: &str, registry: &EncoderRegistry) -> Result<ParsedFormat, Error> {
+pub fn parse_format(s: &str, registry: &EncoderRegistry) -> Result<TargetFormat, Error> {
     let lower = s.to_lowercase();
 
     // Try uncompressed first — these names never collide with encoder prefixes.
     if let Some(format) = parse_uncompressed(&lower) {
-        return Ok(ParsedFormat::Uncompressed(format));
+        return Ok(TargetFormat::Uncompressed(format));
     }
 
     // Try encoder-prefixed compressed formats.
@@ -40,7 +45,7 @@ pub fn parse_format(s: &str, registry: &EncoderRegistry) -> Result<ParsedFormat,
             .and_then(|r| r.strip_prefix('_'))
         {
             let format = parse_compressed(rest, s)?;
-            return Ok(ParsedFormat::Compressed {
+            return Ok(TargetFormat::Compressed {
                 encoder_name: Some(prefix.to_string()),
                 format,
             });
@@ -49,13 +54,13 @@ pub fn parse_format(s: &str, registry: &EncoderRegistry) -> Result<ParsedFormat,
 
     // Bare compressed format.
     let format = parse_compressed(&lower, s)?;
-    Ok(ParsedFormat::Compressed {
+    Ok(TargetFormat::Compressed {
         encoder_name: None,
         format,
     })
 }
 
-/// Short display name for a compressed format (used in `--list-encoders`).
+/// Short display name for a compressed format (used in encoder listings).
 pub fn format_short_name(format: ktx2::Format) -> String {
     use ktx2::Format as F;
     match format {
@@ -291,7 +296,7 @@ mod tests {
     fn parse_format_uncompressed() {
         let registry = EncoderRegistry::default_registry();
         match parse_format("rgba8unorm", &registry).unwrap() {
-            ParsedFormat::Uncompressed(f) => assert_eq!(f, F::R8G8B8A8_UNORM),
+            TargetFormat::Uncompressed(f) => assert_eq!(f, F::R8G8B8A8_UNORM),
             _ => panic!("expected uncompressed"),
         }
     }
@@ -300,7 +305,7 @@ mod tests {
     fn parse_format_compressed() {
         let registry = EncoderRegistry::default_registry();
         match parse_format("bc7", &registry).unwrap() {
-            ParsedFormat::Compressed {
+            TargetFormat::Compressed {
                 encoder_name,
                 format,
             } => {
