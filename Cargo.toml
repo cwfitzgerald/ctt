@@ -31,11 +31,11 @@ anyhow = "1"
 bytemuck = "1"
 cc = "1"
 clap = { version = "4", features = ["derive"] }
-ddsfile = "0.5"
+ddsfile = "0.6"
 fern = "0.7"
 half = { version = "2", features = ["bytemuck"] }
 image = { version = "0.25", default-features = false }
-ktx2 = "0.4"
+ktx2 = { git = "https://github.com/BVE-Reborn/ktx2.git", rev = "49e6fed" }
 log = "0.4"
 paste = "1"
 profiling = "1"

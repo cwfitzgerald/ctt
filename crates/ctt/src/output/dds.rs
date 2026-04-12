@@ -10,21 +10,84 @@ pub fn vk_format_to_dxgi(format: ktx2::Format, color_space: ColorSpace) -> Resul
 
     let full_format = format.denormalize(color_space);
     match full_format {
-        // Uncompressed
+        // ── Uncompressed ────────────────────────────────────────────────
+
+        // R8
+        F::R8_UNORM => Ok(DxgiFormat::R8_UNorm),
+        F::R8_SNORM => Ok(DxgiFormat::R8_SNorm),
+        F::R8_UINT => Ok(DxgiFormat::R8_UInt),
+        F::R8_SINT => Ok(DxgiFormat::R8_SInt),
+
+        // R8G8
+        F::R8G8_UNORM => Ok(DxgiFormat::R8G8_UNorm),
+        F::R8G8_SNORM => Ok(DxgiFormat::R8G8_SNorm),
+        F::R8G8_UINT => Ok(DxgiFormat::R8G8_UInt),
+        F::R8G8_SINT => Ok(DxgiFormat::R8G8_SInt),
+
+        // R8G8B8A8
         F::R8G8B8A8_UNORM => Ok(DxgiFormat::R8G8B8A8_UNorm),
         F::R8G8B8A8_SRGB => Ok(DxgiFormat::R8G8B8A8_UNorm_sRGB),
+        F::R8G8B8A8_SNORM => Ok(DxgiFormat::R8G8B8A8_SNorm),
+        F::R8G8B8A8_UINT => Ok(DxgiFormat::R8G8B8A8_UInt),
+        F::R8G8B8A8_SINT => Ok(DxgiFormat::R8G8B8A8_SInt),
+
+        // B8G8R8A8
         F::B8G8R8A8_UNORM => Ok(DxgiFormat::B8G8R8A8_UNorm),
         F::B8G8R8A8_SRGB => Ok(DxgiFormat::B8G8R8A8_UNorm_sRGB),
-        F::R16G16B16A16_SFLOAT => Ok(DxgiFormat::R16G16B16A16_Float),
-        F::R32G32B32A32_SFLOAT => Ok(DxgiFormat::R32G32B32A32_Float),
-        F::R8_UNORM => Ok(DxgiFormat::R8_UNorm),
-        F::R8G8_UNORM => Ok(DxgiFormat::R8G8_UNorm),
-        F::R16_UNORM => Ok(DxgiFormat::R16_UNorm),
-        F::R16_SFLOAT => Ok(DxgiFormat::R16_Float),
-        F::R32_SFLOAT => Ok(DxgiFormat::R32_Float),
-        F::B10G11R11_UFLOAT_PACK32 => Ok(DxgiFormat::R11G11B10_Float),
 
-        // BC compressed
+        // A2B10G10R10 (VK) -> R10G10B10A2 (DXGI) — same bit layout
+        F::A2B10G10R10_UNORM_PACK32 => Ok(DxgiFormat::R10G10B10A2_UNorm),
+        F::A2B10G10R10_UINT_PACK32 => Ok(DxgiFormat::R10G10B10A2_UInt),
+
+        // R16
+        F::R16_UNORM => Ok(DxgiFormat::R16_UNorm),
+        F::R16_SNORM => Ok(DxgiFormat::R16_SNorm),
+        F::R16_UINT => Ok(DxgiFormat::R16_UInt),
+        F::R16_SINT => Ok(DxgiFormat::R16_SInt),
+        F::R16_SFLOAT => Ok(DxgiFormat::R16_Float),
+
+        // R16G16
+        F::R16G16_UNORM => Ok(DxgiFormat::R16G16_UNorm),
+        F::R16G16_SNORM => Ok(DxgiFormat::R16G16_SNorm),
+        F::R16G16_UINT => Ok(DxgiFormat::R16G16_UInt),
+        F::R16G16_SINT => Ok(DxgiFormat::R16G16_SInt),
+        F::R16G16_SFLOAT => Ok(DxgiFormat::R16G16_Float),
+
+        // R16G16B16A16
+        F::R16G16B16A16_UNORM => Ok(DxgiFormat::R16G16B16A16_UNorm),
+        F::R16G16B16A16_SNORM => Ok(DxgiFormat::R16G16B16A16_SNorm),
+        F::R16G16B16A16_UINT => Ok(DxgiFormat::R16G16B16A16_UInt),
+        F::R16G16B16A16_SINT => Ok(DxgiFormat::R16G16B16A16_SInt),
+        F::R16G16B16A16_SFLOAT => Ok(DxgiFormat::R16G16B16A16_Float),
+
+        // R32
+        F::R32_SFLOAT => Ok(DxgiFormat::R32_Float),
+        F::R32_UINT => Ok(DxgiFormat::R32_UInt),
+        F::R32_SINT => Ok(DxgiFormat::R32_SInt),
+
+        // R32G32
+        F::R32G32_SFLOAT => Ok(DxgiFormat::R32G32_Float),
+        F::R32G32_UINT => Ok(DxgiFormat::R32G32_UInt),
+        F::R32G32_SINT => Ok(DxgiFormat::R32G32_SInt),
+
+        // R32G32B32
+        F::R32G32B32_SFLOAT => Ok(DxgiFormat::R32G32B32_Float),
+        F::R32G32B32_UINT => Ok(DxgiFormat::R32G32B32_UInt),
+        F::R32G32B32_SINT => Ok(DxgiFormat::R32G32B32_SInt),
+
+        // R32G32B32A32
+        F::R32G32B32A32_SFLOAT => Ok(DxgiFormat::R32G32B32A32_Float),
+        F::R32G32B32A32_UINT => Ok(DxgiFormat::R32G32B32A32_UInt),
+        F::R32G32B32A32_SINT => Ok(DxgiFormat::R32G32B32A32_SInt),
+
+        // Packed
+        F::B10G11R11_UFLOAT_PACK32 => Ok(DxgiFormat::R11G11B10_Float),
+        F::E5B9G9R9_UFLOAT_PACK32 => Ok(DxgiFormat::R9G9B9E5_SharedExp),
+        F::B5G6R5_UNORM_PACK16 => Ok(DxgiFormat::B5G6R5_UNorm),
+        F::B5G5R5A1_UNORM_PACK16 => Ok(DxgiFormat::B5G5R5A1_UNorm),
+        F::B4G4R4A4_UNORM_PACK16 => Ok(DxgiFormat::B4G4R4A4_UNorm),
+
+        // ── BC compressed ───────────────────────────────────────────────
         F::BC1_RGBA_UNORM_BLOCK | F::BC1_RGB_UNORM_BLOCK => Ok(DxgiFormat::BC1_UNorm),
         F::BC1_RGBA_SRGB_BLOCK | F::BC1_RGB_SRGB_BLOCK => Ok(DxgiFormat::BC1_UNorm_sRGB),
         F::BC2_UNORM_BLOCK => Ok(DxgiFormat::BC2_UNorm),
@@ -39,6 +102,36 @@ pub fn vk_format_to_dxgi(format: ktx2::Format, color_space: ColorSpace) -> Resul
         F::BC6H_SFLOAT_BLOCK => Ok(DxgiFormat::BC6H_SF16),
         F::BC7_UNORM_BLOCK => Ok(DxgiFormat::BC7_UNorm),
         F::BC7_SRGB_BLOCK => Ok(DxgiFormat::BC7_UNorm_sRGB),
+
+        // ── ASTC compressed (NVIDIA DXGI extension) ─────────────────────
+        F::ASTC_4x4_UNORM_BLOCK => Ok(DxgiFormat::ASTC_4x4_UNorm),
+        F::ASTC_4x4_SRGB_BLOCK => Ok(DxgiFormat::ASTC_4x4_UNorm_sRGB),
+        F::ASTC_5x4_UNORM_BLOCK => Ok(DxgiFormat::ASTC_5x4_UNorm),
+        F::ASTC_5x4_SRGB_BLOCK => Ok(DxgiFormat::ASTC_5x4_UNorm_sRGB),
+        F::ASTC_5x5_UNORM_BLOCK => Ok(DxgiFormat::ASTC_5x5_UNorm),
+        F::ASTC_5x5_SRGB_BLOCK => Ok(DxgiFormat::ASTC_5x5_UNorm_sRGB),
+        F::ASTC_6x5_UNORM_BLOCK => Ok(DxgiFormat::ASTC_6x5_UNorm),
+        F::ASTC_6x5_SRGB_BLOCK => Ok(DxgiFormat::ASTC_6x5_UNorm_sRGB),
+        F::ASTC_6x6_UNORM_BLOCK => Ok(DxgiFormat::ASTC_6x6_UNorm),
+        F::ASTC_6x6_SRGB_BLOCK => Ok(DxgiFormat::ASTC_6x6_UNorm_sRGB),
+        F::ASTC_8x5_UNORM_BLOCK => Ok(DxgiFormat::ASTC_8x5_UNorm),
+        F::ASTC_8x5_SRGB_BLOCK => Ok(DxgiFormat::ASTC_8x5_UNorm_sRGB),
+        F::ASTC_8x6_UNORM_BLOCK => Ok(DxgiFormat::ASTC_8x6_UNorm),
+        F::ASTC_8x6_SRGB_BLOCK => Ok(DxgiFormat::ASTC_8x6_UNorm_sRGB),
+        F::ASTC_8x8_UNORM_BLOCK => Ok(DxgiFormat::ASTC_8x8_UNorm),
+        F::ASTC_8x8_SRGB_BLOCK => Ok(DxgiFormat::ASTC_8x8_UNorm_sRGB),
+        F::ASTC_10x5_UNORM_BLOCK => Ok(DxgiFormat::ASTC_10x5_UNorm),
+        F::ASTC_10x5_SRGB_BLOCK => Ok(DxgiFormat::ASTC_10x5_UNorm_sRGB),
+        F::ASTC_10x6_UNORM_BLOCK => Ok(DxgiFormat::ASTC_10x6_UNorm),
+        F::ASTC_10x6_SRGB_BLOCK => Ok(DxgiFormat::ASTC_10x6_UNorm_sRGB),
+        F::ASTC_10x8_UNORM_BLOCK => Ok(DxgiFormat::ASTC_10x8_UNorm),
+        F::ASTC_10x8_SRGB_BLOCK => Ok(DxgiFormat::ASTC_10x8_UNorm_sRGB),
+        F::ASTC_10x10_UNORM_BLOCK => Ok(DxgiFormat::ASTC_10x10_UNorm),
+        F::ASTC_10x10_SRGB_BLOCK => Ok(DxgiFormat::ASTC_10x10_UNorm_sRGB),
+        F::ASTC_12x10_UNORM_BLOCK => Ok(DxgiFormat::ASTC_12x10_UNorm),
+        F::ASTC_12x10_SRGB_BLOCK => Ok(DxgiFormat::ASTC_12x10_UNorm_sRGB),
+        F::ASTC_12x12_UNORM_BLOCK => Ok(DxgiFormat::ASTC_12x12_UNorm),
+        F::ASTC_12x12_SRGB_BLOCK => Ok(DxgiFormat::ASTC_12x12_UNorm_sRGB),
 
         _ => Err(Error::UnsupportedFormat(format!(
             "{full_format:?} is not supported in DDS"
@@ -116,8 +209,19 @@ mod tests {
     }
 
     #[test]
-    fn astc_dds_unsupported() {
-        assert!(vk_format_to_dxgi(F::ASTC_4x4_UNORM_BLOCK, ColorSpace::Srgb).is_err());
+    fn astc_4x4_srgb_maps_correctly() {
+        assert_eq!(
+            vk_format_to_dxgi(F::ASTC_4x4_UNORM_BLOCK, ColorSpace::Srgb).unwrap(),
+            DxgiFormat::ASTC_4x4_UNorm_sRGB
+        );
+    }
+
+    #[test]
+    fn astc_12x12_linear_maps_correctly() {
+        assert_eq!(
+            vk_format_to_dxgi(F::ASTC_12x12_UNORM_BLOCK, ColorSpace::Linear).unwrap(),
+            DxgiFormat::ASTC_12x12_UNorm
+        );
     }
 
     #[test]
@@ -129,6 +233,22 @@ mod tests {
         assert_eq!(
             vk_format_to_dxgi(F::BC4_UNORM_BLOCK, ColorSpace::Linear).unwrap(),
             DxgiFormat::BC4_UNorm
+        );
+    }
+
+    #[test]
+    fn r10g10b10a2_maps_correctly() {
+        assert_eq!(
+            vk_format_to_dxgi(F::A2B10G10R10_UNORM_PACK32, ColorSpace::Linear).unwrap(),
+            DxgiFormat::R10G10B10A2_UNorm
+        );
+    }
+
+    #[test]
+    fn shared_exponent_maps_correctly() {
+        assert_eq!(
+            vk_format_to_dxgi(F::E5B9G9R9_UFLOAT_PACK32, ColorSpace::Linear).unwrap(),
+            DxgiFormat::R9G9B9E5_SharedExp
         );
     }
 }
