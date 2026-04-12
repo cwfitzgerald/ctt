@@ -9,6 +9,7 @@ pub mod encoders;
 pub mod error;
 pub mod output;
 pub mod pipeline;
+pub mod sample;
 pub mod surface;
 pub mod transforms;
 pub mod vk_format;

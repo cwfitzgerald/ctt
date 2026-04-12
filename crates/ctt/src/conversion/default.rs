@@ -4,10 +4,10 @@ use crate::alpha::AlphaMode;
 use crate::surface::{ColorSpace, Surface};
 use crate::vk_format::{ChannelKind, FormatExt};
 
+use super::convert_surface;
 use super::graph::{ConversionGraph, ExactEdge, FormatEdge, FormatState, SurfaceConverter};
 use super::premultiplication::{premultiply_alpha, unpremultiply_alpha};
 use super::srgb::{linear_to_srgb, srgb_to_linear};
-use super::convert_surface;
 
 /// Build the default conversion graph.
 ///
