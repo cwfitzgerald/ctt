@@ -1,5 +1,4 @@
 mod args;
-mod format;
 
 use std::fs;
 use std::process::ExitCode;
@@ -7,22 +6,16 @@ use std::sync::Arc;
 
 use clap::Parser;
 
-use ctt::cubemap::{CubemapInput, split_cubemap};
-use ctt::encoder::{EncoderRegistry, Quality};
-use ctt::error::Error;
-use ctt::pipeline::{AssemblyNode, InputBranch, InputNode, OutputNode, Pipeline, PipelineOutput};
-use ctt::surface::{ColorSpace, Image, Surface};
-use ctt::transforms::compress::CompressTransform;
-use ctt::transforms::mipmap::{MipmapFilter, MipmapTransform};
-use ctt::transforms::output_state::OutputStateTransform;
-use ctt::transforms::swizzle::SwizzleTransform;
-use ctt::transforms::swizzle::{Swizzle, SwizzleChannel};
-use ctt::vk_format::FormatExt;
+use ctt::encoders::EncoderRegistry;
+use ctt::{
+    AlphaMode, ColorSpace, Container, ConvertOutput, ConvertSettings, CubemapInput, Error, Format,
+    FormatExt, Image, MipmapFilter, Quality, Surface, Swizzle, SwizzleChannel, format_short_name,
+    parse_format, split_cubemap,
+};
 
 use args::{
     AlphaModeArg, Args, ColorSpaceArg, ContainerArg, CubemapLayoutArg, MipmapFilterArg, QualityArg,
 };
-use format::{ParsedFormat, format_short_name, parse_format};
 
 fn main() -> ExitCode {
     let args = Args::parse();
@@ -62,150 +55,66 @@ fn run(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
 
-    let output = args.output.as_ref().unwrap();
+    let output_path = args.output.as_ref().unwrap();
 
     let input_color_space = map_color_space(args.input_color_space);
     let input_alpha = map_alpha_mode(args.input_alpha);
-    let output_color_space = args.output_color_space.map(map_color_space);
-    let output_alpha = args.output_alpha.map(map_alpha_mode);
-
-    let parsed_format = args
-        .format
-        .as_deref()
-        .map(|s| parse_format(s, &registry))
-        .transpose()?;
-
-    let output_node = resolve_container(args.container, output)?;
-    let swizzle = args.swizzle.as_deref().map(parse_swizzle).transpose()?;
-    let quality = map_quality(args.quality);
 
     // Load input images.
     log::info!("Loading {} input image(s)", args.input.len());
     let surfaces = load_images(&args.input, input_color_space, input_alpha)?;
 
-    let display_format = match &parsed_format {
-        Some(ParsedFormat::Compressed { format, .. })
-        | Some(ParsedFormat::Uncompressed(format)) => *format,
-        None => surfaces[0].format,
-    };
-    match &parsed_format {
-        Some(ParsedFormat::Compressed { .. }) => {
-            log::info!(
-                "Format: {display_format:?}, container: {output_node:?}, quality: {quality:?}, color space: {input_color_space:?}, alpha: {input_alpha:?}",
-            );
-        }
-        _ => {
-            log::info!(
-                "Format: {display_format:?}, container: {output_node:?}, color space: {input_color_space:?}, alpha: {input_alpha:?}",
-            );
-        }
-    }
-
-    // Build input branches and assembly.
-    let (inputs, assembly) = if args.cubemap {
+    // Assemble the image (cubemap, array, or single).
+    let image = if args.cubemap {
         log::info!("Cubemap mode, layout: {:?}", args.cubemap_layout);
-        build_cubemap_inputs(surfaces, args.cubemap_layout)?
+        build_cubemap_image(surfaces, args.cubemap_layout)?
+    } else if surfaces.len() == 1 {
+        Image {
+            surfaces: vec![vec![surfaces.into_iter().next().unwrap()]],
+            is_cubemap: false,
+        }
     } else {
-        let inputs: Vec<InputBranch> = surfaces
-            .into_iter()
-            .map(|surface| InputBranch {
-                input: InputNode::Raw(Image {
-                    surfaces: vec![vec![surface]],
-                    is_cubemap: false,
-                }),
-                transforms: Vec::new(),
-            })
-            .collect();
-
-        let assembly = if inputs.len() == 1 {
-            AssemblyNode::Identity
-        } else {
-            AssemblyNode::Array
-        };
-        (inputs, assembly)
+        Image {
+            surfaces: surfaces.into_iter().map(|s| vec![s]).collect(),
+            is_cubemap: false,
+        }
     };
 
-    // Build post-assembly transforms.
-    let mut transforms: Vec<Box<dyn ctt::transforms::Transform>> = Vec::new();
+    let container = resolve_container(args.container, output_path)?;
+    let swizzle = args.swizzle.as_deref().map(parse_swizzle).transpose()?;
+    let target_format = args
+        .format
+        .as_deref()
+        .map(|s| parse_format(s, &registry))
+        .transpose()?;
 
-    if let Some(ref swizzle) = swizzle {
-        transforms.push(Box::new(SwizzleTransform::new(*swizzle)));
-    }
-
-    if args.mipmap {
-        let filter = map_mipmap_filter(args.mipmap_filter);
-        transforms.push(Box::new(MipmapTransform::new(args.mipmap_count, filter)));
-    }
-
-    match parsed_format {
-        Some(ParsedFormat::Compressed {
-            encoder_name,
-            format: target_format,
-        }) => {
-            // Insert output state before compression so the data is in the
-            // desired color space / alpha mode when it reaches the encoder.
-            if output_color_space.is_some() || output_alpha.is_some() {
-                transforms.push(Box::new(OutputStateTransform::new(
-                    None,
-                    output_color_space,
-                    output_alpha,
-                )));
-            }
-            let encoder_settings = build_encoder_settings(args);
-            transforms.push(Box::new(CompressTransform::new(
-                target_format,
-                quality,
-                encoder_name,
-                encoder_settings,
-                Arc::clone(&registry),
-            )));
-        }
-        Some(ParsedFormat::Uncompressed(target_format)) => {
-            transforms.push(Box::new(OutputStateTransform::new(
-                Some(target_format),
-                output_color_space,
-                output_alpha,
-            )));
-        }
-        None => {
-            // Only insert an output state transform if the user requested a
-            // specific output color space or alpha mode.
-            if output_color_space.is_some() || output_alpha.is_some() {
-                transforms.push(Box::new(OutputStateTransform::new(
-                    None,
-                    output_color_space,
-                    output_alpha,
-                )));
-            }
-        }
-    }
-
-    let pipeline = Pipeline {
-        inputs,
-        assembly,
-        transforms,
-        output: output_node,
-        allow_lossy_intermediates: args.allow_lossy_intermediates,
+    let settings = ConvertSettings {
+        format: target_format,
+        container,
+        quality: map_quality(args.quality),
+        output_color_space: args.output_color_space.map(map_color_space),
+        output_alpha: args.output_alpha.map(map_alpha_mode),
+        swizzle,
+        mipmap: args.mipmap,
+        mipmap_count: args.mipmap_count,
+        mipmap_filter: map_mipmap_filter(args.mipmap_filter),
+        allow_lossy: args.allow_lossy_intermediates,
+        encoder_settings: build_encoder_settings(args),
+        registry: Some(Arc::clone(&registry)),
     };
 
-    // Resolve and execute.
-    let resolved = pipeline.resolve().map_err(|errors| {
-        let messages: Vec<String> = errors.iter().map(|e| e.to_string()).collect();
-        Error::UnsupportedFormat(messages.join("; "))
-    })?;
-
-    let output_bytes = match resolved.execute()? {
-        PipelineOutput::Encoded(bytes) => bytes,
-        PipelineOutput::Raw(_) => {
-            return Err(Error::OutputEncoding("unexpected raw output".into()).into());
+    let output_bytes = match ctt::convert(image, settings)? {
+        ConvertOutput::Encoded(bytes) => bytes,
+        ConvertOutput::Raw(_) => {
+            return Err(Error::OutputEncoding("unexpected raw output from CLI".into()).into());
         }
     };
 
     // Write output.
-    fs::write(output, &output_bytes)?;
+    fs::write(output_path, &output_bytes)?;
     log::info!(
         "Output written: {} ({} bytes)",
-        output.display(),
+        output_path.display(),
         output_bytes.len()
     );
     Ok(())
@@ -215,11 +124,11 @@ fn run(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
 fn resolve_container(
     explicit: Option<ContainerArg>,
     output: &std::path::Path,
-) -> Result<OutputNode, Error> {
+) -> Result<Container, Error> {
     if let Some(container) = explicit {
         return Ok(match container {
-            ContainerArg::Dds => OutputNode::Dds,
-            ContainerArg::Ktx2 => OutputNode::Ktx2,
+            ContainerArg::Dds => Container::Dds,
+            ContainerArg::Ktx2 => Container::Ktx2,
         });
     }
 
@@ -229,8 +138,8 @@ fn resolve_container(
         .map(|e| e.to_lowercase());
 
     match ext.as_deref() {
-        Some("dds") => Ok(OutputNode::Dds),
-        Some("ktx2") => Ok(OutputNode::Ktx2),
+        Some("dds") => Ok(Container::Dds),
+        Some("ktx2") => Ok(Container::Ktx2),
         Some(other) => Err(Error::UnsupportedFormat(format!(
             "cannot infer container from extension '.{other}'; use --container or a .dds/.ktx2 extension"
         ))),
@@ -258,7 +167,6 @@ fn print_encoder_table(registry: &EncoderRegistry) {
         let mut has_astc = false;
         for &f in encoder.supported_formats() {
             if f.block_size().is_some() && f.is_compressed() {
-                // Check if it's an ASTC format by block size > 4x4 or by name pattern
                 let (bw, bh) = f.block_size().unwrap();
                 let is_astc = matches!(
                     (bw, bh),
@@ -278,17 +186,17 @@ fn print_encoder_table(registry: &EncoderRegistry) {
                         | (12, 12)
                 ) && !matches!(
                     f,
-                    ctt::ktx2::Format::BC1_RGBA_UNORM_BLOCK
-                        | ctt::ktx2::Format::BC2_UNORM_BLOCK
-                        | ctt::ktx2::Format::BC3_UNORM_BLOCK
-                        | ctt::ktx2::Format::BC4_UNORM_BLOCK
-                        | ctt::ktx2::Format::BC4_SNORM_BLOCK
-                        | ctt::ktx2::Format::BC5_UNORM_BLOCK
-                        | ctt::ktx2::Format::BC5_SNORM_BLOCK
-                        | ctt::ktx2::Format::BC6H_UFLOAT_BLOCK
-                        | ctt::ktx2::Format::BC6H_SFLOAT_BLOCK
-                        | ctt::ktx2::Format::BC7_UNORM_BLOCK
-                        | ctt::ktx2::Format::ETC2_R8G8B8_UNORM_BLOCK
+                    Format::BC1_RGBA_UNORM_BLOCK
+                        | Format::BC2_UNORM_BLOCK
+                        | Format::BC3_UNORM_BLOCK
+                        | Format::BC4_UNORM_BLOCK
+                        | Format::BC4_SNORM_BLOCK
+                        | Format::BC5_UNORM_BLOCK
+                        | Format::BC5_SNORM_BLOCK
+                        | Format::BC6H_UFLOAT_BLOCK
+                        | Format::BC6H_SFLOAT_BLOCK
+                        | Format::BC7_UNORM_BLOCK
+                        | Format::ETC2_R8G8B8_UNORM_BLOCK
                 );
 
                 if is_astc {
@@ -321,7 +229,7 @@ fn print_encoder_table(registry: &EncoderRegistry) {
 fn load_images(
     paths: &[std::path::PathBuf],
     color_space: ColorSpace,
-    alpha: ctt::alpha::AlphaMode,
+    alpha: AlphaMode,
 ) -> Result<Vec<Surface>, Box<dyn std::error::Error>> {
     profiling::scope!("load_images");
     let mut surfaces = Vec::with_capacity(paths.len());
@@ -337,7 +245,7 @@ fn load_images(
                     width,
                     height,
                     stride: width,
-                    format: ctt::ktx2::Format::R8_UNORM,
+                    format: Format::R8_UNORM,
                     color_space,
                     alpha,
                 }
@@ -349,7 +257,7 @@ fn load_images(
                     width,
                     height,
                     stride: width * 2,
-                    format: ctt::ktx2::Format::R8G8_UNORM,
+                    format: Format::R8G8_UNORM,
                     color_space,
                     alpha,
                 }
@@ -361,7 +269,7 @@ fn load_images(
                     width,
                     height,
                     stride: width * 3,
-                    format: ctt::ktx2::Format::R8G8B8_UNORM,
+                    format: Format::R8G8B8_UNORM,
                     color_space,
                     alpha,
                 }
@@ -373,7 +281,7 @@ fn load_images(
                     width,
                     height,
                     stride: width * 4,
-                    format: ctt::ktx2::Format::R8G8B8A8_UNORM,
+                    format: Format::R8G8B8A8_UNORM,
                     color_space,
                     alpha,
                 }
@@ -385,7 +293,7 @@ fn load_images(
                     width,
                     height,
                     stride: width * 2,
-                    format: ctt::ktx2::Format::R16_UNORM,
+                    format: Format::R16_UNORM,
                     color_space,
                     alpha,
                 }
@@ -397,7 +305,7 @@ fn load_images(
                     width,
                     height,
                     stride: width * 4,
-                    format: ctt::ktx2::Format::R16G16_UNORM,
+                    format: Format::R16G16_UNORM,
                     color_space,
                     alpha,
                 }
@@ -409,7 +317,7 @@ fn load_images(
                     width,
                     height,
                     stride: width * 6,
-                    format: ctt::ktx2::Format::R16G16B16_UNORM,
+                    format: Format::R16G16B16_UNORM,
                     color_space,
                     alpha,
                 }
@@ -421,7 +329,7 @@ fn load_images(
                     width,
                     height,
                     stride: width * 8,
-                    format: ctt::ktx2::Format::R16G16B16A16_UNORM,
+                    format: Format::R16G16B16A16_UNORM,
                     color_space,
                     alpha,
                 }
@@ -433,7 +341,7 @@ fn load_images(
                     width,
                     height,
                     stride: width * 12,
-                    format: ctt::ktx2::Format::R32G32B32_SFLOAT,
+                    format: Format::R32G32B32_SFLOAT,
                     color_space,
                     alpha,
                 }
@@ -445,7 +353,7 @@ fn load_images(
                     width,
                     height,
                     stride: width * 16,
-                    format: ctt::ktx2::Format::R32G32B32A32_SFLOAT,
+                    format: Format::R32G32B32A32_SFLOAT,
                     color_space,
                     alpha,
                 }
@@ -459,7 +367,7 @@ fn load_images(
                     width,
                     height,
                     stride: width * 4,
-                    format: ctt::ktx2::Format::R8G8B8A8_UNORM,
+                    format: Format::R8G8B8A8_UNORM,
                     color_space,
                     alpha,
                 }
@@ -478,11 +386,11 @@ fn load_images(
     Ok(surfaces)
 }
 
-/// Build cubemap input branches from loaded surfaces.
-fn build_cubemap_inputs(
+/// Build a cubemap Image from loaded surfaces.
+fn build_cubemap_image(
     surfaces: Vec<Surface>,
     layout_arg: CubemapLayoutArg,
-) -> Result<(Vec<InputBranch>, AssemblyNode), Box<dyn std::error::Error>> {
+) -> Result<Image, Box<dyn std::error::Error>> {
     let cubemap_input = if surfaces.len() == 6 {
         CubemapInput::SeparateFaces(Box::new(
             surfaces
@@ -500,18 +408,11 @@ fn build_cubemap_inputs(
     };
 
     let faces = split_cubemap(cubemap_input)?;
-    let inputs: Vec<InputBranch> = faces
-        .into_iter()
-        .map(|face| InputBranch {
-            input: InputNode::Raw(Image {
-                surfaces: vec![vec![face]],
-                is_cubemap: false,
-            }),
-            transforms: Vec::new(),
-        })
-        .collect();
-
-    Ok((inputs, AssemblyNode::Cubemap))
+    let surfaces = faces.into_iter().map(|face| vec![face]).collect();
+    Ok(Image {
+        surfaces,
+        is_cubemap: true,
+    })
 }
 
 fn map_quality(q: QualityArg) -> Quality {
@@ -526,7 +427,7 @@ fn map_quality(q: QualityArg) -> Quality {
 }
 
 /// Build encoder-specific settings from CLI args.
-fn build_encoder_settings(args: &Args) -> Option<Box<dyn ctt::encoder::EncoderSettings>> {
+fn build_encoder_settings(args: &Args) -> Option<Box<dyn ctt::encoders::EncoderSettings>> {
     if args.alpha {
         return Some(Box::new(ctt::encoders::ispc::IspcSettings { alpha: true }));
     }
@@ -550,11 +451,11 @@ fn map_mipmap_filter(f: MipmapFilterArg) -> MipmapFilter {
     }
 }
 
-fn map_alpha_mode(a: AlphaModeArg) -> ctt::alpha::AlphaMode {
+fn map_alpha_mode(a: AlphaModeArg) -> AlphaMode {
     match a {
-        AlphaModeArg::Straight => ctt::alpha::AlphaMode::Straight,
-        AlphaModeArg::Premultiplied => ctt::alpha::AlphaMode::Premultiplied,
-        AlphaModeArg::Opaque => ctt::alpha::AlphaMode::Opaque,
+        AlphaModeArg::Straight => AlphaMode::Straight,
+        AlphaModeArg::Premultiplied => AlphaMode::Premultiplied,
+        AlphaModeArg::Opaque => AlphaMode::Opaque,
     }
 }
 

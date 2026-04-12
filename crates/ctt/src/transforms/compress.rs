@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use crate::alpha::AlphaMode;
 use crate::constraint::FormatConstraint;
-use crate::encoder::{Encoder, EncoderRegistry, EncoderSettings, Quality};
+use crate::encoders::{Encoder, EncoderRegistry, EncoderSettings, Quality};
 use crate::error::{Error, Result};
 use crate::surface::{ColorSpace, Image, Surface};
 use crate::transforms::Transform;

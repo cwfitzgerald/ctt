@@ -1,6 +1,6 @@
 use ctt_compressonator as cmp;
 
-use crate::encoder::{Encoder, EncoderSettings, Quality};
+use crate::encoders::{Encoder, EncoderSettings, Quality};
 use crate::error::{Error, Result};
 use crate::surface::Surface;
 use crate::vk_format::FormatExt as _;

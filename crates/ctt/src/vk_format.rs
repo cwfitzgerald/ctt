@@ -20,7 +20,7 @@ impl ChannelKind {
     }
 }
 
-/// Extension trait providing introspection and utility methods on [`ktx2::Format`].
+/// Extension trait providing introspection and utility methods on [`Format`][crate::Format].
 pub trait FormatExt {
     /// Returns `true` if this is a block-compressed format (BC, ETC2, ASTC, EAC).
     fn is_compressed(&self) -> bool;

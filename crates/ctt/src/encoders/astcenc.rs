@@ -1,6 +1,6 @@
 use ctt_astcenc as astc;
 
-use crate::encoder::{Encoder, EncoderSettings, Quality};
+use crate::encoders::{Encoder, EncoderSettings, Quality};
 use crate::error::Result;
 use crate::surface::{ColorSpace, Surface};
 use crate::vk_format::FormatExt as _;
