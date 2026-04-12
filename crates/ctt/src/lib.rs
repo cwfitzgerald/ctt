@@ -2,7 +2,7 @@ pub use ktx2;
 
 pub mod alpha;
 pub mod constraint;
-pub mod conversion_graph;
+pub mod conversion;
 pub mod cubemap;
 pub mod encoder;
 pub mod encoders;

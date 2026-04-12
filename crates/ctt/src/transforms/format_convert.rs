@@ -1,6 +1,6 @@
 use crate::alpha::AlphaMode;
 use crate::constraint::FormatConstraint;
-use crate::conversion_graph::SurfaceConverter;
+use crate::conversion::SurfaceConverter;
 use crate::error::Result;
 use crate::surface::ColorSpace;
 use crate::surface::Image;
