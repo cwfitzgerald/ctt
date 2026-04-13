@@ -9,9 +9,9 @@ use clap::Parser;
 use ctt::encoders::EncoderRegistry;
 use ctt::input::{InputOverrides, decode_container};
 use ctt::{
-    AlphaMode, ColorSpace, Container, ConvertOutput, ConvertSettings, CubemapInput, Error, Format,
-    FormatExt, Image, MipmapFilter, Quality, Surface, Swizzle, SwizzleChannel, format_short_name,
-    parse_format, split_cubemap,
+    AlphaMode, ColorSpace, Container, ConvertSettings, CubemapInput, Error, Format, FormatExt,
+    Image, Ktx2Supercompression, MipmapFilter, PipelineOutput, Quality, Surface, Swizzle,
+    SwizzleChannel, format_short_name, parse_format, split_cubemap,
 };
 
 use args::{
@@ -79,7 +79,26 @@ fn run(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
         assemble_array(images)?
     };
 
-    let container = resolve_container(args.container, output_path)?;
+    let supercompression = match (args.zstd, args.zlib) {
+        (Some(level), None) => Some(Ktx2Supercompression::Zstd { level }),
+        (None, Some(level)) => Some(Ktx2Supercompression::Zlib { level }),
+        (None, None) => None,
+        (Some(_), Some(_)) => unreachable!("clap conflicts_with prevents this"),
+    };
+
+    let mut container = resolve_container(args.container, output_path)?;
+    if let Some(sc) = supercompression {
+        if let Container::Ktx2(ref mut opt) = container {
+            *opt = Some(sc);
+        } else {
+            return Err(Error::UnsupportedFormat(
+                "supercompression requires KTX2 output; use --container ktx2 or a .ktx2 extension"
+                    .into(),
+            )
+            .into());
+        }
+    }
+
     let swizzle = args.swizzle.as_deref().map(parse_swizzle).transpose()?;
     let target_format = args
         .format
@@ -103,8 +122,8 @@ fn run(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
     };
 
     let output_bytes = match ctt::convert(image, settings)? {
-        ConvertOutput::Encoded(bytes) => bytes,
-        ConvertOutput::Raw(_) => {
+        PipelineOutput::Encoded(bytes) => bytes,
+        PipelineOutput::Raw(_) => {
             return Err(Error::OutputEncoding("unexpected raw output from CLI".into()).into());
         }
     };
@@ -127,7 +146,7 @@ fn resolve_container(
     if let Some(container) = explicit {
         return Ok(match container {
             ContainerArg::Dds => Container::Dds,
-            ContainerArg::Ktx2 => Container::Ktx2,
+            ContainerArg::Ktx2 => Container::Ktx2(None),
         });
     }
 
@@ -138,7 +157,7 @@ fn resolve_container(
 
     match ext.as_deref() {
         Some("dds") => Ok(Container::Dds),
-        Some("ktx2") => Ok(Container::Ktx2),
+        Some("ktx2") => Ok(Container::Ktx2(None)),
         Some(other) => Err(Error::UnsupportedFormat(format!(
             "cannot infer container from extension '.{other}'; use --container or a .dds/.ktx2 extension"
         ))),

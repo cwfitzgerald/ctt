@@ -89,6 +89,19 @@ pub struct Args {
     #[arg(long, default_value = "catmull-rom", requires = "mipmap")]
     pub mipmap_filter: MipmapFilterArg,
 
+    /// Enable zstd supercompression for KTX2 output.
+    /// Optionally takes a compression level: negative (fast mode) through 22
+    /// (maximum compression). Default when omitted: 0, which maps to the zstd
+    /// library default (currently level 3).
+    #[arg(long, num_args = 0..=1, default_missing_value = "0", value_name = "LEVEL", conflicts_with = "zlib")]
+    pub zstd: Option<i32>,
+
+    /// Enable zlib supercompression for KTX2 output.
+    /// Optionally takes a compression level: 1 (fastest) through 10 (maximum
+    /// compression). Default when omitted: 6.
+    #[arg(long, num_args = 0..=1, default_missing_value = "6", value_name = "LEVEL", conflicts_with = "zstd")]
+    pub zlib: Option<u8>,
+
     /// Increase logging verbosity (-v = debug, -vv = trace).
     #[arg(short, action = clap::ArgAction::Count)]
     pub verbose: u8,

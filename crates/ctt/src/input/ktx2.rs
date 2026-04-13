@@ -1,3 +1,5 @@
+use std::borrow::Cow;
+
 use crate::alpha::AlphaMode;
 use crate::error::{Error, Result};
 use crate::surface::{Image, Surface};
@@ -13,12 +15,7 @@ pub fn decode_ktx2_image(data: &[u8]) -> Result<Image> {
 
     let header = reader.header();
 
-    // Reject supercompressed data — we don't have decompressor deps yet.
-    if header.supercompression_scheme.is_some() {
-        return Err(Error::InputDecoding(
-            "KTX2 supercompression is not supported".into(),
-        ));
-    }
+    let supercompression = header.supercompression_scheme;
 
     let full_format = header.format.ok_or_else(|| {
         Error::InputDecoding("KTX2 has VK_FORMAT_UNDEFINED (Basis Universal); not supported".into())
@@ -50,6 +47,13 @@ pub fn decode_ktx2_image(data: &[u8]) -> Result<Image> {
         .collect();
 
     for (mip_idx, level) in reader.levels().enumerate() {
+        let level_data = decompress_level(
+            supercompression,
+            level.data,
+            level.uncompressed_byte_length,
+            mip_idx,
+        )?;
+
         let expected_slice_size = mip_slice_sizes[mip_idx];
         let mip_w = (header.pixel_width >> mip_idx).max(1);
         let mip_h = (header.pixel_height >> mip_idx).max(1);
@@ -60,16 +64,16 @@ pub fn decode_ktx2_image(data: &[u8]) -> Result<Image> {
             let offset = slice_idx * expected_slice_size;
             let end = offset + expected_slice_size;
 
-            if end > level.data.len() {
+            if end > level_data.len() {
                 return Err(Error::InputDecoding(format!(
                     "KTX2 level {mip_idx} slice {slice_idx}: expected {expected_slice_size} bytes \
                      at offset {offset}, but level data is only {} bytes",
-                    level.data.len(),
+                    level_data.len(),
                 )));
             }
 
             slice_surfaces.push(Surface {
-                data: level.data[offset..end].to_vec(),
+                data: level_data[offset..end].to_vec(),
                 width: mip_w,
                 height: mip_h,
                 stride,
@@ -94,6 +98,41 @@ pub fn decode_ktx2_image(data: &[u8]) -> Result<Image> {
         surfaces,
         is_cubemap,
     })
+}
+
+/// Decompress a single mip level's data according to the supercompression scheme.
+fn decompress_level<'a>(
+    scheme: Option<ktx2::SupercompressionScheme>,
+    data: &'a [u8],
+    uncompressed_size: u64,
+    level_idx: usize,
+) -> Result<Cow<'a, [u8]>> {
+    let Some(scheme) = scheme else {
+        return Ok(Cow::Borrowed(data));
+    };
+
+    if scheme == ktx2::SupercompressionScheme::Zstandard {
+        profiling::scope!("decompress_zstd");
+        let decompressed =
+            zstd::bulk::decompress(data, uncompressed_size as usize).map_err(|e| {
+                Error::InputDecoding(format!(
+                    "zstd decompression failed at level {level_idx}: {e}"
+                ))
+            })?;
+        Ok(Cow::Owned(decompressed))
+    } else if scheme == ktx2::SupercompressionScheme::ZLIB {
+        profiling::scope!("decompress_zlib");
+        let decompressed = miniz_oxide::inflate::decompress_to_vec_zlib(data).map_err(|e| {
+            Error::InputDecoding(format!(
+                "zlib decompression failed at level {level_idx}: {e:?}"
+            ))
+        })?;
+        Ok(Cow::Owned(decompressed))
+    } else {
+        Err(Error::InputDecoding(format!(
+            "unsupported KTX2 supercompression scheme: {scheme:?}"
+        )))
+    }
 }
 
 /// Compute the byte size of one slice (one layer×face) at each mip level.
@@ -164,7 +203,7 @@ mod tests {
             is_cubemap: false,
         };
 
-        let encoded = encode_ktx2_image(&original).unwrap();
+        let encoded = encode_ktx2_image(&original, None).unwrap();
         let decoded = decode_ktx2_image(&encoded).unwrap();
 
         assert_eq!(decoded.surfaces.len(), 1);
@@ -213,7 +252,7 @@ mod tests {
             is_cubemap: false,
         };
 
-        let encoded = encode_ktx2_image(&original).unwrap();
+        let encoded = encode_ktx2_image(&original, None).unwrap();
         let decoded = decode_ktx2_image(&encoded).unwrap();
 
         assert_eq!(decoded.surfaces.len(), 1);
@@ -239,7 +278,7 @@ mod tests {
             is_cubemap: false,
         };
 
-        let encoded = encode_ktx2_image(&original).unwrap();
+        let encoded = encode_ktx2_image(&original, None).unwrap();
         let decoded = decode_ktx2_image(&encoded).unwrap();
 
         assert_eq!(decoded.surfaces[0][0].format, ktx2::Format::BC7_UNORM_BLOCK);
@@ -269,7 +308,7 @@ mod tests {
             is_cubemap: true,
         };
 
-        let encoded = encode_ktx2_image(&original).unwrap();
+        let encoded = encode_ktx2_image(&original, None).unwrap();
         let decoded = decode_ktx2_image(&encoded).unwrap();
 
         assert!(decoded.is_cubemap);
@@ -295,7 +334,7 @@ mod tests {
             is_cubemap: false,
         };
 
-        let encoded = encode_ktx2_image(&original).unwrap();
+        let encoded = encode_ktx2_image(&original, None).unwrap();
         let decoded = decode_ktx2_image(&encoded).unwrap();
         assert_eq!(decoded.surfaces[0][0].alpha, AlphaMode::Premultiplied);
     }

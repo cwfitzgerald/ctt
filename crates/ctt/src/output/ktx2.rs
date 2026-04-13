@@ -1,6 +1,7 @@
 use ktx2::dfd;
 
 use crate::alpha::AlphaMode;
+use crate::convert::Ktx2Supercompression;
 use crate::error::{Error, Result};
 use crate::surface::Image;
 use crate::vk_format::FormatExt as _;
@@ -8,8 +9,12 @@ use crate::vk_format::FormatExt as _;
 /// Encode an [`Image`] as a KTX2 file.
 ///
 /// Uses the new `ktx2` crate APIs for header serialization, DFD generation,
-/// and level index construction.
-pub fn encode_ktx2_image(image: &Image) -> Result<Vec<u8>> {
+/// and level index construction. When `supercompression` is `Some`, each mip
+/// level is compressed independently per the KTX2 spec.
+pub fn encode_ktx2_image(
+    image: &Image,
+    supercompression: Option<Ktx2Supercompression>,
+) -> Result<Vec<u8>> {
     let first = &image.surfaces[0][0];
     let vk_format = first.format.denormalize(first.color_space);
 
@@ -49,6 +54,29 @@ pub fn encode_ktx2_image(image: &Image) -> Result<Vec<u8>> {
         level_data.push(mip_data);
     }
 
+    // Record uncompressed sizes before (optional) compression.
+    let uncompressed_sizes: Vec<u64> = level_data.iter().map(|d| d.len() as u64).collect();
+
+    // Compress level data if supercompression is requested.
+    let supercompression_scheme = match supercompression {
+        Some(Ktx2Supercompression::Zstd { level }) => {
+            for data in &mut level_data {
+                profiling::scope!("supercompress_zstd");
+                *data = zstd::bulk::compress(data, level)
+                    .map_err(|e| Error::OutputEncoding(format!("zstd compression failed: {e}")))?;
+            }
+            Some(ktx2::SupercompressionScheme::Zstandard)
+        }
+        Some(Ktx2Supercompression::Zlib { level }) => {
+            for data in &mut level_data {
+                profiling::scope!("supercompress_zlib");
+                *data = miniz_oxide::deflate::compress_to_vec_zlib(data, level);
+            }
+            Some(ktx2::SupercompressionScheme::ZLIB)
+        }
+        None => None,
+    };
+
     // bytes_planes[0] is the texel block size: bytes per block for compressed
     // formats, bytes per pixel for uncompressed.
     let texel_block_size = basic_dfd.bytes_planes[0] as u32;
@@ -67,8 +95,13 @@ pub fn encode_ktx2_image(image: &Image) -> Result<Vec<u8>> {
     let kvd_offset = dfd_offset + dfd_total_size;
     let after_kvd = kvd_offset + kvd_bytes.len();
 
-    // Level data must be aligned to lcm(texel_block_size, 4) per the spec.
-    let alignment = lcm(texel_block_size, 4) as usize;
+    // Per the KTX2 spec: alignment is 1 for supercompressed data,
+    // lcm(texel_block_size, 4) otherwise.
+    let alignment = if supercompression.is_some() {
+        1usize
+    } else {
+        lcm(texel_block_size, 4) as usize
+    };
     let data_start = align_up(after_kvd, alignment);
 
     // KTX2 spec requires level data stored smallest-to-largest (smallest mip
@@ -88,7 +121,7 @@ pub fn encode_ktx2_image(image: &Image) -> Result<Vec<u8>> {
         level_indices[i] = ktx2::LevelIndex {
             byte_offset: current_offset as u64,
             byte_length: len as u64,
-            uncompressed_byte_length: len as u64,
+            uncompressed_byte_length: uncompressed_sizes[i],
         };
         current_offset = align_up(current_offset + len, alignment);
     }
@@ -111,7 +144,7 @@ pub fn encode_ktx2_image(image: &Image) -> Result<Vec<u8>> {
         layer_count,
         face_count,
         level_count,
-        supercompression_scheme: None,
+        supercompression_scheme,
         index: ktx2::Index {
             dfd_byte_offset: dfd_offset as u32,
             dfd_byte_length: dfd_total_size as u32,
@@ -217,7 +250,7 @@ mod tests {
     #[test]
     fn roundtrip_rgba8_srgb() {
         let image = make_test_image(F::R8G8B8A8_UNORM, ColorSpace::Srgb, AlphaMode::Straight);
-        let bytes = encode_ktx2_image(&image).unwrap();
+        let bytes = encode_ktx2_image(&image, None).unwrap();
         let reader = ktx2::Reader::new(&bytes[..]).expect("valid KTX2");
         let header = reader.header();
         assert_eq!(header.format, Some(F::R8G8B8A8_SRGB));
@@ -248,7 +281,7 @@ mod tests {
             }]],
             is_cubemap: false,
         };
-        let bytes = encode_ktx2_image(&image).unwrap();
+        let bytes = encode_ktx2_image(&image, None).unwrap();
         let reader = ktx2::Reader::new(&bytes[..]).expect("valid KTX2");
         let header = reader.header();
         assert_eq!(header.format, Some(F::BC7_UNORM_BLOCK));
@@ -267,7 +300,7 @@ mod tests {
             ColorSpace::Linear,
             AlphaMode::Premultiplied,
         );
-        let bytes = encode_ktx2_image(&image).unwrap();
+        let bytes = encode_ktx2_image(&image, None).unwrap();
         let reader = ktx2::Reader::new(&bytes[..]).expect("valid KTX2");
         assert_eq!(reader.is_alpha_premultiplied(), Some(true));
     }
@@ -275,7 +308,7 @@ mod tests {
     #[test]
     fn straight_alpha_flag() {
         let image = make_test_image(F::R8G8B8A8_UNORM, ColorSpace::Linear, AlphaMode::Straight);
-        let bytes = encode_ktx2_image(&image).unwrap();
+        let bytes = encode_ktx2_image(&image, None).unwrap();
         let reader = ktx2::Reader::new(&bytes[..]).expect("valid KTX2");
         assert_eq!(reader.is_alpha_premultiplied(), Some(false));
     }
@@ -295,7 +328,7 @@ mod tests {
             }]],
             is_cubemap: false,
         };
-        let bytes = encode_ktx2_image(&image).unwrap();
+        let bytes = encode_ktx2_image(&image, None).unwrap();
         let reader = ktx2::Reader::new(&bytes[..]).expect("valid KTX2");
         let levels: Vec<_> = reader.levels().collect();
         assert_eq!(levels.len(), 1);
@@ -340,7 +373,7 @@ mod tests {
             ]],
             is_cubemap: false,
         };
-        let bytes = encode_ktx2_image(&image).unwrap();
+        let bytes = encode_ktx2_image(&image, None).unwrap();
         let reader = ktx2::Reader::new(&bytes[..]).expect("valid KTX2");
         assert_eq!(reader.header().level_count, 3);
 

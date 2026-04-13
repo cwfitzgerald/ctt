@@ -13,7 +13,7 @@ use crate::alpha::AlphaMode;
 use crate::encoders::{EncoderRegistry, EncoderSettings, Quality};
 use crate::error::{Error, Result};
 use crate::format::TargetFormat;
-use crate::pipeline::{AssemblyNode, InputBranch, InputNode, OutputNode, Pipeline, PipelineOutput};
+use crate::pipeline::{AssemblyNode, InputBranch, InputNode, Pipeline, PipelineOutput};
 use crate::surface::{ColorSpace, Image};
 use crate::transforms::Transform;
 use crate::transforms::compress::CompressTransform;
@@ -25,17 +25,47 @@ use crate::transforms::swizzle::{Swizzle, SwizzleTransform};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Container {
     Dds,
-    Ktx2,
+    Ktx2(Option<Ktx2Supercompression>),
     /// Return the processed [`Image`] directly, without encoding into a file format.
     Raw,
 }
 
-/// The result of a [`convert`] call.
-pub enum ConvertOutput {
-    /// Encoded file bytes (DDS or KTX2).
-    Encoded(Vec<u8>),
-    /// Raw processed image (when [`Container::Raw`] is used).
-    Raw(Image),
+/// Supercompression to apply when writing KTX2 files.
+///
+/// Each mip level is compressed independently per the KTX2 spec.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Ktx2Supercompression {
+    /// Zstandard compression. `level` is passed directly to the `zstd` crate.
+    /// Valid range: negative values (fast mode) through 22 (maximum compression).
+    /// Level 0 is a special sentinel that maps to the library default (currently 3).
+    Zstd { level: i32 },
+    /// ZLIB compression (deflate with zlib framing).
+    /// Valid range: 1 (fastest) through 10 (maximum compression). 0 means no
+    /// compression (stored). The conventional default is 6.
+    Zlib { level: u8 },
+}
+
+impl Container {
+    /// KTX2 without supercompression.
+    pub fn ktx2() -> Self {
+        Container::Ktx2(None)
+    }
+
+    /// KTX2 with zstd supercompression at the given level.
+    ///
+    /// Valid range: negative values (fast mode) through 22 (maximum compression).
+    /// Pass 0 to use the zstd library's default compression level (currently 3).
+    pub fn ktx2_zstd(level: i32) -> Self {
+        Container::Ktx2(Some(Ktx2Supercompression::Zstd { level }))
+    }
+
+    /// KTX2 with zlib supercompression at the given level.
+    ///
+    /// Valid range: 1 (fastest) through 10 (maximum compression). 0 means no
+    /// compression (stored). The conventional default is 6.
+    pub fn ktx2_zlib(level: u8) -> Self {
+        Container::Ktx2(Some(Ktx2Supercompression::Zlib { level }))
+    }
 }
 
 /// Settings for the high-level [`convert`] function.
@@ -50,7 +80,7 @@ pub enum ConvertOutput {
 ///         encoder_name: None,
 ///         format: Format::BC7_UNORM_BLOCK,
 ///     }),
-///     container: Container::Ktx2,
+///     container: Container::ktx2(),
 ///     ..Default::default()
 /// })?;
 /// ```
@@ -102,7 +132,7 @@ impl Default for ConvertSettings {
     fn default() -> Self {
         Self {
             format: None,
-            container: Container::Ktx2,
+            container: Container::Ktx2(None),
             quality: Quality::default(),
             output_color_space: None,
             output_alpha: None,
@@ -120,22 +150,16 @@ impl Default for ConvertSettings {
 /// Convert an image using a simple, CLI-like interface.
 ///
 /// Builds and executes a [`Pipeline`](crate::pipeline::Pipeline) internally based on
-/// the given settings. Returns [`ConvertOutput::Encoded`] for DDS/KTX2 containers,
-/// or [`ConvertOutput::Raw`] when using [`Container::Raw`].
+/// the given settings. Returns [`PipelineOutput::Encoded`] for DDS/KTX2 containers,
+/// or [`PipelineOutput::Raw`] when using [`Container::Raw`].
 ///
 /// The input [`Image`] should already be fully assembled (including cubemap layers
 /// or array layers). Use [`split_cubemap`](crate::split_cubemap) to prepare
 /// cubemap inputs before calling this function.
-pub fn convert(image: Image, settings: ConvertSettings) -> Result<ConvertOutput> {
+pub fn convert(image: Image, settings: ConvertSettings) -> Result<PipelineOutput> {
     let registry = settings
         .registry
         .unwrap_or_else(|| Arc::new(EncoderRegistry::default_registry()));
-
-    let output_node = match settings.container {
-        Container::Dds => OutputNode::Dds,
-        Container::Ktx2 => OutputNode::Ktx2,
-        Container::Raw => OutputNode::Raw,
-    };
 
     // Build transforms.
     let mut transforms: Vec<Box<dyn Transform>> = Vec::new();
@@ -196,7 +220,7 @@ pub fn convert(image: Image, settings: ConvertSettings) -> Result<ConvertOutput>
         }],
         assembly: AssemblyNode::Identity,
         transforms,
-        output: output_node,
+        container: settings.container,
         allow_lossy_intermediates: settings.allow_lossy,
     };
 
@@ -205,8 +229,5 @@ pub fn convert(image: Image, settings: ConvertSettings) -> Result<ConvertOutput>
         Error::UnsupportedFormat(messages.join("; "))
     })?;
 
-    match resolved.execute()? {
-        PipelineOutput::Encoded(bytes) => Ok(ConvertOutput::Encoded(bytes)),
-        PipelineOutput::Raw(image) => Ok(ConvertOutput::Raw(image)),
-    }
+    resolved.execute()
 }

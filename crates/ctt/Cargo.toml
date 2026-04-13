@@ -43,8 +43,10 @@ half = { workspace = true }
 image = { workspace = true }
 ktx2 = { workspace = true }
 log = { workspace = true }
+miniz_oxide = { workspace = true }
 profiling = { workspace = true }
 thiserror = { workspace = true }
+zstd = { workspace = true }
 
 [lints]
 workspace = true

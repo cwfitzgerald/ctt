@@ -28,7 +28,7 @@
 //!         encoder_name: None,
 //!         format: Format::BC7_UNORM_BLOCK,
 //!     }),
-//!     container: Container::Ktx2,
+//!     container: Container::ktx2(),
 //!     ..Default::default()
 //! })?;
 //! ```
@@ -48,10 +48,11 @@
 pub use ktx2::Format;
 
 pub use alpha::AlphaMode;
-pub use convert::{Container, ConvertOutput, ConvertSettings, convert};
+pub use convert::{Container, ConvertSettings, Ktx2Supercompression, convert};
 pub use cubemap::{CubemapInput, split_cubemap};
 pub use error::{Error, Result};
 pub use format::{TargetFormat, format_short_name, parse_format};
+pub use pipeline::PipelineOutput;
 pub use quality::Quality;
 pub use surface::{ColorSpace, Image, Surface};
 pub use transforms::mipmap::MipmapFilter;

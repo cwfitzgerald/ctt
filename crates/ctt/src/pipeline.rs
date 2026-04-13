@@ -1,4 +1,5 @@
 use crate::conversion::{ConversionGraph, FormatState, build_default_graph, check_lossless};
+use crate::convert::Container;
 use crate::error::{Error, Result};
 use crate::surface::Image;
 use crate::transforms::Transform;
@@ -21,15 +22,6 @@ pub enum AssemblyNode {
     Array,
 }
 
-/// Output format.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum OutputNode {
-    Dds,
-    Ktx2,
-    /// Return the Image directly (for library consumers / JIT compression).
-    Raw,
-}
-
 /// A single input branch with its own pre-assembly transform chain.
 pub struct InputBranch {
     pub input: InputNode,
@@ -41,7 +33,7 @@ pub struct Pipeline {
     pub inputs: Vec<InputBranch>,
     pub assembly: AssemblyNode,
     pub transforms: Vec<Box<dyn Transform>>,
-    pub output: OutputNode,
+    pub container: Container,
     /// If `false` (the default), auto-inserted format conversions that lose
     /// precision will produce errors during [`Pipeline::resolve`]. Set to `true`
     /// to suppress these errors.
@@ -55,7 +47,7 @@ pub struct ResolvedPipeline {
     inputs: Vec<ResolvedBranch>,
     assembly: AssemblyNode,
     transforms: Vec<Box<dyn Transform>>,
-    output: OutputNode,
+    container: Container,
 }
 
 struct ResolvedBranch {
@@ -67,7 +59,7 @@ struct ResolvedBranch {
 pub enum PipelineOutput {
     /// Encoded file bytes (DDS or KTX2).
     Encoded(Vec<u8>),
-    /// Raw image (for OutputNode::Raw).
+    /// Raw image (for [`Container::Raw`]).
     Raw(Image),
 }
 
@@ -143,7 +135,7 @@ impl Pipeline {
             inputs: resolved_inputs,
             assembly: self.assembly,
             transforms: resolved_transforms,
-            output: self.output,
+            container: self.container,
         })
     }
 }
@@ -200,18 +192,18 @@ impl ResolvedPipeline {
         }
 
         // Output.
-        match self.output {
-            OutputNode::Dds => {
+        match self.container {
+            Container::Dds => {
                 profiling::scope!("encode_dds");
                 let bytes = crate::output::dds::encode_dds_image(&image)?;
                 Ok(PipelineOutput::Encoded(bytes))
             }
-            OutputNode::Ktx2 => {
+            Container::Ktx2(supercompression) => {
                 profiling::scope!("encode_ktx2");
-                let bytes = crate::output::ktx2::encode_ktx2_image(&image)?;
+                let bytes = crate::output::ktx2::encode_ktx2_image(&image, supercompression)?;
                 Ok(PipelineOutput::Encoded(bytes))
             }
-            OutputNode::Raw => Ok(PipelineOutput::Raw(image)),
+            Container::Raw => Ok(PipelineOutput::Raw(image)),
         }
     }
 }
@@ -403,7 +395,7 @@ mod tests {
             }],
             assembly: AssemblyNode::Identity,
             transforms: Vec::new(),
-            output: OutputNode::Raw,
+            container: Container::Raw,
             allow_lossy_intermediates: false,
         };
 
@@ -424,7 +416,7 @@ mod tests {
             inputs: Vec::new(),
             assembly: AssemblyNode::Identity,
             transforms: Vec::new(),
-            output: OutputNode::Raw,
+            container: Container::Raw,
             allow_lossy_intermediates: false,
         };
 
