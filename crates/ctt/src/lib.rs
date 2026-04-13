@@ -80,6 +80,7 @@ mod convert;
 mod cubemap;
 mod error;
 mod format;
+pub mod input;
 pub(crate) mod output;
 mod quality;
 #[allow(dead_code)]

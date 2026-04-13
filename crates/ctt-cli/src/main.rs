@@ -7,6 +7,7 @@ use std::sync::Arc;
 use clap::Parser;
 
 use ctt::encoders::EncoderRegistry;
+use ctt::input::{InputOverrides, decode_container};
 use ctt::{
     AlphaMode, ColorSpace, Container, ConvertOutput, ConvertSettings, CubemapInput, Error, Format,
     FormatExt, Image, MipmapFilter, Quality, Surface, Swizzle, SwizzleChannel, format_short_name,
@@ -59,25 +60,23 @@ fn run(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
 
     let input_color_space = map_color_space(args.input_color_space);
     let input_alpha = map_alpha_mode(args.input_alpha);
+    let overrides = InputOverrides {
+        color_space: Some(input_color_space),
+        alpha: Some(input_alpha),
+    };
 
     // Load input images.
     log::info!("Loading {} input image(s)", args.input.len());
-    let surfaces = load_images(&args.input, input_color_space, input_alpha)?;
+    let images = load_images(&args.input, overrides, input_color_space, input_alpha)?;
 
     // Assemble the image (cubemap, array, or single).
     let image = if args.cubemap {
         log::info!("Cubemap mode, layout: {:?}", args.cubemap_layout);
-        build_cubemap_image(surfaces, args.cubemap_layout)?
-    } else if surfaces.len() == 1 {
-        Image {
-            surfaces: vec![vec![surfaces.into_iter().next().unwrap()]],
-            is_cubemap: false,
-        }
+        build_cubemap_image(images, args.cubemap_layout)?
+    } else if images.len() == 1 {
+        images.into_iter().next().unwrap()
     } else {
-        Image {
-            surfaces: surfaces.into_iter().map(|s| vec![s]).collect(),
-            is_cubemap: false,
-        }
+        assemble_array(images)?
     };
 
     let container = resolve_container(args.container, output_path)?;
@@ -228,191 +227,299 @@ fn print_encoder_table(registry: &EncoderRegistry) {
 
 fn load_images(
     paths: &[std::path::PathBuf],
+    overrides: InputOverrides,
     color_space: ColorSpace,
     alpha: AlphaMode,
-) -> Result<Vec<Surface>, Box<dyn std::error::Error>> {
+) -> Result<Vec<Image>, Box<dyn std::error::Error>> {
     profiling::scope!("load_images");
-    let mut surfaces = Vec::with_capacity(paths.len());
+    let mut images = Vec::with_capacity(paths.len());
     for path in paths {
         profiling::scope!("load image", &path.display().to_string());
-        let img = image::open(path)?;
+        let data = fs::read(path)?;
 
-        let surface = match img {
-            image::DynamicImage::ImageLuma8(buf) => {
-                let (width, height) = buf.dimensions();
-                Surface {
-                    data: buf.into_raw(),
-                    width,
-                    height,
-                    stride: width,
-                    format: Format::R8_UNORM,
-                    color_space,
-                    alpha,
-                }
-            }
-            image::DynamicImage::ImageLumaA8(buf) => {
-                let (width, height) = buf.dimensions();
-                Surface {
-                    data: buf.into_raw(),
-                    width,
-                    height,
-                    stride: width * 2,
-                    format: Format::R8G8_UNORM,
-                    color_space,
-                    alpha,
-                }
-            }
-            image::DynamicImage::ImageRgb8(buf) => {
-                let (width, height) = buf.dimensions();
-                Surface {
-                    data: buf.into_raw(),
-                    width,
-                    height,
-                    stride: width * 3,
-                    format: Format::R8G8B8_UNORM,
-                    color_space,
-                    alpha,
-                }
-            }
-            image::DynamicImage::ImageRgba8(buf) => {
-                let (width, height) = buf.dimensions();
-                Surface {
-                    data: buf.into_raw(),
-                    width,
-                    height,
-                    stride: width * 4,
-                    format: Format::R8G8B8A8_UNORM,
-                    color_space,
-                    alpha,
-                }
-            }
-            image::DynamicImage::ImageLuma16(buf) => {
-                let (width, height) = buf.dimensions();
-                Surface {
-                    data: bytemuck::cast_slice(buf.as_raw()).to_vec(),
-                    width,
-                    height,
-                    stride: width * 2,
-                    format: Format::R16_UNORM,
-                    color_space,
-                    alpha,
-                }
-            }
-            image::DynamicImage::ImageLumaA16(buf) => {
-                let (width, height) = buf.dimensions();
-                Surface {
-                    data: bytemuck::cast_slice(buf.as_raw()).to_vec(),
-                    width,
-                    height,
-                    stride: width * 4,
-                    format: Format::R16G16_UNORM,
-                    color_space,
-                    alpha,
-                }
-            }
-            image::DynamicImage::ImageRgb16(buf) => {
-                let (width, height) = buf.dimensions();
-                Surface {
-                    data: bytemuck::cast_slice(buf.as_raw()).to_vec(),
-                    width,
-                    height,
-                    stride: width * 6,
-                    format: Format::R16G16B16_UNORM,
-                    color_space,
-                    alpha,
-                }
-            }
-            image::DynamicImage::ImageRgba16(buf) => {
-                let (width, height) = buf.dimensions();
-                Surface {
-                    data: bytemuck::cast_slice(buf.as_raw()).to_vec(),
-                    width,
-                    height,
-                    stride: width * 8,
-                    format: Format::R16G16B16A16_UNORM,
-                    color_space,
-                    alpha,
-                }
-            }
-            image::DynamicImage::ImageRgb32F(buf) => {
-                let (width, height) = buf.dimensions();
-                Surface {
-                    data: bytemuck::cast_slice(buf.as_raw()).to_vec(),
-                    width,
-                    height,
-                    stride: width * 12,
-                    format: Format::R32G32B32_SFLOAT,
-                    color_space,
-                    alpha,
-                }
-            }
-            image::DynamicImage::ImageRgba32F(buf) => {
-                let (width, height) = buf.dimensions();
-                Surface {
-                    data: bytemuck::cast_slice(buf.as_raw()).to_vec(),
-                    width,
-                    height,
-                    stride: width * 16,
-                    format: Format::R32G32B32A32_SFLOAT,
-                    color_space,
-                    alpha,
-                }
-            }
-            // DynamicImage is #[non_exhaustive]
-            _ => {
-                let rgba = img.to_rgba8();
-                let (width, height) = rgba.dimensions();
-                Surface {
-                    data: rgba.into_raw(),
-                    width,
-                    height,
-                    stride: width * 4,
-                    format: Format::R8G8B8A8_UNORM,
-                    color_space,
-                    alpha,
-                }
+        // Try KTX2/DDS container decoding first (magic number detection).
+        let image = if let Some(img) = decode_container(&data, overrides)? {
+            img
+        } else {
+            // Fall back to standard image formats via the `image` crate.
+            let surface = load_standard_image(&data, color_space, alpha)?;
+            Image {
+                surfaces: vec![vec![surface]],
+                is_cubemap: false,
             }
         };
 
+        let first = &image.surfaces[0][0];
         log::debug!(
-            "Loaded {}: {}x{}, {:?}",
+            "Loaded {}: {}x{}, {:?}, {} layer(s), {} mip(s)",
             path.display(),
-            surface.width,
-            surface.height,
-            surface.format,
+            first.width,
+            first.height,
+            first.format,
+            image.surfaces.len(),
+            image.surfaces[0].len(),
         );
-        surfaces.push(surface);
+        images.push(image);
     }
-    Ok(surfaces)
+    Ok(images)
 }
 
-/// Build a cubemap Image from loaded surfaces.
-fn build_cubemap_image(
-    surfaces: Vec<Surface>,
-    layout_arg: CubemapLayoutArg,
-) -> Result<Image, Box<dyn std::error::Error>> {
-    let cubemap_input = if surfaces.len() == 6 {
-        CubemapInput::SeparateFaces(Box::new(
-            surfaces
-                .try_into()
-                .map_err(|_| Error::CubemapFaceCount(0))?,
-        ))
-    } else if surfaces.len() == 1 {
-        let surface = surfaces.into_iter().next().unwrap();
-        match layout_arg {
-            CubemapLayoutArg::Cross => CubemapInput::Cross(surface),
-            CubemapLayoutArg::Strip => CubemapInput::Strip(surface),
+/// Decode a standard image (PNG, JPEG, BMP, etc.) from raw bytes.
+fn load_standard_image(
+    data: &[u8],
+    color_space: ColorSpace,
+    alpha: AlphaMode,
+) -> Result<Surface, Box<dyn std::error::Error>> {
+    let img = image::load_from_memory(data)?;
+
+    let surface = match img {
+        image::DynamicImage::ImageLuma8(buf) => {
+            let (width, height) = buf.dimensions();
+            Surface {
+                data: buf.into_raw(),
+                width,
+                height,
+                stride: width,
+                format: Format::R8_UNORM,
+                color_space,
+                alpha,
+            }
         }
-    } else {
-        return Err(Error::CubemapFaceCount(surfaces.len()).into());
+        image::DynamicImage::ImageLumaA8(buf) => {
+            let (width, height) = buf.dimensions();
+            Surface {
+                data: buf.into_raw(),
+                width,
+                height,
+                stride: width * 2,
+                format: Format::R8G8_UNORM,
+                color_space,
+                alpha,
+            }
+        }
+        image::DynamicImage::ImageRgb8(buf) => {
+            let (width, height) = buf.dimensions();
+            Surface {
+                data: buf.into_raw(),
+                width,
+                height,
+                stride: width * 3,
+                format: Format::R8G8B8_UNORM,
+                color_space,
+                alpha,
+            }
+        }
+        image::DynamicImage::ImageRgba8(buf) => {
+            let (width, height) = buf.dimensions();
+            Surface {
+                data: buf.into_raw(),
+                width,
+                height,
+                stride: width * 4,
+                format: Format::R8G8B8A8_UNORM,
+                color_space,
+                alpha,
+            }
+        }
+        image::DynamicImage::ImageLuma16(buf) => {
+            let (width, height) = buf.dimensions();
+            Surface {
+                data: bytemuck::cast_slice(buf.as_raw()).to_vec(),
+                width,
+                height,
+                stride: width * 2,
+                format: Format::R16_UNORM,
+                color_space,
+                alpha,
+            }
+        }
+        image::DynamicImage::ImageLumaA16(buf) => {
+            let (width, height) = buf.dimensions();
+            Surface {
+                data: bytemuck::cast_slice(buf.as_raw()).to_vec(),
+                width,
+                height,
+                stride: width * 4,
+                format: Format::R16G16_UNORM,
+                color_space,
+                alpha,
+            }
+        }
+        image::DynamicImage::ImageRgb16(buf) => {
+            let (width, height) = buf.dimensions();
+            Surface {
+                data: bytemuck::cast_slice(buf.as_raw()).to_vec(),
+                width,
+                height,
+                stride: width * 6,
+                format: Format::R16G16B16_UNORM,
+                color_space,
+                alpha,
+            }
+        }
+        image::DynamicImage::ImageRgba16(buf) => {
+            let (width, height) = buf.dimensions();
+            Surface {
+                data: bytemuck::cast_slice(buf.as_raw()).to_vec(),
+                width,
+                height,
+                stride: width * 8,
+                format: Format::R16G16B16A16_UNORM,
+                color_space,
+                alpha,
+            }
+        }
+        image::DynamicImage::ImageRgb32F(buf) => {
+            let (width, height) = buf.dimensions();
+            Surface {
+                data: bytemuck::cast_slice(buf.as_raw()).to_vec(),
+                width,
+                height,
+                stride: width * 12,
+                format: Format::R32G32B32_SFLOAT,
+                color_space,
+                alpha,
+            }
+        }
+        image::DynamicImage::ImageRgba32F(buf) => {
+            let (width, height) = buf.dimensions();
+            Surface {
+                data: bytemuck::cast_slice(buf.as_raw()).to_vec(),
+                width,
+                height,
+                stride: width * 16,
+                format: Format::R32G32B32A32_SFLOAT,
+                color_space,
+                alpha,
+            }
+        }
+        // DynamicImage is #[non_exhaustive]
+        _ => {
+            let rgba = img.to_rgba8();
+            let (width, height) = rgba.dimensions();
+            Surface {
+                data: rgba.into_raw(),
+                width,
+                height,
+                stride: width * 4,
+                format: Format::R8G8B8A8_UNORM,
+                color_space,
+                alpha,
+            }
+        }
     };
 
-    let faces = split_cubemap(cubemap_input)?;
-    let surfaces = faces.into_iter().map(|face| vec![face]).collect();
+    Ok(surface)
+}
+
+/// Build a cubemap Image from loaded images.
+fn build_cubemap_image(
+    images: Vec<Image>,
+    layout_arg: CubemapLayoutArg,
+) -> Result<Image, Box<dyn std::error::Error>> {
+    // If we have a single input that is already a cubemap, pass it through.
+    if images.len() == 1 && images[0].is_cubemap {
+        return Ok(images.into_iter().next().unwrap());
+    }
+
+    // 6 inputs: each must be a single-layer image. Assemble faces, preserving mips.
+    if images.len() == 6 {
+        validate_mip_counts(&images)?;
+
+        // Each input should be a single layer (one face).
+        for (i, img) in images.iter().enumerate() {
+            if img.surfaces.len() != 1 {
+                return Err(Error::CubemapFaceCount(images.len()).into());
+            }
+            if img.is_cubemap {
+                return Err(Error::UnsupportedFormat(format!(
+                    "input {i} is already a cubemap; cannot assemble 6 cubemaps into a cubemap"
+                ))
+                .into());
+            }
+        }
+
+        let surfaces: Vec<Vec<Surface>> = images
+            .into_iter()
+            .map(|img| img.surfaces.into_iter().next().unwrap())
+            .collect();
+
+        return Ok(Image {
+            surfaces,
+            is_cubemap: true,
+        });
+    }
+
+    // 1 input (non-cubemap): split via cross/strip layout.
+    if images.len() == 1 {
+        let image = images.into_iter().next().unwrap();
+        if image.surfaces.len() != 1 || image.surfaces[0].len() != 1 {
+            return Err(Error::UnsupportedFormat(
+                "cubemap layout splitting requires a single-layer, single-mip input".into(),
+            )
+            .into());
+        }
+        let surface = image
+            .surfaces
+            .into_iter()
+            .next()
+            .unwrap()
+            .into_iter()
+            .next()
+            .unwrap();
+        let cubemap_input = match layout_arg {
+            CubemapLayoutArg::Cross => CubemapInput::Cross(surface),
+            CubemapLayoutArg::Strip => CubemapInput::Strip(surface),
+        };
+        let faces = split_cubemap(cubemap_input)?;
+        let surfaces = faces.into_iter().map(|face| vec![face]).collect();
+        return Ok(Image {
+            surfaces,
+            is_cubemap: true,
+        });
+    }
+
+    Err(Error::CubemapFaceCount(images.len()).into())
+}
+
+/// Assemble multiple images into an array texture.
+///
+/// Each image contributes its layers. All images must have the same mip count.
+fn assemble_array(images: Vec<Image>) -> Result<Image, Box<dyn std::error::Error>> {
+    validate_mip_counts(&images)?;
+
+    let mut surfaces = Vec::new();
+    for img in images {
+        surfaces.extend(img.surfaces);
+    }
+
     Ok(Image {
         surfaces,
-        is_cubemap: true,
+        is_cubemap: false,
     })
+}
+
+/// Validate that all images have the same number of mip levels per layer.
+fn validate_mip_counts(images: &[Image]) -> Result<(), Box<dyn std::error::Error>> {
+    if images.is_empty() {
+        return Ok(());
+    }
+
+    let expected_mips = images[0].surfaces[0].len();
+    for (i, img) in images.iter().enumerate() {
+        for (layer_idx, layer) in img.surfaces.iter().enumerate() {
+            if layer.len() != expected_mips {
+                return Err(Error::UnsupportedFormat(format!(
+                    "input {i} layer {layer_idx} has {} mip level(s), \
+                     but input 0 has {expected_mips}; all inputs must have the same mip count",
+                    layer.len(),
+                ))
+                .into());
+            }
+        }
+    }
+
+    Ok(())
 }
 
 fn map_quality(q: QualityArg) -> Quality {

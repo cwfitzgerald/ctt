@@ -23,6 +23,9 @@ pub enum Error {
     #[error("output encoding error: {0}")]
     OutputEncoding(String),
 
+    #[error("input decoding error: {0}")]
+    InputDecoding(String),
+
     #[error("data length mismatch: expected {expected}, got {actual}")]
     DataLengthMismatch { expected: usize, actual: usize },
 
