@@ -29,7 +29,7 @@ pub fn generate_bindings() -> Result<()> {
         let ispc_dir = workspace_root.join("crates/ctt-intel-texture-compressor/ispc");
         let out = workspace_root.join("crates/ctt-intel-texture-compressor/src/bindings/kernel.rs");
 
-        println!("[2/4] Generating kernel.rs");
+        println!("[3/4] Generating kernel.rs");
 
         println!("      Compiling kernel.ispc with ISPC...");
         let mut config = ispc_build_utils::Config::new();
@@ -86,9 +86,9 @@ pub fn generate_bindings() -> Result<()> {
     // bc7e.rs — compile bc7e.ispc to get the generated header, then bindgen
     {
         let ispc_dir = workspace_root.join("crates/ctt-bc7enc-rdo/ispc");
-        let out = workspace_root.join("crates/ctt-bc7enc-rdo/src/bindings/bc7e.rs");
+        let out = workspace_root.join("crates/ctt-bc7enc-rdo/src/bindings.rs");
 
-        println!("[3/4] Generating bc7e.rs");
+        println!("[4/4] Generating bc7e.rs");
 
         println!("      Compiling bc7e.ispc with ISPC...");
         let mut config = ispc_build_utils::Config::new();
@@ -209,7 +209,7 @@ fn generate_compressonator_bindings(workspace_root: &Path) -> Result<()> {
     let header = workspace_root.join("crates/ctt-compressonator/cpp/source/cmp_core.h");
     let out = workspace_root.join("crates/ctt-compressonator/src/bindings.rs");
 
-    println!("[4/4] Generating bindings.rs (compressonator)");
+    println!("[2/4] Generating bindings.rs (compressonator)");
 
     ensure!(
         header.exists(),

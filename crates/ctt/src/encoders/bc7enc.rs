@@ -1,5 +1,3 @@
-use ctt_bc7enc_rdo::bc7e;
-
 use crate::encoders::{Encoder, EncoderSettings, Quality};
 use crate::error::{Error, Result};
 use crate::surface::Surface;
@@ -51,12 +49,12 @@ impl Encoder for Bc7encEncoder {
             .unwrap_or(true);
 
         let params = match quality {
-            Quality::UltraFast => bc7e::params_init_ultrafast(perceptual),
-            Quality::VeryFast => bc7e::params_init_veryfast(perceptual),
-            Quality::Fast => bc7e::params_init_fast(perceptual),
-            Quality::Basic => bc7e::params_init_basic(perceptual),
-            Quality::Slow => bc7e::params_init_slow(perceptual),
-            Quality::VerySlow => bc7e::params_init_veryslow(perceptual),
+            Quality::UltraFast => ctt_bc7enc_rdo::params_init_ultrafast(perceptual),
+            Quality::VeryFast => ctt_bc7enc_rdo::params_init_veryfast(perceptual),
+            Quality::Fast => ctt_bc7enc_rdo::params_init_fast(perceptual),
+            Quality::Basic => ctt_bc7enc_rdo::params_init_basic(perceptual),
+            Quality::Slow => ctt_bc7enc_rdo::params_init_slow(perceptual),
+            Quality::VerySlow => ctt_bc7enc_rdo::params_init_veryslow(perceptual),
         };
 
         let pixels = surface.tile_to_blocks(4, 4);
@@ -66,7 +64,7 @@ impl Encoder for Bc7encEncoder {
             .div_ceil(4)
             .checked_mul(surface.height.div_ceil(4))
             .expect("block count overflow") as usize;
-        let compressed = bc7e::compress_blocks_alloc(num_blocks, pixels, &params);
+        let compressed = ctt_bc7enc_rdo::compress_blocks_alloc(num_blocks, pixels, &params);
         Ok(bytemuck::cast_slice(&compressed).to_vec())
     }
 }
