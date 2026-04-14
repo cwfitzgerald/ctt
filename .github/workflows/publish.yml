@@ -93,7 +93,7 @@ jobs:
           fi
 
       - name: Attest build provenance
-        uses: actions/attest-build-provenance@96b4a1ef7235a096b17240c259729fdd70c83d45 # v2
+        uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # v4
         with:
           subject-path: target/${{ matrix.target }}/release/ctt${{ contains(matrix.target, 'windows') && '.exe' || '' }}
 
