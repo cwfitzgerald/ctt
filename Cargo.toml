@@ -25,6 +25,7 @@ ctt-bc7enc-rdo = { path = "crates/ctt-bc7enc-rdo", version = "0.2", default-feat
 ctt-bc7enc-rdo-prebuilt = { path = "crates/ctt-bc7enc-rdo/prebuilt", version = "0.2", default-features = false }
 ctt-astcenc = { path = "crates/ctt-astcenc", version = "0.2", default-features = false }
 ctt-compressonator = { path = "crates/ctt-compressonator", version = "0.2", default-features = false }
+ctt-etcpak = { path = "crates/ctt-etcpak", version = "0.2", default-features = false }
 ispc-build-utils = { path = "crates/ispc-build-utils", version = "0.2", default-features = false }
 
 anyhow = "1"

@@ -59,6 +59,8 @@ impl EncoderRegistry {
         r.register(Box::new(self::bc7enc::Bc7encEncoder));
         #[cfg(feature = "encoder-intel")]
         r.register(Box::new(self::ispc::IspcEncoder));
+        #[cfg(feature = "encoder-etcpak")]
+        r.register(Box::new(self::etcpak::EtcpakEncoder));
         #[cfg(feature = "encoder-amd")]
         r.register(Box::new(self::compressonator::CompressonatorEncoder));
         #[cfg(feature = "encoder-astcenc")]
@@ -114,6 +116,9 @@ pub mod ispc;
 
 #[cfg(feature = "encoder-bc7enc")]
 pub mod bc7enc;
+
+#[cfg(feature = "encoder-etcpak")]
+pub mod etcpak;
 
 #[cfg(feature = "encoder-astcenc")]
 pub mod astcenc;

@@ -215,6 +215,15 @@ fn print_encoder_table(registry: &EncoderRegistry) {
                         | Format::BC6H_SFLOAT_BLOCK
                         | Format::BC7_UNORM_BLOCK
                         | Format::ETC2_R8G8B8_UNORM_BLOCK
+                        | Format::ETC2_R8G8B8_SRGB_BLOCK
+                        | Format::ETC2_R8G8B8A1_UNORM_BLOCK
+                        | Format::ETC2_R8G8B8A1_SRGB_BLOCK
+                        | Format::ETC2_R8G8B8A8_UNORM_BLOCK
+                        | Format::ETC2_R8G8B8A8_SRGB_BLOCK
+                        | Format::EAC_R11_UNORM_BLOCK
+                        | Format::EAC_R11_SNORM_BLOCK
+                        | Format::EAC_R11G11_UNORM_BLOCK
+                        | Format::EAC_R11G11_SNORM_BLOCK
                 );
 
                 if is_astc {
@@ -556,6 +565,12 @@ fn map_quality(q: QualityArg) -> Quality {
 fn build_encoder_settings(args: &Args) -> Option<Box<dyn ctt::encoders::EncoderSettings>> {
     if args.alpha {
         return Some(Box::new(ctt::encoders::ispc::IspcSettings { alpha: true }));
+    }
+    if args.dither || args.heuristics {
+        return Some(Box::new(ctt::encoders::etcpak::EtcpakSettings {
+            dither: args.dither,
+            use_heuristics: args.heuristics,
+        }));
     }
     None
 }

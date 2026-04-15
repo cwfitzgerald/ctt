@@ -64,6 +64,14 @@ pub struct Args {
     #[arg(long)]
     pub alpha: bool,
 
+    /// Enable dithering (for ETC1/BC1 via etcpak).
+    #[arg(long)]
+    pub dither: bool,
+
+    /// Enable heuristic-based fast mode selection (for ETC2 via etcpak).
+    #[arg(long)]
+    pub heuristics: bool,
+
     /// Allow lossy auto-inserted format conversions in the pipeline.
     ///
     /// By default, the resolver will error if an intermediate conversion loses

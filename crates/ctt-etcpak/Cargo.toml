@@ -1,0 +1,23 @@
+[package]
+name = "ctt-etcpak"
+version.workspace = true
+edition.workspace = true
+repository.workspace = true
+authors.workspace = true
+license = "(MIT OR Apache-2.0 OR Zlib) AND BSD-3-Clause"
+rust-version.workspace = true
+readme = "../../README.md"
+description = "Vendored etcpak bindings for ETC/EAC/BC texture compression and decompression"
+keywords = ["texture", "compression", "etc", "gpu"]
+categories = ["graphics", "compression"]
+build = "build.rs"
+links = "etcpak"
+
+[dependencies]
+paste = { workspace = true }
+
+[build-dependencies]
+cc = { workspace = true, features = ["parallel"] }
+
+[lints]
+workspace = true

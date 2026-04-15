@@ -395,6 +395,7 @@ dependencies = [
  "ctt-astcenc",
  "ctt-bc7enc-rdo",
  "ctt-compressonator",
+ "ctt-etcpak",
  "ctt-intel-texture-compressor",
  "ddsfile",
  "half",
@@ -449,6 +450,14 @@ version = "0.2.0"
 dependencies = [
  "cc",
  "thiserror",
+]
+
+[[package]]
+name = "ctt-etcpak"
+version = "0.2.0"
+dependencies = [
+ "cc",
+ "paste",
 ]
 
 [[package]]
