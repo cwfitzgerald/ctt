@@ -1,17 +1,20 @@
 # ctt
 
-A Rust library and CLI for GPU texture compression. ctt provides a unified interface over multiple encoder backends — feed it an image, pick a format, and it handles pixel conversion, compression, and container encoding.
+[![docs.rs](https://img.shields.io/docsrs/ctt)](https://docs.rs/ctt)
+
+A Rust library and CLI for GPU texture compression. ctt provides a unified interface over multiple encoder backends.
 
 ## Encoders
 
 ctt binds to established open-source compression libraries and exposes them through a common `Encoder` trait. Each backend is compiled as an optional feature and can be enabled independently.
 
-| Backend | Prefix | Feature | Formats | Description |
-|---------|--------|---------|---------|-------------|
-| [**bc7enc-rdo**](https://github.com/richgel999/bc7enc_rdo) | `bc7e_` | `encoder-bc7enc` | BC7 | Perceptual BC7 encoder with RDO support. |
-| [**Intel ISPC Texture Compressor**](https://github.com/GameTechDev/ISPCTextureCompressor) | `intel_` | `encoder-intel` | BC1, BC3, BC4, BC5, BC6H, BC7, ETC1 | SIMD-optimized BCn and ETC encoder. |
-| [**AMD Compressonator**](https://github.com/GPUOpen-Tools/compressonator) | `amd_` | `encoder-amd` | BC1, BC2, BC3, BC4, BC4S, BC5, BC5S, BC6H, BC6H_SF, BC7 | AMD's BCn encoder suite. |
-| [**astcenc**](https://github.com/ARM-software/astc-encoder) | `astcenc_` | `encoder-astcenc` | ASTC (all block sizes) | ARM ASTC encoder. |
+| Backend | Prefix | Feature | Description |
+|---------|--------|---------|-------------|
+| [**bc7enc-rdo**](https://github.com/richgel999/bc7enc_rdo) | `bc7e_` | `encoder-bc7enc` | Perceptual BC7 encoder with RDO support. |
+| [**Intel ISPC Texture Compressor**](https://github.com/GameTechDev/ISPCTextureCompressor) | `intel_` | `encoder-intel` | SIMD-optimized BCn and ETC encoder. |
+| [**etcpak**](https://github.com/wolfpld/etcpak) | `etcpak_` | `encoder-etcpak` | Fast ETC/EAC and BCn encoder. |
+| [**AMD Compressonator**](https://github.com/GPUOpen-Tools/compressonator) | `amd_` | `encoder-amd` | AMD's BCn encoder suite. |
+| [**astcenc**](https://github.com/ARM-software/astc-encoder) | `astcenc_` | `encoder-astcenc` | ARM ASTC encoder. |
 
 Encoders are listed in priority order — when multiple encoders support the same format (e.g. BC7), the first one in the table is used. To override this, prefix the format with an encoder name (e.g. `intel_bc7`).
 
@@ -23,45 +26,41 @@ Encoder    Priority     Formats
 -------    --------     -------
 bc7e       1            bc7
 intel      2            bc1, bc3, bc4, bc5, bc6h, bc7, etc1
-amd        3            bc1, bc2, bc3, bc4, bc4s, bc5, bc5s, bc6h, bc6h_sf, bc7
-astcenc    4            astc
+etcpak     3            etc1, etc2_rgba, eac_r, eac_rg, bc1, bc3, bc4, bc5
+amd        4            bc1, bc2, bc3, bc4, bc4s, bc5, bc5s, bc6h, bc6hsf, bc7
+astcenc    5            astc
 ```
 
 ## Formats
 
-| Format | Description |
-|--------|-------------|
-| BC1 | RGB with 1-bit alpha. Opaque textures and simple cutouts. |
-| BC2 | RGBA with explicit 4-bit alpha. Sharp alpha transitions. |
-| BC3 | RGBA with interpolated alpha. General-purpose transparency. |
-| BC4 | Single channel. Grayscale, heightmaps, roughness. |
-| BC4S | Single channel, signed. |
-| BC5 | Two channels. Normal maps. |
-| BC5S | Two channels, signed. |
-| BC6H | HDR half-float RGB. Environment maps, HDR textures. |
-| BC6H_SF | HDR signed float RGB. |
-| BC7 | High-quality RGBA. Best LDR quality, supports alpha. |
-| ETC1 | Mobile-friendly RGB. |
-| ASTC | Adaptive scalable texture compression. Variable block sizes (4x4 to 12x12). |
+| Format | CLI name | Description |
+|--------|----------|-------------|
+| BC1 | `bc1` | RGB with 1-bit alpha. Opaque textures and simple cutouts. |
+| BC2 | `bc2` | RGBA with explicit 4-bit alpha. Sharp alpha transitions. |
+| BC3 | `bc3` | RGBA with interpolated alpha. General-purpose transparency. |
+| BC4 | `bc4` | Single channel. Grayscale, heightmaps, roughness. |
+| BC4S | `bc4s` | Single channel, signed. |
+| BC5 | `bc5` | Two channels. Normal maps. |
+| BC5S | `bc5s` | Two channels, signed. |
+| BC6H | `bc6h` | HDR half-float RGB. Environment maps, HDR textures. |
+| BC6H SF | `bc6hsf` | HDR signed float RGB. |
+| BC7 | `bc7` | High-quality RGBA. Best LDR quality, supports alpha. |
+| ETC1 | `etc1` | Mobile-friendly RGB. |
+| ETC2 RGBA | `etc2_rgba` | Mobile-friendly RGBA. |
+| EAC R | `eac_r` | Single channel 11-bit. |
+| EAC RG | `eac_rg` | Two channel 11-bit. |
+| ASTC | `astc_WxH` | Adaptive scalable texture compression. Variable block sizes (4x4 to 12x12). |
 
 All formats support quality presets from `ultra-fast` to `very-slow` where the encoder supports them.
 
+Uncompressed formats are also supported using WebGPU names (e.g. `rgba8unorm`) or Vulkan names (e.g. `r8g8b8a8_unorm`).
+
 ## Output containers
 
-- **KTX2** (default) — Khronos cross-platform container. Supports all formats.
-- **DDS** — DirectX standard. Does not support ETC1.
+The container format is inferred from the output file extension (`.ktx2` or `.dds`), or can be set explicitly with `--container`.
 
-## Prebuilt binaries
-
-By default, ctt ships prebuilt ISPC static libraries for all supported platforms (linux, macOS, Windows; x86_64 and aarch64). A default build requires only a Rust toolchain and a C++ compiler.
-
-Every prebuilt binary has a [GitHub Artifact Attestation](https://docs.github.com/en/actions/security-for-github-actions/using-artifact-attestations/using-artifact-attestations-to-establish-provenance-for-builds) that cryptographically proves it was produced by this repository's CI. See [`docs/prebuilt-binaries.md`](docs/prebuilt-binaries.md) for full details on the build process, attestation guarantees, and how to verify them.
-
-To build from source instead (requires [`ispc.exe`](https://github.com/ispc/ispc/releases) on `PATH`):
-
-```sh
-cargo install ctt-cli --no-default-features --features ispc-build-from-source
-```
+- **KTX2** — Khronos cross-platform container. Supports all formats. Optional zstd or zlib supercompression.
+- **DDS** — DirectX standard. Does not support ETC/EAC or ASTC formats.
 
 ## Installation
 
@@ -73,17 +72,51 @@ cargo install ctt-cli
 cargo add ctt
 ```
 
-By default the library enables all encoders. To add a specific encoder:
+By default the library enables all encoders. To select specific encoders:
 
 ```sh
-cargo add ctt --features encoder-bc7enc
+cargo add ctt --no-default-features --features encoder-bc7enc,encoder-intel,ispc-prebuilt
 ```
+
+## Library usage
+
+The library API mirrors the CLI. Build a `Surface`, wrap it in an `Image`, and call `convert`:
+
+```rust
+use ctt::{convert, ConvertSettings, Container, TargetFormat, Format};
+use ctt::{Image, Surface, ColorSpace, AlphaMode};
+
+let surface = Surface {
+    data: pixel_bytes,
+    width: 512,
+    height: 512,
+    stride: 512 * 4,
+    format: Format::R8G8B8A8_UNORM,
+    color_space: ColorSpace::Srgb,
+    alpha: AlphaMode::Straight,
+};
+
+let image = Image { surfaces: vec![vec![surface]], is_cubemap: false };
+
+let ktx2_bytes = convert(image, ConvertSettings {
+    format: Some(TargetFormat::Compressed {
+        encoder_name: None,
+        format: Format::BC7_UNORM_BLOCK,
+    }),
+    container: Container::ktx2(),
+    ..Default::default()
+})?;
+```
+
+See the [API documentation](https://docs.rs/ctt) for the full `ConvertSettings` options and the lower-level pipeline API.
 
 ## CLI usage
 
 ```
-ctt <INPUT>... --output <PATH> --format <FORMAT> [OPTIONS]
+ctt <INPUT>... --output <PATH> [--format <FORMAT>] [OPTIONS]
 ```
+
+When `--format` is omitted the input format is preserved without compression.
 
 ### Examples
 
@@ -102,7 +135,7 @@ ctt diffuse.png -o diffuse.ktx2 -f intel_bc7
 Normal map to BC5 as DDS:
 
 ```sh
-ctt normal.png -o normal.dds -f bc5 -c dds --color-space linear
+ctt normal.png -o normal.dds -f bc5 --input-color-space linear
 ```
 
 High quality:
@@ -123,146 +156,41 @@ Cubemap from six separate faces:
 ctt px.png nx.png py.png ny.png pz.png nz.png -o skybox.ktx2 -f bc7 --cubemap
 ```
 
+Generate mipmaps:
+
+```sh
+ctt diffuse.png -o diffuse.ktx2 -f bc7 --mipmap
+```
+
+With zstd supercompression:
+
+```sh
+ctt diffuse.png -o diffuse.ktx2 -f bc7 --zstd
+```
+
 Swizzle channels:
 
 ```sh
 ctt input.png -o output.ktx2 -f bc7 --swizzle bgra
 ```
 
-### Options
-
-```
-Options:
-  -o, --output <OUTPUT>
-          Output file path
-
-  -f, --format <FORMAT>
-          Compression format. Bare (bc1, bc7) or prefixed with encoder
-          (intel_bc7, bc7e_bc7)
-
-  -c, --container <CONTAINER>
-          Output container format
-
-          [default: ktx2]
-          [possible values: dds, ktx2]
-
-      --cubemap
-          Treat input as a cubemap
-
-      --cubemap-layout <CUBEMAP_LAYOUT>
-          Cubemap layout when using a single input image
-
-          [default: cross]
-          [possible values: cross, strip]
-
-      --swizzle <SWIZZLE>
-          Remap RGBA channels. 4 characters from: rgba01.
-
-          "bgra" = swap red/blue, "0r0g" = 2 channel normal map to BC3 packing
-          "rgb1" = force opaque, "r000" = ignore non-red channel.
-
-      --color-space <COLOR_SPACE>
-          Color space of the input
-
-          [default: srgb]
-          [possible values: srgb, linear]
-
-      --quality <QUALITY>
-          Compression quality preset
-
-          [default: basic]
-          [possible values: ultra-fast, very-fast, fast, basic, slow, very-slow]
-
-      --alpha
-          Encode alpha channel (for BC7)
-
-      --list-encoders
-          List available encoder backends and their supported formats
-
-  -v...
-          Increase logging verbosity (-v = debug, -vv = trace)
-
-  -h, --help
-          Print help
-
-  -V, --version
-          Print version
-```
-
-## Library usage
-
-```rust
-use std::fs;
-use ctt::config::{CompressConfig, OutputFormat};
-use ctt::encoder::Quality;
-use ctt::format::{ColorSpace, CompressedFormat, ChannelType, PixelComponents, PixelFormat};
-use ctt::image::{ImageLayout, RawImage};
-
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let img = image::open("diffuse.png")?.to_rgba8();
-    let (width, height) = img.dimensions();
-
-    let raw = RawImage {
-        data: img.into_raw(),
-        width,
-        height,
-        stride: width * 4,
-        pixel_format: PixelFormat {
-            components: PixelComponents::Rgba,
-            channel_type: ChannelType::U8,
-            color_space: ColorSpace::Srgb,
-        },
-    };
-
-    let layout = ImageLayout {
-        layers: vec![vec![raw]],
-        is_cubemap: false,
-    };
-
-    let config = CompressConfig {
-        format: CompressedFormat::Bc7,
-        output_format: OutputFormat::Ktx2,
-        swizzle: None,
-        color_space: ColorSpace::Srgb,
-        quality: Quality::Basic,
-        encoder_name: None,        // auto-select best encoder
-        encoder_settings: None,    // use encoder defaults
-    };
-
-    let output_bytes = ctt::pipeline::run(&config, layout)?;
-    fs::write("diffuse.ktx2", &output_bytes)?;
-
-    Ok(())
-}
-```
-
-### Custom encoder selection
-
-To force a specific encoder programmatically, set `encoder_name`:
-
-```rust
-let config = CompressConfig {
-    format: CompressedFormat::Bc7,
-    encoder_name: Some("intel".into()), // force Intel ISPC instead of bc7enc-rdo
-    // ...
-};
-```
-
-Or build your own registry with custom priority:
-
-```rust
-use ctt::encoder::EncoderRegistry;
-use ctt::encoders::ispc::IspcEncoder;
-
-let mut registry = EncoderRegistry::new();
-registry.register(Box::new(IspcEncoder)); // ISPC gets priority 1
-
-let output = ctt::pipeline::run_with_registry(&config, layout, &registry)?;
-```
+Run `ctt --help` for a full list of options.
 
 ## Minimum Supported Rust Version (MSRV)
 
 The MSRV is **1.85** (edition 2024). MSRV bumps are considered breaking changes.
+
+## Prebuilt binaries
+
+By default, ctt ships prebuilt ISPC static libraries for all supported platforms. A default build requires only a Rust toolchain and a C++ compiler.
+
+Every prebuilt binary has a [GitHub Artifact Attestation](https://docs.github.com/en/actions/security-for-github-actions/using-artifact-attestations/using-artifact-attestations-to-establish-provenance-for-builds) that cryptographically proves it was produced by this repository's CI. See [`docs/prebuilt-binaries.md`](docs/prebuilt-binaries.md) for full details on the build process, attestation guarantees, and how to verify them.
+
+To build from source instead (requires [`ispc.exe`](https://github.com/ispc/ispc/releases) on `PATH`):
+
+```sh
+cargo install ctt-cli --no-default-features --features ispc-build-from-source
+```
 
 ## License
 
