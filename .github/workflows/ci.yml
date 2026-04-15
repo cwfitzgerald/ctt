@@ -68,7 +68,7 @@ jobs:
           components: clippy
 
       - name: Install cargo-nextest
-        uses: taiki-e/install-action@6e4b50d359005dacdb018fa32c03bc35522c6616 # v2
+        uses: taiki-e/install-action@eea29cff9a2b68892c0845ae3e4f45fc47ee9354 # v2
         with:
           tool: cargo-nextest
 
@@ -170,7 +170,7 @@ jobs:
           version: ${{ env.CI_RUST_VERSION }}
 
       - name: Install cargo-deny
-        uses: taiki-e/install-action@6e4b50d359005dacdb018fa32c03bc35522c6616 # v2
+        uses: taiki-e/install-action@eea29cff9a2b68892c0845ae3e4f45fc47ee9354 # v2
         with:
           tool: cargo-deny
 
