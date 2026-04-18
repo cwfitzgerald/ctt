@@ -178,7 +178,7 @@ Run `ctt --help` for a full list of options.
 
 ## Minimum Supported Rust Version (MSRV)
 
-The MSRV is **1.85** (edition 2024). MSRV bumps are considered breaking changes.
+The MSRV is **1.88** (edition 2024). MSRV bumps are considered breaking changes.
 
 ## Prebuilt binaries
 

@@ -72,14 +72,6 @@ pub struct Args {
     #[arg(long)]
     pub heuristics: bool,
 
-    /// Allow lossy auto-inserted format conversions in the pipeline.
-    ///
-    /// By default, the resolver will error if an intermediate conversion loses
-    /// precision (e.g. f32 → u16 in a f32 → f32 pipeline). This flag suppresses
-    /// those errors.
-    #[arg(long)]
-    pub allow_lossy_intermediates: bool,
-
     /// List available encoder backends and their supported formats.
     #[arg(long)]
     pub list_encoders: bool,

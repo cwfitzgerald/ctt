@@ -116,7 +116,6 @@ fn run(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
         mipmap: args.mipmap,
         mipmap_count: args.mipmap_count,
         mipmap_filter: map_mipmap_filter(args.mipmap_filter),
-        allow_lossy: args.allow_lossy_intermediates,
         encoder_settings: build_encoder_settings(args),
         registry: Some(Arc::clone(&registry)),
     };

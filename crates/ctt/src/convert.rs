@@ -1,11 +1,4 @@
-//! High-level "CLI-like" conversion API.
-//!
-//! Most users don't need to build a [`Pipeline`](crate::pipeline::Pipeline) manually.
-//! Instead, pass an [`Image`] and [`ConvertSettings`] to [`convert`] and get encoded
-//! bytes back.
-//!
-//! For advanced use cases (custom transforms, multi-branch assembly, custom conversion
-//! graphs), use the [`pipeline`](crate::pipeline) module directly.
+//! High-level conversion entry point.
 
 use std::sync::Arc;
 
@@ -13,13 +6,12 @@ use crate::alpha::AlphaMode;
 use crate::encoders::{EncoderRegistry, EncoderSettings, Quality};
 use crate::error::{Error, Result};
 use crate::format::TargetFormat;
-use crate::pipeline::{AssemblyNode, InputBranch, InputNode, Pipeline, PipelineOutput};
+use crate::processing::{
+    self, Buffer, PipelineOutput, Swizzle, Variant, encode, load, mipmap, passthrough, store,
+    swizzle,
+};
 use crate::surface::{ColorSpace, Image};
-use crate::transforms::Transform;
-use crate::transforms::compress::CompressTransform;
-use crate::transforms::mipmap::{MipmapFilter, MipmapTransform};
-use crate::transforms::output_state::OutputStateTransform;
-use crate::transforms::swizzle::{Swizzle, SwizzleTransform};
+use crate::vk_format::FormatExt;
 
 /// Output container format.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -31,100 +23,39 @@ pub enum Container {
 }
 
 /// Supercompression to apply when writing KTX2 files.
-///
-/// Each mip level is compressed independently per the KTX2 spec.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Ktx2Supercompression {
     /// Zstandard compression. `level` is passed directly to the `zstd` crate.
-    /// Valid range: negative values (fast mode) through 22 (maximum compression).
-    /// Level 0 is a special sentinel that maps to the library default (currently 3).
     Zstd { level: i32 },
     /// ZLIB compression (deflate with zlib framing).
-    /// Valid range: 1 (fastest) through 10 (maximum compression). 0 means no
-    /// compression (stored). The conventional default is 6.
     Zlib { level: u8 },
 }
 
 impl Container {
-    /// KTX2 without supercompression.
     pub fn ktx2() -> Self {
         Container::Ktx2(None)
     }
-
-    /// KTX2 with zstd supercompression at the given level.
-    ///
-    /// Valid range: negative values (fast mode) through 22 (maximum compression).
-    /// Pass 0 to use the zstd library's default compression level (currently 3).
     pub fn ktx2_zstd(level: i32) -> Self {
         Container::Ktx2(Some(Ktx2Supercompression::Zstd { level }))
     }
-
-    /// KTX2 with zlib supercompression at the given level.
-    ///
-    /// Valid range: 1 (fastest) through 10 (maximum compression). 0 means no
-    /// compression (stored). The conventional default is 6.
     pub fn ktx2_zlib(level: u8) -> Self {
         Container::Ktx2(Some(Ktx2Supercompression::Zlib { level }))
     }
 }
 
 /// Settings for the high-level [`convert`] function.
-///
-/// Use [`Default::default()`] and override only the fields you care about:
-///
-/// ```ignore
-/// use ctt::{Format, Container, ConvertSettings, TargetFormat, convert};
-///
-/// let bytes = convert(image, ConvertSettings {
-///     format: Some(TargetFormat::Compressed {
-///         encoder_name: None,
-///         format: Format::BC7_UNORM_BLOCK,
-///     }),
-///     container: Container::ktx2(),
-///     ..Default::default()
-/// })?;
-/// ```
-///
-/// To parse a format from a string (e.g. `"bc7"`, `"intel_bc7"`, `"rgba8unorm"`),
-/// use [`parse_format`](crate::parse_format).
 pub struct ConvertSettings {
     /// Target format. If `None`, the input format is preserved without compression.
-    ///
-    /// Use [`parse_format`](crate::parse_format) to build this from a string,
-    /// or construct a [`TargetFormat`] directly.
     pub format: Option<TargetFormat>,
-
-    /// Output container format.
     pub container: Container,
-
-    /// Compression quality preset.
     pub quality: Quality,
-
-    /// Desired output color space. If `None`, matches the input.
     pub output_color_space: Option<ColorSpace>,
-
-    /// Desired output alpha mode. If `None`, matches the input.
     pub output_alpha: Option<AlphaMode>,
-
-    /// Channel swizzle pattern to apply before compression.
     pub swizzle: Option<Swizzle>,
-
-    /// Generate mipmaps.
     pub mipmap: bool,
-
-    /// Number of mip levels (including base). `None` = full chain down to 1x1.
     pub mipmap_count: Option<usize>,
-
-    /// Mipmap downsampling filter.
-    pub mipmap_filter: MipmapFilter,
-
-    /// Allow lossy auto-inserted format conversions in the pipeline.
-    pub allow_lossy: bool,
-
-    /// Encoder-specific settings (e.g., [`IspcSettings`](crate::encoders::ispc::IspcSettings)).
+    pub mipmap_filter: mipmap::MipmapFilter,
     pub encoder_settings: Option<Box<dyn EncoderSettings>>,
-
-    /// Encoder registry. If `None`, uses [`EncoderRegistry::default_registry`].
     pub registry: Option<Arc<EncoderRegistry>>,
 }
 
@@ -139,95 +70,533 @@ impl Default for ConvertSettings {
             swizzle: None,
             mipmap: false,
             mipmap_count: None,
-            mipmap_filter: MipmapFilter::default(),
-            allow_lossy: false,
+            mipmap_filter: mipmap::MipmapFilter::default(),
             encoder_settings: None,
             registry: None,
         }
     }
 }
 
-/// Convert an image using a simple, CLI-like interface.
+/// Convert an image.
 ///
-/// Builds and executes a [`Pipeline`](crate::pipeline::Pipeline) internally based on
-/// the given settings. Returns [`PipelineOutput::Encoded`] for DDS/KTX2 containers,
-/// or [`PipelineOutput::Raw`] when using [`Container::Raw`].
-///
-/// The input [`Image`] should already be fully assembled (including cubemap layers
-/// or array layers). Use [`split_cubemap`](crate::split_cubemap) to prepare
-/// cubemap inputs before calling this function.
-pub fn convert(image: Image, settings: ConvertSettings) -> Result<PipelineOutput> {
+/// The input [`Image`] should already be fully assembled. Use
+/// [`split_cubemap`](crate::split_cubemap) to prepare cubemap inputs beforehand.
+pub fn convert(image: Image, mut settings: ConvertSettings) -> Result<PipelineOutput> {
+    profiling::scope!("convert");
     let registry = settings
         .registry
+        .take()
         .unwrap_or_else(|| Arc::new(EncoderRegistry::default_registry()));
 
-    // Build transforms.
-    let mut transforms: Vec<Box<dyn Transform>> = Vec::new();
+    let input_fmt = image.surfaces[0][0].format;
+    let (target_fmt, encoder_step) = resolve_target(input_fmt, &mut settings, &registry)?;
 
-    if let Some(ref swizzle) = settings.swizzle {
-        transforms.push(Box::new(SwizzleTransform::new(*swizzle)));
+    // Compressed-in == compressed-out fast path.
+    if input_fmt.is_compressed() {
+        let final_target = match &encoder_step {
+            Some(step) => step.target_format,
+            None => target_fmt,
+        };
+        return passthrough::run(image, final_target, settings.container);
     }
 
-    if settings.mipmap {
-        transforms.push(Box::new(MipmapTransform::new(
-            settings.mipmap_count,
-            settings.mipmap_filter,
+    let variant = processing::pick_variant(input_fmt, target_fmt).ok_or_else(|| {
+        Error::UnsupportedConversion(format!(
+            "cannot derive pipeline variant from {input_fmt:?} → {target_fmt:?}"
+        ))
+    })?;
+
+    if !processing::families_compatible(input_fmt, target_fmt) {
+        return Err(Error::UnsupportedConversion(format!(
+            "integer/float family mismatch: {input_fmt:?} → {target_fmt:?}"
         )));
     }
 
-    match settings.format {
+    match variant {
+        Variant::F32 => convert_f32(image, settings, target_fmt, encoder_step),
+        Variant::F64 => convert_f64(image, settings, target_fmt, encoder_step),
+        Variant::U32 => convert_u32(image, settings, target_fmt, encoder_step),
+        Variant::U64 => convert_u64(image, settings, target_fmt, encoder_step),
+    }
+}
+
+/// Resolve the final output format and optional encoder step from settings.
+///
+/// Returns the format the store step should produce (= encoder input for
+/// compressed targets, = `TargetFormat::Uncompressed` or input for non-compressed).
+fn resolve_target(
+    input_fmt: ktx2::Format,
+    settings: &mut ConvertSettings,
+    registry: &Arc<EncoderRegistry>,
+) -> Result<(ktx2::Format, Option<encode::EncoderStep>)> {
+    match settings.format.take() {
         Some(TargetFormat::Compressed {
             encoder_name,
-            format: target_format,
+            format,
         }) => {
-            if settings.output_color_space.is_some() || settings.output_alpha.is_some() {
-                transforms.push(Box::new(OutputStateTransform::new(
-                    None,
-                    settings.output_color_space,
-                    settings.output_alpha,
-                )));
-            }
-            transforms.push(Box::new(CompressTransform::new(
-                target_format,
-                settings.quality,
+            let step = encode::EncoderStep {
+                target_format: format,
                 encoder_name,
-                settings.encoder_settings,
-                registry,
-            )));
+                quality: settings.quality,
+                settings: settings.encoder_settings.take(),
+                registry: Arc::clone(registry),
+            };
+            let required_input = step.required_input()?;
+            Ok((required_input, Some(step)))
         }
-        Some(TargetFormat::Uncompressed(target_format)) => {
-            transforms.push(Box::new(OutputStateTransform::new(
-                Some(target_format),
-                settings.output_color_space,
-                settings.output_alpha,
-            )));
+        Some(TargetFormat::Uncompressed(fmt)) => Ok((fmt, None)),
+        None => Ok((input_fmt, None)),
+    }
+}
+
+fn convert_f32(
+    image: Image,
+    settings: ConvertSettings,
+    target_fmt: ktx2::Format,
+    encoder_step: Option<encode::EncoderStep>,
+) -> Result<PipelineOutput> {
+    let input_base = &image.surfaces[0][0];
+    let target_color_space = settings
+        .output_color_space
+        .unwrap_or(input_base.color_space);
+    let target_alpha = settings.output_alpha.unwrap_or(input_base.alpha);
+
+    let mut out_layers = Vec::with_capacity(image.surfaces.len());
+    for layer in image.surfaces {
+        profiling::scope!("convert_f32_layer");
+        let base = layer
+            .into_iter()
+            .next()
+            .ok_or_else(|| Error::UnsupportedFormat("empty layer".into()))?;
+
+        let mut buf: Buffer<f32> = load::load_f32(&base)?;
+
+        if let Some(sw) = &settings.swizzle {
+            swizzle::apply_f32(&mut buf, sw);
         }
-        None => {
-            if settings.output_color_space.is_some() || settings.output_alpha.is_some() {
-                transforms.push(Box::new(OutputStateTransform::new(
-                    None,
-                    settings.output_color_space,
-                    settings.output_alpha,
-                )));
+
+        let bufs = if settings.mipmap {
+            mipmap::generate(buf, settings.mipmap_filter, settings.mipmap_count)?
+        } else {
+            vec![buf]
+        };
+
+        let mut mips = Vec::with_capacity(bufs.len());
+        for b in bufs {
+            mips.push(store::store_f32(
+                b,
+                target_fmt,
+                target_color_space,
+                target_alpha,
+            )?);
+        }
+        out_layers.push(mips);
+    }
+
+    let processed = Image {
+        surfaces: out_layers,
+        is_cubemap: image.is_cubemap,
+    };
+
+    let final_image = match encoder_step {
+        Some(step) => encode::encode_all(processed, &step)?,
+        None => processed,
+    };
+
+    passthrough::emit(final_image, settings.container)
+}
+
+fn convert_f64(
+    image: Image,
+    settings: ConvertSettings,
+    target_fmt: ktx2::Format,
+    encoder_step: Option<encode::EncoderStep>,
+) -> Result<PipelineOutput> {
+    if settings.mipmap {
+        return Err(Error::UnsupportedFormat(
+            "f64 pipeline does not yet support mipmap generation".into(),
+        ));
+    }
+
+    let input_base = &image.surfaces[0][0];
+    let target_color_space = settings
+        .output_color_space
+        .unwrap_or(input_base.color_space);
+    let target_alpha = settings.output_alpha.unwrap_or(input_base.alpha);
+
+    let mut out_layers = Vec::with_capacity(image.surfaces.len());
+    for layer in image.surfaces {
+        profiling::scope!("convert_f64_layer");
+        let mut mips = Vec::with_capacity(layer.len());
+        for base in layer {
+            let mut buf = load::load_f64(&base)?;
+            if let Some(sw) = &settings.swizzle {
+                swizzle::apply_f64(&mut buf, sw);
             }
+            mips.push(store::store_f64(
+                buf,
+                target_fmt,
+                target_color_space,
+                target_alpha,
+            )?);
+        }
+        out_layers.push(mips);
+    }
+
+    let processed = Image {
+        surfaces: out_layers,
+        is_cubemap: image.is_cubemap,
+    };
+
+    let final_image = match encoder_step {
+        Some(step) => encode::encode_all(processed, &step)?,
+        None => processed,
+    };
+
+    passthrough::emit(final_image, settings.container)
+}
+
+fn convert_u32(
+    image: Image,
+    settings: ConvertSettings,
+    target_fmt: ktx2::Format,
+    encoder_step: Option<encode::EncoderStep>,
+) -> Result<PipelineOutput> {
+    let input_alpha = image.surfaces[0][0].alpha;
+    check_uint_unsupported(&settings, input_alpha)?;
+    let target_alpha = settings.output_alpha.unwrap_or(input_alpha);
+
+    let mut out_layers = Vec::with_capacity(image.surfaces.len());
+    for layer in image.surfaces {
+        profiling::scope!("convert_u32_layer");
+        let mut mips = Vec::with_capacity(layer.len());
+        for base in layer {
+            let mut buf = load::load_u32(&base)?;
+            if let Some(sw) = &settings.swizzle {
+                swizzle::apply_u32(&mut buf, sw);
+            }
+            mips.push(store::store_u32(buf, target_fmt, target_alpha)?);
+        }
+        out_layers.push(mips);
+    }
+
+    let processed = Image {
+        surfaces: out_layers,
+        is_cubemap: image.is_cubemap,
+    };
+
+    if encoder_step.is_some() {
+        return Err(Error::UnsupportedConversion(
+            "integer (uint/sint) formats cannot be block-compressed".into(),
+        ));
+    }
+
+    passthrough::emit(processed, settings.container)
+}
+
+fn convert_u64(
+    image: Image,
+    settings: ConvertSettings,
+    target_fmt: ktx2::Format,
+    encoder_step: Option<encode::EncoderStep>,
+) -> Result<PipelineOutput> {
+    let input_alpha = image.surfaces[0][0].alpha;
+    check_uint_unsupported(&settings, input_alpha)?;
+    let target_alpha = settings.output_alpha.unwrap_or(input_alpha);
+
+    let mut out_layers = Vec::with_capacity(image.surfaces.len());
+    for layer in image.surfaces {
+        profiling::scope!("convert_u64_layer");
+        let mut mips = Vec::with_capacity(layer.len());
+        for base in layer {
+            let mut buf = load::load_u64(&base)?;
+            if let Some(sw) = &settings.swizzle {
+                swizzle::apply_u64(&mut buf, sw);
+            }
+            mips.push(store::store_u64(buf, target_fmt, target_alpha)?);
+        }
+        out_layers.push(mips);
+    }
+
+    let processed = Image {
+        surfaces: out_layers,
+        is_cubemap: image.is_cubemap,
+    };
+
+    if encoder_step.is_some() {
+        return Err(Error::UnsupportedConversion(
+            "integer (uint/sint) formats cannot be block-compressed".into(),
+        ));
+    }
+
+    passthrough::emit(processed, settings.container)
+}
+
+fn check_uint_unsupported(settings: &ConvertSettings, input_alpha: AlphaMode) -> Result<()> {
+    if settings.mipmap {
+        return Err(Error::UnsupportedFormat(
+            "integer pipeline does not support mipmap generation".into(),
+        ));
+    }
+    if settings.output_color_space.is_some() {
+        return Err(Error::UnsupportedFormat(
+            "integer pipeline does not support output_color_space change".into(),
+        ));
+    }
+    if let Some(out_alpha) = settings.output_alpha
+        && out_alpha != input_alpha
+    {
+        return Err(Error::UnsupportedFormat(
+            "integer pipeline does not support output_alpha change".into(),
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::surface::Surface;
+
+    fn make_image(
+        data: Vec<u8>,
+        width: u32,
+        height: u32,
+        format: ktx2::Format,
+        cs: ColorSpace,
+        alpha: AlphaMode,
+    ) -> Image {
+        let bpp = format.bytes_per_pixel().unwrap() as u32;
+        Image {
+            surfaces: vec![vec![Surface {
+                data,
+                width,
+                height,
+                stride: width * bpp,
+                format,
+                color_space: cs,
+                alpha,
+            }]],
+            is_cubemap: false,
         }
     }
 
-    let pipeline = Pipeline {
-        inputs: vec![InputBranch {
-            input: InputNode::Raw(image),
-            transforms: Vec::new(),
-        }],
-        assembly: AssemblyNode::Identity,
-        transforms,
-        container: settings.container,
-        allow_lossy_intermediates: settings.allow_lossy,
-    };
+    #[test]
+    fn raw_roundtrip_rgba8_linear() {
+        let image = make_image(
+            vec![10, 20, 30, 40, 50, 60, 70, 80],
+            2,
+            1,
+            ktx2::Format::R8G8B8A8_UNORM,
+            ColorSpace::Linear,
+            AlphaMode::Opaque,
+        );
+        let out = convert(
+            image,
+            ConvertSettings {
+                container: Container::Raw,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        match out {
+            PipelineOutput::Raw(img) => {
+                assert_eq!(
+                    img.surfaces[0][0].data,
+                    vec![10, 20, 30, 40, 50, 60, 70, 80]
+                );
+            }
+            _ => panic!("expected Raw output"),
+        }
+    }
 
-    let resolved = pipeline.resolve().map_err(|errors| {
-        let messages: Vec<String> = errors.iter().map(|e| e.to_string()).collect();
-        Error::UnsupportedFormat(messages.join("; "))
-    })?;
+    #[test]
+    fn convert_rgba8_to_r8_channel_drop() {
+        let image = make_image(
+            vec![100, 150, 200, 255],
+            1,
+            1,
+            ktx2::Format::R8G8B8A8_UNORM,
+            ColorSpace::Linear,
+            AlphaMode::Opaque,
+        );
+        let out = convert(
+            image,
+            ConvertSettings {
+                format: Some(TargetFormat::Uncompressed(ktx2::Format::R8_UNORM)),
+                container: Container::Raw,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        match out {
+            PipelineOutput::Raw(img) => {
+                assert_eq!(img.surfaces[0][0].format, ktx2::Format::R8_UNORM);
+                assert_eq!(img.surfaces[0][0].data, vec![100]);
+            }
+            _ => panic!("expected Raw output"),
+        }
+    }
 
-    resolved.execute()
+    #[test]
+    fn convert_with_mipmap() {
+        let data = vec![128u8; 8 * 8 * 4];
+        let image = make_image(
+            data,
+            8,
+            8,
+            ktx2::Format::R8G8B8A8_UNORM,
+            ColorSpace::Linear,
+            AlphaMode::Opaque,
+        );
+        let out = convert(
+            image,
+            ConvertSettings {
+                format: Some(TargetFormat::Uncompressed(ktx2::Format::R8G8B8A8_UNORM)),
+                container: Container::Raw,
+                mipmap: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        match out {
+            PipelineOutput::Raw(img) => {
+                assert_eq!(img.surfaces[0].len(), 4); // 8,4,2,1
+            }
+            _ => panic!("expected Raw output"),
+        }
+    }
+
+    #[test]
+    fn convert_integer_family_mismatch_errors() {
+        let image = make_image(
+            vec![100, 150, 200, 255],
+            1,
+            1,
+            ktx2::Format::R8G8B8A8_UNORM,
+            ColorSpace::Linear,
+            AlphaMode::Opaque,
+        );
+        let err = convert(
+            image,
+            ConvertSettings {
+                format: Some(TargetFormat::Uncompressed(ktx2::Format::R8G8B8A8_UINT)),
+                container: Container::Raw,
+                ..Default::default()
+            },
+        )
+        .unwrap_err();
+        match err {
+            Error::UnsupportedConversion(_) => {}
+            _ => panic!("expected UnsupportedConversion, got {err:?}"),
+        }
+    }
+
+    #[test]
+    fn convert_rgba8_to_bc7_ktx2() {
+        // 4x4 opaque image, encode to BC7 via default encoder, wrap in KTX2.
+        let image = make_image(
+            vec![128u8; 4 * 4 * 4],
+            4,
+            4,
+            ktx2::Format::R8G8B8A8_UNORM,
+            ColorSpace::Linear,
+            AlphaMode::Opaque,
+        );
+        let out = convert(
+            image,
+            ConvertSettings {
+                format: Some(TargetFormat::Compressed {
+                    encoder_name: None,
+                    format: ktx2::Format::BC7_UNORM_BLOCK,
+                }),
+                container: Container::ktx2(),
+                quality: Quality::UltraFast,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        match out {
+            PipelineOutput::Encoded(bytes) => {
+                // Verify KTX2 magic.
+                assert!(bytes.len() > 12);
+                assert_eq!(&bytes[0..12], b"\xabKTX 20\xbb\r\n\x1a\n");
+            }
+            _ => panic!("expected Encoded output"),
+        }
+    }
+
+    #[test]
+    fn convert_passthrough_compressed() {
+        // BC7 input → BC7 output should use the passthrough fast path.
+        let bc7_bytes = vec![0xFFu8; 16]; // 1 BC7 block
+        let image = Image {
+            surfaces: vec![vec![Surface {
+                data: bc7_bytes.clone(),
+                width: 4,
+                height: 4,
+                stride: 16,
+                format: ktx2::Format::BC7_UNORM_BLOCK,
+                color_space: ColorSpace::Linear,
+                alpha: AlphaMode::Opaque,
+            }]],
+            is_cubemap: false,
+        };
+        let out = convert(
+            image,
+            ConvertSettings {
+                container: Container::Raw,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        match out {
+            PipelineOutput::Raw(img) => {
+                assert_eq!(img.surfaces[0][0].data, bc7_bytes);
+            }
+            _ => panic!("expected Raw output"),
+        }
+    }
+
+    #[test]
+    fn convert_uint_pipeline_with_swizzle() {
+        // 4 u32 values = 16 bytes.
+        let mut data = Vec::new();
+        for v in &[10u32, 20, 30, 40] {
+            data.extend_from_slice(&v.to_le_bytes());
+        }
+        let image = make_image(
+            data,
+            1,
+            1,
+            ktx2::Format::R32G32B32A32_UINT,
+            ColorSpace::Linear,
+            AlphaMode::Opaque,
+        );
+        let out = convert(
+            image,
+            ConvertSettings {
+                format: Some(TargetFormat::Uncompressed(ktx2::Format::R32G32B32A32_UINT)),
+                container: Container::Raw,
+                swizzle: Some(Swizzle([
+                    processing::SwizzleChannel::A,
+                    processing::SwizzleChannel::B,
+                    processing::SwizzleChannel::G,
+                    processing::SwizzleChannel::R,
+                ])),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        match out {
+            PipelineOutput::Raw(img) => {
+                let bytes = &img.surfaces[0][0].data;
+                assert_eq!(u32::from_le_bytes(bytes[0..4].try_into().unwrap()), 40);
+                assert_eq!(u32::from_le_bytes(bytes[4..8].try_into().unwrap()), 30);
+                assert_eq!(u32::from_le_bytes(bytes[8..12].try_into().unwrap()), 20);
+                assert_eq!(u32::from_le_bytes(bytes[12..16].try_into().unwrap()), 10);
+            }
+            _ => panic!("expected Raw output"),
+        }
+    }
 }

@@ -50,8 +50,14 @@ impl<'a> Surface<'a> {
     /// Panics if `width` or `height` are not multiples of 4, or if `data` is
     /// too small for the given dimensions.
     pub fn new(data: &'a [u8], width: u32, height: u32) -> Self {
-        assert!(width % 4 == 0, "width {width} must be a multiple of 4");
-        assert!(height % 4 == 0, "height {height} must be a multiple of 4");
+        assert!(
+            width.is_multiple_of(4),
+            "width {width} must be a multiple of 4"
+        );
+        assert!(
+            height.is_multiple_of(4),
+            "height {height} must be a multiple of 4"
+        );
         let required = (width as usize) * (height as usize) * 4;
         assert!(
             data.len() >= required,

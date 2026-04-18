@@ -55,7 +55,7 @@ fn check(code: i32) -> Result<(), Error> {
 }
 
 fn check_block_aligned(width: u32, height: u32) -> Result<(), Error> {
-    if width % BLOCK_WIDTH != 0 || height % BLOCK_HEIGHT != 0 {
+    if !width.is_multiple_of(BLOCK_WIDTH) || !height.is_multiple_of(BLOCK_HEIGHT) {
         Err(Error::NotBlockAligned { width, height })
     } else {
         Ok(())
