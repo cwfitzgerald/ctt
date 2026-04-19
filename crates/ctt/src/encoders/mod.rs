@@ -111,6 +111,13 @@ impl Default for EncoderRegistry {
     }
 }
 
+#[cfg(any(
+    feature = "encoder-intel",
+    feature = "encoder-etcpak",
+    feature = "encoder-amd",
+))]
+mod edge;
+
 #[cfg(feature = "encoder-intel")]
 pub mod ispc;
 

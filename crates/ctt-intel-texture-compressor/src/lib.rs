@@ -51,15 +51,29 @@ pub struct Surface<'a, const COMPONENTS: usize> {
 }
 
 impl<'a, const COMPONENTS: usize> Surface<'a, COMPONENTS> {
-    /// Creates a new surface, validating that dimensions fit within `i32` (required
-    /// by the underlying C API) and that `data` is large enough for the given
-    /// stride and height.
+    /// Creates a new surface, validating the preconditions required by the
+    /// underlying ISPC kernels.
     ///
     /// # Panics
     ///
-    /// Panics if `width`, `height`, or `stride` exceed `i32::MAX`, or if
-    /// `data.len()` is less than `stride * height`.
+    /// Panics if:
+    /// - `width` or `height` is zero,
+    /// - `width` or `height` is not a multiple of 4 (the ISPC kernels process
+    ///   whole 4×4 blocks and will silently drop partial edge blocks
+    ///   otherwise),
+    /// - `width`, `height`, or `stride` exceed `i32::MAX`,
+    /// - `stride` is less than `width * COMPONENTS`,
+    /// - `data.len()` is less than `stride * height`.
     pub fn new(data: &'a [u8], width: u32, height: u32, stride: u32) -> Self {
+        assert!(width > 0 && height > 0, "width and height must be non-zero");
+        assert!(
+            width.is_multiple_of(4),
+            "width {width} must be a multiple of 4 (ISPC kernels only process whole 4×4 blocks)",
+        );
+        assert!(
+            height.is_multiple_of(4),
+            "height {height} must be a multiple of 4 (ISPC kernels only process whole 4×4 blocks)",
+        );
         assert!(
             i32::try_from(width).is_ok(),
             "width {width} exceeds i32::MAX"

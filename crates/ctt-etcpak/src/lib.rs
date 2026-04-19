@@ -47,9 +47,14 @@ impl<'a> Surface<'a> {
     ///
     /// # Panics
     ///
-    /// Panics if `width` or `height` are not multiples of 4, or if `data` is
-    /// too small for the given dimensions.
+    /// Panics if:
+    /// - `width` or `height` is zero,
+    /// - `width` or `height` is not a multiple of 4 (etcpak processes whole
+    ///   4×4 blocks),
+    /// - `width * height * 4` overflows `usize`,
+    /// - `data.len()` is less than `width * height * 4`.
     pub fn new(data: &'a [u8], width: u32, height: u32) -> Self {
+        assert!(width > 0 && height > 0, "width and height must be non-zero");
         assert!(
             width.is_multiple_of(4),
             "width {width} must be a multiple of 4"
@@ -58,7 +63,10 @@ impl<'a> Surface<'a> {
             height.is_multiple_of(4),
             "height {height} must be a multiple of 4"
         );
-        let required = (width as usize) * (height as usize) * 4;
+        let required = (width as usize)
+            .checked_mul(height as usize)
+            .and_then(|wh| wh.checked_mul(4))
+            .expect("width * height * 4 overflows usize");
         assert!(
             data.len() >= required,
             "data length {} is less than width * height * 4 ({required})",

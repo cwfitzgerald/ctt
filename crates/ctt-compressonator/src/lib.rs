@@ -11,9 +11,9 @@ use std::sync::Once;
 /// Error returned by ctt-compressonator operations.
 #[derive(Debug, Clone, thiserror::Error)]
 pub enum Error {
-    /// The image dimensions are not multiples of the block size (4x4).
-    #[error("image dimensions {width}x{height} are not multiples of the 4x4 block size")]
-    NotBlockAligned { width: u32, height: u32 },
+    /// The image has a zero dimension.
+    #[error("image dimensions must be non-zero, got {width}x{height}")]
+    EmptyImage { width: u32, height: u32 },
     /// An unknown error occurred in CMP_Core.
     #[error("an unknown error occurred in cmp_core")]
     Unknown,
@@ -54,12 +54,80 @@ fn check(code: i32) -> Result<(), Error> {
     }
 }
 
-fn check_block_aligned(width: u32, height: u32) -> Result<(), Error> {
-    if !width.is_multiple_of(BLOCK_WIDTH) || !height.is_multiple_of(BLOCK_HEIGHT) {
-        Err(Error::NotBlockAligned { width, height })
+fn check_nonempty(width: u32, height: u32) -> Result<(), Error> {
+    if width == 0 || height == 0 {
+        Err(Error::EmptyImage { width, height })
     } else {
         Ok(())
     }
+}
+
+/// Iterate over every 4×4 block in an image whose dimensions may not be
+/// multiples of the block size. For fully-contained blocks, calls `compress`
+/// with a pointer into the original source and the source stride (zero-copy).
+/// For partial edge blocks, fills a tightly-packed scratch buffer with
+/// edge-clamped samples and calls `compress` with the scratch.
+///
+/// `pixel_stride` is the byte size of one source pixel. Source data must be
+/// tightly packed: `src.len() >= width * height * pixel_stride`.
+fn iterate_blocks_u8<F>(
+    src: &[u8],
+    width: u32,
+    height: u32,
+    pixel_stride: usize,
+    bytes_per_block: usize,
+    dst: &mut [u8],
+    mut compress: F,
+) -> Result<(), Error>
+where
+    F: FnMut(*const u8, u32, *mut u8) -> Result<(), Error>,
+{
+    debug_assert!(width > 0 && height > 0);
+    let blocks_x = width.div_ceil(BLOCK_WIDTH) as usize;
+    let blocks_y = height.div_ceil(BLOCK_HEIGHT) as usize;
+    let stride = (width as usize) * pixel_stride;
+    let w = width as usize;
+    let h = height as usize;
+    let max_x = w - 1;
+    let max_y = h - 1;
+
+    // Up to 4×4 pixels at 8 bytes per pixel covers everything through BC6H.
+    // The stack-allocated buffer avoids a per-call heap allocation.
+    let mut scratch = [0u8; 4 * 4 * 8];
+    let scratch_len = 4 * 4 * pixel_stride;
+    let scratch_stride = 4 * pixel_stride;
+    debug_assert!(scratch_len <= scratch.len());
+
+    for by in 0..blocks_y {
+        for bx in 0..blocks_x {
+            let x0 = bx * 4;
+            let y0 = by * 4;
+            let dst_offset = (by * blocks_x + bx) * bytes_per_block;
+            if x0 + 4 <= w && y0 + 4 <= h {
+                let src_offset = y0 * stride + x0 * pixel_stride;
+                compress(
+                    unsafe { src.as_ptr().add(src_offset) },
+                    stride as u32,
+                    unsafe { dst.as_mut_ptr().add(dst_offset) },
+                )?;
+            } else {
+                for py in 0..4usize {
+                    let y = (y0 + py).min(max_y);
+                    for px in 0..4usize {
+                        let x = (x0 + px).min(max_x);
+                        let src_off = y * stride + x * pixel_stride;
+                        let dst_off = (py * 4 + px) * pixel_stride;
+                        scratch[dst_off..dst_off + pixel_stride]
+                            .copy_from_slice(&src[src_off..src_off + pixel_stride]);
+                    }
+                }
+                compress(scratch.as_ptr(), scratch_stride as u32, unsafe {
+                    dst.as_mut_ptr().add(dst_offset)
+                })?;
+            }
+        }
+    }
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -206,16 +274,19 @@ pub mod bc1 {
 
     /// Returns the compressed output size in bytes for the given dimensions.
     ///
-    /// Both `width` and `height` should be multiples of 4.
+    /// Dimensions that aren't multiples of 4 are rounded up to the next block
+    /// boundary (partial edge blocks are padded with edge-replicated pixels
+    /// during compression).
     #[must_use]
     pub fn calc_output_size(width: u32, height: u32) -> usize {
-        (width as usize / 4) * (height as usize / 4) * BYTES_PER_BLOCK
+        (width.div_ceil(4) as usize) * (height.div_ceil(4) as usize) * BYTES_PER_BLOCK
     }
 
     /// Compress an RGBA U8 image into BC1 blocks, returning the compressed data.
     ///
-    /// `src` must contain `width * height * 4` bytes of tightly-packed RGBA data.
-    /// Both `width` and `height` must be multiples of 4.
+    /// `src` must contain at least `width * height * 4` bytes of tightly-packed
+    /// RGBA data. Dimensions don't need to be multiples of 4; partial edge
+    /// blocks are filled with edge-replicated pixels.
     pub fn compress_blocks(
         src: &[u8],
         width: u32,
@@ -229,9 +300,9 @@ pub mod bc1 {
 
     /// Compress an RGBA U8 image into BC1 blocks, writing into `dst`.
     ///
-    /// `src` must contain `width * height * 4` bytes of tightly-packed RGBA data.
-    /// Both `width` and `height` must be multiples of 4.
-    /// `dst` must be exactly `calc_output_size(width, height)` bytes long.
+    /// `src` must contain at least `width * height * 4` bytes of tightly-packed
+    /// RGBA data. `dst` must be exactly `calc_output_size(width, height)`
+    /// bytes long.
     pub fn compress_blocks_into(
         src: &[u8],
         width: u32,
@@ -240,7 +311,7 @@ pub mod bc1 {
         dst: &mut [u8],
     ) -> Result<(), Error> {
         ensure_init();
-        check_block_aligned(width, height)?;
+        check_nonempty(width, height)?;
         let expected_src = (width as usize) * (height as usize) * SRC_PIXEL_STRIDE;
         assert!(
             src.len() >= expected_src,
@@ -250,25 +321,18 @@ pub mod bc1 {
         );
         assert_eq!(dst.len(), calc_output_size(width, height));
 
-        let blocks_x = (width / BLOCK_WIDTH) as usize;
-        let blocks_y = (height / BLOCK_HEIGHT) as usize;
-        let stride = (width as usize) * SRC_PIXEL_STRIDE;
-
-        for by in 0..blocks_y {
-            for bx in 0..blocks_x {
-                let src_offset = by * 4 * stride + bx * 4 * SRC_PIXEL_STRIDE;
-                let dst_offset = (by * blocks_x + bx) * BYTES_PER_BLOCK;
-                check(unsafe {
-                    bindings::CompressBlockBC1(
-                        src.as_ptr().add(src_offset),
-                        stride as u32,
-                        dst.as_mut_ptr().add(dst_offset),
-                        options.as_ptr(),
-                    )
-                })?;
-            }
-        }
-        Ok(())
+        let opts_ptr = options.as_ptr();
+        iterate_blocks_u8(
+            src,
+            width,
+            height,
+            SRC_PIXEL_STRIDE,
+            BYTES_PER_BLOCK,
+            dst,
+            |src_ptr, stride, dst_ptr| {
+                check(unsafe { bindings::CompressBlockBC1(src_ptr, stride, dst_ptr, opts_ptr) })
+            },
+        )
     }
 
     /// Decompress a single BC1 block into 4x4 RGBA U8 pixels (64 bytes).
@@ -341,13 +405,14 @@ pub mod bc2 {
 
     #[must_use]
     pub fn calc_output_size(width: u32, height: u32) -> usize {
-        (width as usize / 4) * (height as usize / 4) * BYTES_PER_BLOCK
+        (width.div_ceil(4) as usize) * (height.div_ceil(4) as usize) * BYTES_PER_BLOCK
     }
 
     /// Compress an RGBA U8 image into BC2 blocks, returning the compressed data.
     ///
-    /// `src` must contain `width * height * 4` bytes of tightly-packed RGBA data.
-    /// Both `width` and `height` must be multiples of 4.
+    /// `src` must contain at least `width * height * 4` bytes of tightly-packed
+    /// RGBA data. Dimensions don't need to be multiples of 4; partial edge
+    /// blocks are filled with edge-replicated pixels.
     pub fn compress_blocks(
         src: &[u8],
         width: u32,
@@ -361,9 +426,9 @@ pub mod bc2 {
 
     /// Compress an RGBA U8 image into BC2 blocks, writing into `dst`.
     ///
-    /// `src` must contain `width * height * 4` bytes of tightly-packed RGBA data.
-    /// Both `width` and `height` must be multiples of 4.
-    /// `dst` must be exactly `calc_output_size(width, height)` bytes long.
+    /// `src` must contain at least `width * height * 4` bytes of tightly-packed
+    /// RGBA data. `dst` must be exactly `calc_output_size(width, height)`
+    /// bytes long.
     pub fn compress_blocks_into(
         src: &[u8],
         width: u32,
@@ -372,7 +437,7 @@ pub mod bc2 {
         dst: &mut [u8],
     ) -> Result<(), Error> {
         ensure_init();
-        check_block_aligned(width, height)?;
+        check_nonempty(width, height)?;
         let expected_src = (width as usize) * (height as usize) * SRC_PIXEL_STRIDE;
         assert!(
             src.len() >= expected_src,
@@ -382,25 +447,18 @@ pub mod bc2 {
         );
         assert_eq!(dst.len(), calc_output_size(width, height));
 
-        let blocks_x = (width / BLOCK_WIDTH) as usize;
-        let blocks_y = (height / BLOCK_HEIGHT) as usize;
-        let stride = (width as usize) * SRC_PIXEL_STRIDE;
-
-        for by in 0..blocks_y {
-            for bx in 0..blocks_x {
-                let src_offset = by * 4 * stride + bx * 4 * SRC_PIXEL_STRIDE;
-                let dst_offset = (by * blocks_x + bx) * BYTES_PER_BLOCK;
-                check(unsafe {
-                    bindings::CompressBlockBC2(
-                        src.as_ptr().add(src_offset),
-                        stride as u32,
-                        dst.as_mut_ptr().add(dst_offset),
-                        options.as_ptr(),
-                    )
-                })?;
-            }
-        }
-        Ok(())
+        let opts_ptr = options.as_ptr();
+        iterate_blocks_u8(
+            src,
+            width,
+            height,
+            SRC_PIXEL_STRIDE,
+            BYTES_PER_BLOCK,
+            dst,
+            |src_ptr, stride, dst_ptr| {
+                check(unsafe { bindings::CompressBlockBC2(src_ptr, stride, dst_ptr, opts_ptr) })
+            },
+        )
     }
 
     /// Decompress a single BC2 block into 4x4 RGBA U8 pixels (64 bytes).
@@ -473,13 +531,14 @@ pub mod bc3 {
 
     #[must_use]
     pub fn calc_output_size(width: u32, height: u32) -> usize {
-        (width as usize / 4) * (height as usize / 4) * BYTES_PER_BLOCK
+        (width.div_ceil(4) as usize) * (height.div_ceil(4) as usize) * BYTES_PER_BLOCK
     }
 
     /// Compress an RGBA U8 image into BC3 blocks, returning the compressed data.
     ///
-    /// `src` must contain `width * height * 4` bytes of tightly-packed RGBA data.
-    /// Both `width` and `height` must be multiples of 4.
+    /// `src` must contain at least `width * height * 4` bytes of tightly-packed
+    /// RGBA data. Dimensions don't need to be multiples of 4; partial edge
+    /// blocks are filled with edge-replicated pixels.
     pub fn compress_blocks(
         src: &[u8],
         width: u32,
@@ -493,9 +552,9 @@ pub mod bc3 {
 
     /// Compress an RGBA U8 image into BC3 blocks, writing into `dst`.
     ///
-    /// `src` must contain `width * height * 4` bytes of tightly-packed RGBA data.
-    /// Both `width` and `height` must be multiples of 4.
-    /// `dst` must be exactly `calc_output_size(width, height)` bytes long.
+    /// `src` must contain at least `width * height * 4` bytes of tightly-packed
+    /// RGBA data. `dst` must be exactly `calc_output_size(width, height)`
+    /// bytes long.
     pub fn compress_blocks_into(
         src: &[u8],
         width: u32,
@@ -504,7 +563,7 @@ pub mod bc3 {
         dst: &mut [u8],
     ) -> Result<(), Error> {
         ensure_init();
-        check_block_aligned(width, height)?;
+        check_nonempty(width, height)?;
         let expected_src = (width as usize) * (height as usize) * SRC_PIXEL_STRIDE;
         assert!(
             src.len() >= expected_src,
@@ -514,25 +573,18 @@ pub mod bc3 {
         );
         assert_eq!(dst.len(), calc_output_size(width, height));
 
-        let blocks_x = (width / BLOCK_WIDTH) as usize;
-        let blocks_y = (height / BLOCK_HEIGHT) as usize;
-        let stride = (width as usize) * SRC_PIXEL_STRIDE;
-
-        for by in 0..blocks_y {
-            for bx in 0..blocks_x {
-                let src_offset = by * 4 * stride + bx * 4 * SRC_PIXEL_STRIDE;
-                let dst_offset = (by * blocks_x + bx) * BYTES_PER_BLOCK;
-                check(unsafe {
-                    bindings::CompressBlockBC3(
-                        src.as_ptr().add(src_offset),
-                        stride as u32,
-                        dst.as_mut_ptr().add(dst_offset),
-                        options.as_ptr(),
-                    )
-                })?;
-            }
-        }
-        Ok(())
+        let opts_ptr = options.as_ptr();
+        iterate_blocks_u8(
+            src,
+            width,
+            height,
+            SRC_PIXEL_STRIDE,
+            BYTES_PER_BLOCK,
+            dst,
+            |src_ptr, stride, dst_ptr| {
+                check(unsafe { bindings::CompressBlockBC3(src_ptr, stride, dst_ptr, opts_ptr) })
+            },
+        )
     }
 
     /// Decompress a single BC3 block into 4x4 RGBA U8 pixels (64 bytes).
@@ -616,13 +668,14 @@ pub mod bc7 {
 
     #[must_use]
     pub fn calc_output_size(width: u32, height: u32) -> usize {
-        (width as usize / 4) * (height as usize / 4) * BYTES_PER_BLOCK
+        (width.div_ceil(4) as usize) * (height.div_ceil(4) as usize) * BYTES_PER_BLOCK
     }
 
     /// Compress an RGBA U8 image into BC7 blocks, returning the compressed data.
     ///
-    /// `src` must contain `width * height * 4` bytes of tightly-packed RGBA data.
-    /// Both `width` and `height` must be multiples of 4.
+    /// `src` must contain at least `width * height * 4` bytes of tightly-packed
+    /// RGBA data. Dimensions don't need to be multiples of 4; partial edge
+    /// blocks are filled with edge-replicated pixels.
     pub fn compress_blocks(
         src: &[u8],
         width: u32,
@@ -636,9 +689,9 @@ pub mod bc7 {
 
     /// Compress an RGBA U8 image into BC7 blocks, writing into `dst`.
     ///
-    /// `src` must contain `width * height * 4` bytes of tightly-packed RGBA data.
-    /// Both `width` and `height` must be multiples of 4.
-    /// `dst` must be exactly `calc_output_size(width, height)` bytes long.
+    /// `src` must contain at least `width * height * 4` bytes of tightly-packed
+    /// RGBA data. `dst` must be exactly `calc_output_size(width, height)`
+    /// bytes long.
     pub fn compress_blocks_into(
         src: &[u8],
         width: u32,
@@ -647,7 +700,7 @@ pub mod bc7 {
         dst: &mut [u8],
     ) -> Result<(), Error> {
         ensure_init();
-        check_block_aligned(width, height)?;
+        check_nonempty(width, height)?;
         let expected_src = (width as usize) * (height as usize) * SRC_PIXEL_STRIDE;
         assert!(
             src.len() >= expected_src,
@@ -657,25 +710,18 @@ pub mod bc7 {
         );
         assert_eq!(dst.len(), calc_output_size(width, height));
 
-        let blocks_x = (width / BLOCK_WIDTH) as usize;
-        let blocks_y = (height / BLOCK_HEIGHT) as usize;
-        let stride = (width as usize) * SRC_PIXEL_STRIDE;
-
-        for by in 0..blocks_y {
-            for bx in 0..blocks_x {
-                let src_offset = by * 4 * stride + bx * 4 * SRC_PIXEL_STRIDE;
-                let dst_offset = (by * blocks_x + bx) * BYTES_PER_BLOCK;
-                check(unsafe {
-                    bindings::CompressBlockBC7(
-                        src.as_ptr().add(src_offset),
-                        stride as u32,
-                        dst.as_mut_ptr().add(dst_offset),
-                        options.as_ptr(),
-                    )
-                })?;
-            }
-        }
-        Ok(())
+        let opts_ptr = options.as_ptr();
+        iterate_blocks_u8(
+            src,
+            width,
+            height,
+            SRC_PIXEL_STRIDE,
+            BYTES_PER_BLOCK,
+            dst,
+            |src_ptr, stride, dst_ptr| {
+                check(unsafe { bindings::CompressBlockBC7(src_ptr, stride, dst_ptr, opts_ptr) })
+            },
+        )
     }
 
     /// Decompress a single BC7 block into 4x4 RGBA U8 pixels (64 bytes).
@@ -734,13 +780,14 @@ pub mod bc4 {
 
     #[must_use]
     pub fn calc_output_size(width: u32, height: u32) -> usize {
-        (width as usize / 4) * (height as usize / 4) * BYTES_PER_BLOCK
+        (width.div_ceil(4) as usize) * (height.div_ceil(4) as usize) * BYTES_PER_BLOCK
     }
 
     /// Compress a single-channel U8 image into BC4 blocks, returning the compressed data.
     ///
-    /// `src` must contain `width * height` bytes (1 byte per pixel).
-    /// Both `width` and `height` must be multiples of 4.
+    /// `src` must contain at least `width * height` bytes (1 byte per pixel).
+    /// Dimensions don't need to be multiples of 4; partial edge blocks are
+    /// filled with edge-replicated pixels.
     pub fn compress_blocks(
         src: &[u8],
         width: u32,
@@ -754,8 +801,7 @@ pub mod bc4 {
 
     /// Compress a single-channel U8 image into BC4 blocks, writing into `dst`.
     ///
-    /// `src` must contain `width * height` bytes (1 byte per pixel).
-    /// Both `width` and `height` must be multiples of 4.
+    /// `src` must contain at least `width * height` bytes (1 byte per pixel).
     /// `dst` must be exactly `calc_output_size(width, height)` bytes long.
     pub fn compress_blocks_into(
         src: &[u8],
@@ -765,7 +811,7 @@ pub mod bc4 {
         dst: &mut [u8],
     ) -> Result<(), Error> {
         ensure_init();
-        check_block_aligned(width, height)?;
+        check_nonempty(width, height)?;
         let expected_src = (width as usize) * (height as usize);
         assert!(
             src.len() >= expected_src,
@@ -775,25 +821,18 @@ pub mod bc4 {
         );
         assert_eq!(dst.len(), calc_output_size(width, height));
 
-        let blocks_x = (width / BLOCK_WIDTH) as usize;
-        let blocks_y = (height / BLOCK_HEIGHT) as usize;
-        let stride = width as usize;
-
-        for by in 0..blocks_y {
-            for bx in 0..blocks_x {
-                let src_offset = by * 4 * stride + bx * 4;
-                let dst_offset = (by * blocks_x + bx) * BYTES_PER_BLOCK;
-                check(unsafe {
-                    bindings::CompressBlockBC4(
-                        src.as_ptr().add(src_offset),
-                        stride as u32,
-                        dst.as_mut_ptr().add(dst_offset),
-                        options.as_ptr(),
-                    )
-                })?;
-            }
-        }
-        Ok(())
+        let opts_ptr = options.as_ptr();
+        iterate_blocks_u8(
+            src,
+            width,
+            height,
+            1, // R U8
+            BYTES_PER_BLOCK,
+            dst,
+            |src_ptr, stride, dst_ptr| {
+                check(unsafe { bindings::CompressBlockBC4(src_ptr, stride, dst_ptr, opts_ptr) })
+            },
+        )
     }
 
     /// Decompress a single BC4 block into 4x4 unsigned U8 values (16 bytes).
@@ -825,13 +864,14 @@ pub mod bc4s {
 
     #[must_use]
     pub fn calc_output_size(width: u32, height: u32) -> usize {
-        (width as usize / 4) * (height as usize / 4) * BYTES_PER_BLOCK
+        (width.div_ceil(4) as usize) * (height.div_ceil(4) as usize) * BYTES_PER_BLOCK
     }
 
     /// Compress a single-channel I8 image into BC4S blocks, returning the compressed data.
     ///
-    /// `src` must contain `width * height` signed bytes (1 byte per pixel).
-    /// Both `width` and `height` must be multiples of 4.
+    /// `src` must contain at least `width * height` signed bytes (1 byte per
+    /// pixel). Dimensions don't need to be multiples of 4; partial edge blocks
+    /// are filled with edge-replicated pixels.
     pub fn compress_blocks(
         src: &[i8],
         width: u32,
@@ -845,9 +885,9 @@ pub mod bc4s {
 
     /// Compress a single-channel I8 image into BC4S blocks, writing into `dst`.
     ///
-    /// `src` must contain `width * height` signed bytes (1 byte per pixel).
-    /// Both `width` and `height` must be multiples of 4.
-    /// `dst` must be exactly `calc_output_size(width, height)` bytes long.
+    /// `src` must contain at least `width * height` signed bytes (1 byte per
+    /// pixel). `dst` must be exactly `calc_output_size(width, height)` bytes
+    /// long.
     pub fn compress_blocks_into(
         src: &[i8],
         width: u32,
@@ -856,7 +896,7 @@ pub mod bc4s {
         dst: &mut [u8],
     ) -> Result<(), Error> {
         ensure_init();
-        check_block_aligned(width, height)?;
+        check_nonempty(width, height)?;
         let expected_src = (width as usize) * (height as usize);
         assert!(
             src.len() >= expected_src,
@@ -866,25 +906,25 @@ pub mod bc4s {
         );
         assert_eq!(dst.len(), calc_output_size(width, height));
 
-        let blocks_x = (width / BLOCK_WIDTH) as usize;
-        let blocks_y = (height / BLOCK_HEIGHT) as usize;
-        let stride = width as usize;
-
-        for by in 0..blocks_y {
-            for bx in 0..blocks_x {
-                let src_offset = by * 4 * stride + bx * 4;
-                let dst_offset = (by * blocks_x + bx) * BYTES_PER_BLOCK;
+        // i8 and u8 have identical byte layouts; reinterpret the slice so we
+        // can reuse the shared iterator, then cast the pointer back at the
+        // C call site.
+        let src_u8: &[u8] =
+            unsafe { std::slice::from_raw_parts(src.as_ptr().cast::<u8>(), src.len()) };
+        let opts_ptr = options.as_ptr();
+        iterate_blocks_u8(
+            src_u8,
+            width,
+            height,
+            1,
+            BYTES_PER_BLOCK,
+            dst,
+            |src_ptr, stride, dst_ptr| {
                 check(unsafe {
-                    bindings::CompressBlockBC4S(
-                        src.as_ptr().add(src_offset) as *const _,
-                        stride as u32,
-                        dst.as_mut_ptr().add(dst_offset),
-                        options.as_ptr(),
-                    )
-                })?;
-            }
-        }
-        Ok(())
+                    bindings::CompressBlockBC4S(src_ptr.cast(), stride, dst_ptr, opts_ptr)
+                })
+            },
+        )
     }
 
     /// Decompress a single BC4S block into 4x4 signed I8 values (16 bytes).
@@ -952,13 +992,14 @@ pub mod bc5 {
 
     #[must_use]
     pub fn calc_output_size(width: u32, height: u32) -> usize {
-        (width as usize / 4) * (height as usize / 4) * BYTES_PER_BLOCK
+        (width.div_ceil(4) as usize) * (height.div_ceil(4) as usize) * BYTES_PER_BLOCK
     }
 
     /// Compress an interleaved RG U8 image into BC5 blocks, returning the compressed data.
     ///
-    /// `src` must contain `width * height * 2` bytes of interleaved [R, G] data.
-    /// Both `width` and `height` must be multiples of 4.
+    /// `src` must contain at least `width * height * 2` bytes of interleaved
+    /// [R, G] data. Dimensions don't need to be multiples of 4; partial edge
+    /// blocks are filled with edge-replicated pixels.
     pub fn compress_blocks(
         src: &[u8],
         width: u32,
@@ -972,12 +1013,13 @@ pub mod bc5 {
 
     /// Compress an interleaved RG U8 image into BC5 blocks, writing into `dst`.
     ///
-    /// `src` must contain `width * height * 2` bytes of interleaved [R, G] data.
-    /// Both `width` and `height` must be multiples of 4.
-    /// `dst` must be exactly `calc_output_size(width, height)` bytes long.
+    /// `src` must contain at least `width * height * 2` bytes of interleaved
+    /// [R, G] data. `dst` must be exactly `calc_output_size(width, height)`
+    /// bytes long.
     ///
     /// The interleaved source is deinterleaved into separate R and G channel
-    /// buffers per 4x4 block before passing to the C encoder.
+    /// buffers per 4x4 block before passing to the C encoder. Out-of-range
+    /// reads at the right/bottom edge clamp to the nearest edge pixel.
     pub fn compress_blocks_into(
         src: &[u8],
         width: u32,
@@ -986,7 +1028,7 @@ pub mod bc5 {
         dst: &mut [u8],
     ) -> Result<(), Error> {
         ensure_init();
-        check_block_aligned(width, height)?;
+        check_nonempty(width, height)?;
         let expected_src = (width as usize) * (height as usize) * SRC_PIXEL_STRIDE;
         assert!(
             src.len() >= expected_src,
@@ -996,25 +1038,28 @@ pub mod bc5 {
         );
         assert_eq!(dst.len(), calc_output_size(width, height));
 
-        let blocks_x = (width / BLOCK_WIDTH) as usize;
-        let blocks_y = (height / BLOCK_HEIGHT) as usize;
+        let blocks_x = width.div_ceil(BLOCK_WIDTH) as usize;
+        let blocks_y = height.div_ceil(BLOCK_HEIGHT) as usize;
         let stride = (width as usize) * SRC_PIXEL_STRIDE;
+        let max_x = (width - 1) as usize;
+        let max_y = (height - 1) as usize;
 
         for by in 0..blocks_y {
             for bx in 0..blocks_x {
                 let mut r_block = [0u8; BLOCK_PIXELS];
                 let mut g_block = [0u8; BLOCK_PIXELS];
 
-                // Deinterleave [R, G] pairs into separate channel buffers.
+                // Deinterleave [R, G] pairs into separate channel buffers
+                // with edge clamping at the right/bottom image borders.
                 for row in 0..4 {
-                    let row_start = (by * 4 + row) * stride + bx * 4 * SRC_PIXEL_STRIDE;
+                    let y = (by * 4 + row).min(max_y);
+                    let row_start = y * stride;
                     let block_row = row * 4;
-                    for (col, pair) in src[row_start..][..4 * SRC_PIXEL_STRIDE]
-                        .chunks_exact(SRC_PIXEL_STRIDE)
-                        .enumerate()
-                    {
-                        r_block[block_row + col] = pair[0];
-                        g_block[block_row + col] = pair[1];
+                    for col in 0..4 {
+                        let x = (bx * 4 + col).min(max_x);
+                        let pair_off = row_start + x * SRC_PIXEL_STRIDE;
+                        r_block[block_row + col] = src[pair_off];
+                        g_block[block_row + col] = src[pair_off + 1];
                     }
                 }
 
@@ -1070,13 +1115,14 @@ pub mod bc5s {
 
     #[must_use]
     pub fn calc_output_size(width: u32, height: u32) -> usize {
-        (width as usize / 4) * (height as usize / 4) * BYTES_PER_BLOCK
+        (width.div_ceil(4) as usize) * (height.div_ceil(4) as usize) * BYTES_PER_BLOCK
     }
 
     /// Compress an interleaved RG I8 image into BC5S blocks, returning the compressed data.
     ///
-    /// `src` must contain `width * height * 2` signed bytes of interleaved [R, G] data.
-    /// Both `width` and `height` must be multiples of 4.
+    /// `src` must contain at least `width * height * 2` signed bytes of
+    /// interleaved [R, G] data. Dimensions don't need to be multiples of 4;
+    /// partial edge blocks are filled with edge-replicated pixels.
     pub fn compress_blocks(
         src: &[i8],
         width: u32,
@@ -1090,9 +1136,9 @@ pub mod bc5s {
 
     /// Compress an interleaved RG I8 image into BC5S blocks, writing into `dst`.
     ///
-    /// `src` must contain `width * height * 2` signed bytes of interleaved [R, G] data.
-    /// Both `width` and `height` must be multiples of 4.
-    /// `dst` must be exactly `calc_output_size(width, height)` bytes long.
+    /// `src` must contain at least `width * height * 2` signed bytes of
+    /// interleaved [R, G] data. `dst` must be exactly
+    /// `calc_output_size(width, height)` bytes long.
     pub fn compress_blocks_into(
         src: &[i8],
         width: u32,
@@ -1101,7 +1147,7 @@ pub mod bc5s {
         dst: &mut [u8],
     ) -> Result<(), Error> {
         ensure_init();
-        check_block_aligned(width, height)?;
+        check_nonempty(width, height)?;
         let expected_src = (width as usize) * (height as usize) * SRC_PIXEL_STRIDE;
         assert!(
             src.len() >= expected_src,
@@ -1111,9 +1157,11 @@ pub mod bc5s {
         );
         assert_eq!(dst.len(), calc_output_size(width, height));
 
-        let blocks_x = (width / BLOCK_WIDTH) as usize;
-        let blocks_y = (height / BLOCK_HEIGHT) as usize;
+        let blocks_x = width.div_ceil(BLOCK_WIDTH) as usize;
+        let blocks_y = height.div_ceil(BLOCK_HEIGHT) as usize;
         let stride = (width as usize) * SRC_PIXEL_STRIDE;
+        let max_x = (width - 1) as usize;
+        let max_y = (height - 1) as usize;
 
         for by in 0..blocks_y {
             for bx in 0..blocks_x {
@@ -1121,14 +1169,14 @@ pub mod bc5s {
                 let mut g_block = [0i8; BLOCK_PIXELS];
 
                 for row in 0..4 {
-                    let row_start = (by * 4 + row) * stride + bx * 4 * SRC_PIXEL_STRIDE;
+                    let y = (by * 4 + row).min(max_y);
+                    let row_start = y * stride;
                     let block_row = row * 4;
-                    for (col, pair) in src[row_start..][..4 * SRC_PIXEL_STRIDE]
-                        .chunks_exact(SRC_PIXEL_STRIDE)
-                        .enumerate()
-                    {
-                        r_block[block_row + col] = pair[0];
-                        g_block[block_row + col] = pair[1];
+                    for col in 0..4 {
+                        let x = (bx * 4 + col).min(max_x);
+                        let pair_off = row_start + x * SRC_PIXEL_STRIDE;
+                        r_block[block_row + col] = src[pair_off];
+                        g_block[block_row + col] = src[pair_off + 1];
                     }
                 }
 
@@ -1222,13 +1270,14 @@ pub mod bc6h {
 
     #[must_use]
     pub fn calc_output_size(width: u32, height: u32) -> usize {
-        (width as usize / 4) * (height as usize / 4) * BYTES_PER_BLOCK
+        (width.div_ceil(4) as usize) * (height.div_ceil(4) as usize) * BYTES_PER_BLOCK
     }
 
     /// Compress an RGB FP16 image into BC6H blocks, returning the compressed data.
     ///
-    /// `src` must contain `width * height * 3` u16 values of tightly-packed RGB data.
-    /// Both `width` and `height` must be multiples of 4.
+    /// `src` must contain at least `width * height * 3` u16 values of
+    /// tightly-packed RGB data. Dimensions don't need to be multiples of 4;
+    /// partial edge blocks are filled with edge-replicated pixels.
     pub fn compress_blocks(
         src: &[u16],
         width: u32,
@@ -1242,11 +1291,11 @@ pub mod bc6h {
 
     /// Compress an RGB FP16 image into BC6H blocks, writing into `dst`.
     ///
-    /// `src` must contain `width * height * 3` u16 values of tightly-packed RGB data.
-    /// Both `width` and `height` must be multiples of 4.
-    /// `dst` must be exactly `calc_output_size(width, height)` bytes long.
+    /// `src` must contain at least `width * height * 3` u16 values of
+    /// tightly-packed RGB data. `dst` must be exactly
+    /// `calc_output_size(width, height)` bytes long.
     ///
-    /// The C API stride is in units of `u16`, so we pass `width * 3`.
+    /// The C API stride is in units of `u16`.
     pub fn compress_blocks_into(
         src: &[u16],
         width: u32,
@@ -1255,7 +1304,7 @@ pub mod bc6h {
         dst: &mut [u8],
     ) -> Result<(), Error> {
         ensure_init();
-        check_block_aligned(width, height)?;
+        check_nonempty(width, height)?;
         let expected_src = (width as usize) * (height as usize) * SRC_PIXEL_STRIDE;
         assert!(
             src.len() >= expected_src,
@@ -1265,22 +1314,54 @@ pub mod bc6h {
         );
         assert_eq!(dst.len(), calc_output_size(width, height));
 
-        let blocks_x = (width / BLOCK_WIDTH) as usize;
-        let blocks_y = (height / BLOCK_HEIGHT) as usize;
+        let blocks_x = width.div_ceil(BLOCK_WIDTH) as usize;
+        let blocks_y = height.div_ceil(BLOCK_HEIGHT) as usize;
         let stride_shorts = (width as usize) * SRC_PIXEL_STRIDE;
+        let w = width as usize;
+        let h = height as usize;
+        let max_x = w - 1;
+        let max_y = h - 1;
+
+        // 4×4 block of RGB u16 = 48 shorts of scratch.
+        let mut scratch = [0u16; 4 * 4 * SRC_PIXEL_STRIDE];
+        let scratch_stride_shorts = (4 * SRC_PIXEL_STRIDE) as u32;
 
         for by in 0..blocks_y {
             for bx in 0..blocks_x {
-                let src_offset = by * 4 * stride_shorts + bx * 4 * SRC_PIXEL_STRIDE;
+                let x0 = bx * 4;
+                let y0 = by * 4;
                 let dst_offset = (by * blocks_x + bx) * BYTES_PER_BLOCK;
-                check(unsafe {
-                    bindings::CompressBlockBC6(
-                        src.as_ptr().add(src_offset),
-                        stride_shorts as u32,
-                        dst.as_mut_ptr().add(dst_offset),
-                        options.as_ptr(),
-                    )
-                })?;
+
+                if x0 + 4 <= w && y0 + 4 <= h {
+                    let src_offset = y0 * stride_shorts + x0 * SRC_PIXEL_STRIDE;
+                    check(unsafe {
+                        bindings::CompressBlockBC6(
+                            src.as_ptr().add(src_offset),
+                            stride_shorts as u32,
+                            dst.as_mut_ptr().add(dst_offset),
+                            options.as_ptr(),
+                        )
+                    })?;
+                } else {
+                    for py in 0..4usize {
+                        let y = (y0 + py).min(max_y);
+                        for px in 0..4usize {
+                            let x = (x0 + px).min(max_x);
+                            let src_off = y * stride_shorts + x * SRC_PIXEL_STRIDE;
+                            let dst_off = (py * 4 + px) * SRC_PIXEL_STRIDE;
+                            scratch[dst_off..dst_off + SRC_PIXEL_STRIDE]
+                                .copy_from_slice(&src[src_off..src_off + SRC_PIXEL_STRIDE]);
+                        }
+                    }
+                    check(unsafe {
+                        bindings::CompressBlockBC6(
+                            scratch.as_ptr(),
+                            scratch_stride_shorts,
+                            dst.as_mut_ptr().add(dst_offset),
+                            options.as_ptr(),
+                        )
+                    })?;
+                }
             }
         }
         Ok(())
@@ -1466,16 +1547,44 @@ mod tests {
     }
 
     #[test]
-    fn not_block_aligned_returns_error() {
-        let src = vec![0u8; 5 * 5 * 4];
+    fn empty_image_returns_error() {
         let opts = bc7::Options::new().unwrap();
-        let result = bc7::compress_blocks(&src, 5, 5, &opts);
+        let result = bc7::compress_blocks(&[], 0, 0, &opts);
         assert!(matches!(
             result,
-            Err(Error::NotBlockAligned {
-                width: 5,
-                height: 5
+            Err(Error::EmptyImage {
+                width: 0,
+                height: 0
             })
         ));
+    }
+
+    /// Non-multiple-of-4 dimensions round up to a single block with
+    /// edge-replicated pixels.
+    #[test]
+    fn bc1_non_block_aligned_dimensions() {
+        // 5x3 image: each pixel is solid red (R=255).
+        let mut src = vec![0u8; 5 * 3 * 4];
+        for i in 0..(5 * 3) {
+            src[i * 4] = 255;
+            src[i * 4 + 3] = 255;
+        }
+        let opts = bc1::Options::new().unwrap();
+        let compressed = bc1::compress_blocks(&src, 5, 3, &opts).unwrap();
+        // Rounded to 8x4: 2 blocks in x, 1 in y = 2 blocks = 16 bytes.
+        assert_eq!(compressed.len(), 2 * bc1::BYTES_PER_BLOCK);
+        // The right-edge block (containing the replicated column) should still
+        // produce a valid red block on decode.
+        let decoded = bc1::decompress_block(
+            (&compressed[bc1::BYTES_PER_BLOCK..2 * bc1::BYTES_PER_BLOCK])
+                .try_into()
+                .unwrap(),
+        )
+        .unwrap();
+        assert!(
+            decoded[0] > 200,
+            "edge block should decode to red, got R={}",
+            decoded[0]
+        );
     }
 }

@@ -124,3 +124,70 @@ fn quality_to_float(quality: Quality) -> f32 {
 fn cmp_err(e: cmp::Error) -> Error {
     Error::Compression(e.to_string())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::alpha::AlphaMode;
+    use crate::surface::ColorSpace;
+
+    fn solid_red(width: u32, height: u32) -> Surface {
+        let mut data = Vec::with_capacity((width * height * 4) as usize);
+        for _ in 0..(width * height) {
+            data.extend_from_slice(&[255, 0, 0, 255]);
+        }
+        Surface {
+            data,
+            width,
+            height,
+            stride: width * 4,
+            format: ktx2::Format::R8G8B8A8_UNORM,
+            color_space: ColorSpace::Linear,
+            alpha: AlphaMode::Opaque,
+        }
+    }
+
+    #[test]
+    fn bc7_non_aligned_5x5() {
+        let surface = solid_red(5, 5);
+        let encoder = CompressonatorEncoder;
+        // Compressonator BC7 at UltraFast produces R=0 output on non-MSVC
+        // toolchains (Linux, macOS). Use Slow so the NPOT coverage is
+        // independent of that upstream quirk.
+        let out = encoder
+            .compress(&surface, ktx2::Format::BC7_UNORM_BLOCK, Quality::Slow, None)
+            .unwrap();
+        // 5x5 → 8×8 → 4 blocks × 16 bytes.
+        assert_eq!(out.len(), 4 * 16);
+        for chunk in out.chunks_exact(16) {
+            let block: [u8; 16] = chunk.try_into().unwrap();
+            let decoded = ctt_compressonator::bc7::decompress_block(&block).unwrap();
+            for pixel in decoded.chunks_exact(4) {
+                assert!(pixel[0] > 200, "compressonator BC7 edge R={}", pixel[0]);
+            }
+        }
+    }
+
+    #[test]
+    fn bc1_non_aligned_7x3() {
+        let surface = solid_red(7, 3);
+        let encoder = CompressonatorEncoder;
+        let out = encoder
+            .compress(
+                &surface,
+                ktx2::Format::BC1_RGBA_UNORM_BLOCK,
+                Quality::UltraFast,
+                None,
+            )
+            .unwrap();
+        // 7×3 → 8×4 → 2 blocks × 8 bytes.
+        assert_eq!(out.len(), 2 * 8);
+        for chunk in out.chunks_exact(8) {
+            let block: [u8; 8] = chunk.try_into().unwrap();
+            let decoded = ctt_compressonator::bc1::decompress_block(&block).unwrap();
+            for pixel in decoded.chunks_exact(4) {
+                assert!(pixel[0] > 200, "compressonator BC1 edge R={}", pixel[0]);
+            }
+        }
+    }
+}
