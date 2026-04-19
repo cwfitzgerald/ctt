@@ -5,7 +5,8 @@
 //! handled separately in [`super::alpha`]. sRGB decoding is applied here
 //! (RGB channels only; alpha rides through as linear).
 
-use std::sync::LazyLock;
+mod srgb;
+pub use srgb::{load_bgr8_srgb_f32, load_bgra8_srgb_f32, load_srgb8_f32};
 
 use half::f16;
 
@@ -13,25 +14,6 @@ use crate::error::{Error, Result};
 use crate::surface::Surface;
 
 use super::buffer::Buffer;
-
-/// sRGB EOTF lookup table — maps every u8 value (0–255) to its linear f32 equivalent.
-pub(crate) static EOTF_LUT: LazyLock<[f32; 256]> = LazyLock::new(|| {
-    let mut table = [0.0f32; 256];
-    for (i, entry) in table.iter_mut().enumerate() {
-        let c = i as f32 / 255.0;
-        *entry = srgb_eotf(c);
-    }
-    table
-});
-
-/// Apply the sRGB EOTF (sRGB-encoded → linear) to a single value.
-fn srgb_eotf(c: f32) -> f32 {
-    if c <= 0.04045 {
-        c / 12.92
-    } else {
-        ((c + 0.055) / 1.055).powf(2.4)
-    }
-}
 
 /// Read `channels` bytes per pixel, producing one `[f32; 4]` with lane 3
 /// defaulted to 1.0 (and intermediate lanes defaulted to 0.0).
@@ -53,21 +35,6 @@ pub fn load_i8_snorm_f32(surface: &Surface, channels: usize) -> Result<Buffer<f3
     })
 }
 
-pub fn load_srgb8_f32(surface: &Surface, channels: usize) -> Result<Buffer<f32>> {
-    profiling::scope!("load_srgb8_f32");
-    let lut = &*EOTF_LUT;
-    read_pixels_f32(surface, channels, 1, |bytes, lanes| {
-        // RGB lanes through the sRGB EOTF, alpha linear.
-        for (c, (lane, &byte)) in lanes.iter_mut().zip(bytes).enumerate() {
-            *lane = if c < 3 {
-                lut[byte as usize]
-            } else {
-                byte as f32 / 255.0
-            };
-        }
-    })
-}
-
 pub fn load_bgra8_unorm_f32(surface: &Surface) -> Result<Buffer<f32>> {
     profiling::scope!("load_bgra8_unorm_f32");
     read_pixels_f32(surface, 4, 1, |bytes, lanes| {
@@ -79,18 +46,6 @@ pub fn load_bgra8_unorm_f32(surface: &Surface) -> Result<Buffer<f32>> {
     })
 }
 
-pub fn load_bgra8_srgb_f32(surface: &Surface) -> Result<Buffer<f32>> {
-    profiling::scope!("load_bgra8_srgb_f32");
-    let lut = &*EOTF_LUT;
-    read_pixels_f32(surface, 4, 1, |bytes, lanes| {
-        let &[b, g, r, a] = <&[u8; 4]>::try_from(bytes).expect("4-byte pixel");
-        lanes[0] = lut[r as usize];
-        lanes[1] = lut[g as usize];
-        lanes[2] = lut[b as usize];
-        lanes[3] = a as f32 / 255.0;
-    })
-}
-
 pub fn load_bgr8_unorm_f32(surface: &Surface) -> Result<Buffer<f32>> {
     profiling::scope!("load_bgr8_unorm_f32");
     read_pixels_f32(surface, 3, 1, |bytes, lanes| {
@@ -98,17 +53,6 @@ pub fn load_bgr8_unorm_f32(surface: &Surface) -> Result<Buffer<f32>> {
         lanes[0] = r as f32 / 255.0;
         lanes[1] = g as f32 / 255.0;
         lanes[2] = b as f32 / 255.0;
-    })
-}
-
-pub fn load_bgr8_srgb_f32(surface: &Surface) -> Result<Buffer<f32>> {
-    profiling::scope!("load_bgr8_srgb_f32");
-    let lut = &*EOTF_LUT;
-    read_pixels_f32(surface, 3, 1, |bytes, lanes| {
-        let &[b, g, r] = <&[u8; 3]>::try_from(bytes).expect("3-byte pixel");
-        lanes[0] = lut[r as usize];
-        lanes[1] = lut[g as usize];
-        lanes[2] = lut[b as usize];
     })
 }
 
