@@ -179,6 +179,63 @@ mod tests {
         }
     }
 
+    /// Full-chain u8 roundtrip for every byte value on every channel.
+    ///
+    /// Sweeps the 256-entry u8 domain through the load SIMD approximation,
+    /// then back out through the store SIMD approximation, and asserts the
+    /// recovered bytes exactly match the input. Both approximations are
+    /// individually inside the ±0.5/255 margin; chaining them is a stronger
+    /// check that error compounding near the linear/curve threshold stays
+    /// within a 1-byte tolerance.
+    fn full_chain_srgb_roundtrip(format: ktx2::Format) {
+        let mut data = vec![0u8; 256 * 4];
+        for b in 0..256usize {
+            let base = b * 4;
+            data[base] = b as u8;
+            data[base + 1] = (255 - b) as u8;
+            data[base + 2] = ((b * 7) & 0xff) as u8;
+            data[base + 3] = b as u8;
+        }
+        let surface = Surface {
+            data: data.clone(),
+            width: 256,
+            height: 1,
+            stride: 256 * 4,
+            format,
+            color_space: ColorSpace::Srgb,
+            alpha: AlphaMode::Opaque,
+        };
+        let buf = load::load_f32(&surface).unwrap();
+        let out = store::store_f32(buf, format, ColorSpace::Srgb, AlphaMode::Opaque).unwrap();
+
+        let mut mismatches: Vec<(usize, u8, u8)> = Vec::new();
+        for (i, (&got, &want)) in out.data.iter().zip(&data).enumerate() {
+            if got != want {
+                mismatches.push((i, want, got));
+            }
+        }
+        assert!(
+            mismatches.is_empty(),
+            "{format:?} roundtrip diverged at {} byte(s): {:?}",
+            mismatches.len(),
+            mismatches
+                .iter()
+                .take(16)
+                .map(|(i, w, g)| format!("pos {i} want {w} got {g}"))
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn roundtrip_rgba8_srgb_full_chain() {
+        full_chain_srgb_roundtrip(ktx2::Format::R8G8B8A8_SRGB);
+    }
+
+    #[test]
+    fn roundtrip_bgra8_srgb_full_chain() {
+        full_chain_srgb_roundtrip(ktx2::Format::B8G8R8A8_SRGB);
+    }
+
     #[test]
     fn bgra_byte_swap() {
         // BGRA input 0xB 0xG 0xR 0xA (decimal 10,20,30,40) reads as

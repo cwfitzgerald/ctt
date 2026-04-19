@@ -4,43 +4,12 @@
 //! Input lanes are in *linear*, *premultiplied* space (for float pipelines);
 //! unpremultiplication and sRGB re-encoding happen at the callers / here.
 
-use std::sync::LazyLock;
+mod srgb;
+pub use srgb::{store_bgr8_srgb_f32, store_bgra8_srgb_f32, store_srgb8_f32};
 
 use half::f16;
 
 use super::buffer::Buffer;
-
-const OETF_LUT_SIZE: usize = 4096;
-
-/// sRGB OETF lookup table — 4097 entries over [0, 1] for linear interpolation.
-static OETF_LUT: LazyLock<[f32; OETF_LUT_SIZE + 1]> = LazyLock::new(|| {
-    let mut table = [0.0f32; OETF_LUT_SIZE + 1];
-    for (i, entry) in table.iter_mut().enumerate() {
-        let c = i as f32 / OETF_LUT_SIZE as f32;
-        *entry = srgb_oetf_precise(c);
-    }
-    table
-});
-
-fn srgb_oetf_precise(c: f32) -> f32 {
-    if c <= 0.0031308 {
-        c * 12.92
-    } else {
-        1.055 * c.powf(1.0 / 2.4) - 0.055
-    }
-}
-
-#[inline(always)]
-fn srgb_oetf_fast(c: f32) -> f32 {
-    let c = c.clamp(0.0, 1.0);
-    let scaled = c * OETF_LUT_SIZE as f32;
-    let idx = scaled as usize;
-    if idx >= OETF_LUT_SIZE {
-        return OETF_LUT[OETF_LUT_SIZE];
-    }
-    let frac = scaled - idx as f32;
-    OETF_LUT[idx] + frac * (OETF_LUT[idx + 1] - OETF_LUT[idx])
-}
 
 // ---- f32 pipeline stores ----
 
@@ -63,20 +32,6 @@ pub fn store_i8_snorm_f32(buf: &Buffer<f32>, channels: usize) -> Vec<u8> {
     })
 }
 
-pub fn store_srgb8_f32(buf: &Buffer<f32>, channels: usize) -> Vec<u8> {
-    profiling::scope!("store_srgb8_f32");
-    write_pixels(buf, channels, 1, |lanes, bytes| {
-        for (c, (&lane, byte)) in lanes.iter().zip(bytes.iter_mut()).enumerate() {
-            let encoded = if c < 3 {
-                srgb_oetf_fast(lane)
-            } else {
-                lane.clamp(0.0, 1.0)
-            };
-            *byte = (encoded * 255.0).round() as u8;
-        }
-    })
-}
-
 pub fn store_bgra8_unorm_f32(buf: &Buffer<f32>) -> Vec<u8> {
     profiling::scope!("store_bgra8_unorm_f32");
     write_pixels(buf, 4, 1, |lanes, bytes| {
@@ -88,17 +43,6 @@ pub fn store_bgra8_unorm_f32(buf: &Buffer<f32>) -> Vec<u8> {
     })
 }
 
-pub fn store_bgra8_srgb_f32(buf: &Buffer<f32>) -> Vec<u8> {
-    profiling::scope!("store_bgra8_srgb_f32");
-    write_pixels(buf, 4, 1, |lanes, bytes| {
-        let arr = <&mut [u8; 4]>::try_from(bytes).expect("4-byte pixel");
-        arr[0] = (srgb_oetf_fast(lanes[2]) * 255.0).round() as u8;
-        arr[1] = (srgb_oetf_fast(lanes[1]) * 255.0).round() as u8;
-        arr[2] = (srgb_oetf_fast(lanes[0]) * 255.0).round() as u8;
-        arr[3] = (lanes[3].clamp(0.0, 1.0) * 255.0).round() as u8;
-    })
-}
-
 pub fn store_bgr8_unorm_f32(buf: &Buffer<f32>) -> Vec<u8> {
     profiling::scope!("store_bgr8_unorm_f32");
     write_pixels(buf, 3, 1, |lanes, bytes| {
@@ -106,16 +50,6 @@ pub fn store_bgr8_unorm_f32(buf: &Buffer<f32>) -> Vec<u8> {
         arr[0] = (lanes[2].clamp(0.0, 1.0) * 255.0).round() as u8;
         arr[1] = (lanes[1].clamp(0.0, 1.0) * 255.0).round() as u8;
         arr[2] = (lanes[0].clamp(0.0, 1.0) * 255.0).round() as u8;
-    })
-}
-
-pub fn store_bgr8_srgb_f32(buf: &Buffer<f32>) -> Vec<u8> {
-    profiling::scope!("store_bgr8_srgb_f32");
-    write_pixels(buf, 3, 1, |lanes, bytes| {
-        let arr = <&mut [u8; 3]>::try_from(bytes).expect("3-byte pixel");
-        arr[0] = (srgb_oetf_fast(lanes[2]) * 255.0).round() as u8;
-        arr[1] = (srgb_oetf_fast(lanes[1]) * 255.0).round() as u8;
-        arr[2] = (srgb_oetf_fast(lanes[0]) * 255.0).round() as u8;
     })
 }
 
