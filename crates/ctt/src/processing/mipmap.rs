@@ -4,7 +4,7 @@
 //! for filtered downsampling. This restricts mipmap to the f32 pipeline for
 //! now; widening to f64 or uint can slot in later.
 
-use image::{Rgba32FImage, imageops};
+use image::{ImageBuffer, Rgba, Rgba32FImage, imageops};
 
 use crate::error::{Error, Result};
 
@@ -52,47 +52,38 @@ pub fn generate(
         return Err(Error::UnsupportedFormat("mipmap count must be >= 1".into()));
     }
 
-    if target == 1 {
-        return Ok(vec![base]);
-    }
-
     let imf = filter.to_image_filter();
-    let mut prev = buffer_to_image(&base);
-
     let mut out = Vec::with_capacity(target);
     out.push(base);
 
     while out.len() < target {
         profiling::scope!("mip_level");
-        let new_w = (prev.width() / 2).max(1);
-        let new_h = (prev.height() / 2).max(1);
-        let resized = imageops::resize(&prev, new_w, new_h, imf);
-        out.push(image_to_buffer(&resized));
-        prev = resized;
+        // Borrow the previous level as a zero-copy image view so `imageops`
+        // can read it without taking ownership. The borrow ends when the
+        // block does, freeing `out` for the push below.
+        let resized = {
+            let prev = out.last().unwrap();
+            let new_w = (prev.width / 2).max(1);
+            let new_h = (prev.height / 2).max(1);
+            let view: ImageBuffer<Rgba<f32>, &[f32]> =
+                ImageBuffer::from_raw(prev.width, prev.height, bytemuck::cast_slice(&prev.pixels))
+                    .expect("buffer dimensions match pixel count");
+            imageops::resize(&view, new_w, new_h, imf)
+        };
+        out.push(image_to_buffer(resized));
     }
 
     Ok(out)
 }
 
-fn buffer_to_image(buf: &Buffer<f32>) -> Rgba32FImage {
-    profiling::scope!("buffer_to_image");
-    Rgba32FImage::from_vec(
-        buf.width,
-        buf.height,
-        bytemuck::pod_collect_to_vec(&buf.pixels),
-    )
-    .unwrap()
-}
-
-fn image_to_buffer(img: &Rgba32FImage) -> Buffer<f32> {
-    let raw = img.as_raw();
-    let pixels = raw
-        .chunks_exact(4)
-        .map(|ch| [ch[0], ch[1], ch[2], ch[3]])
-        .collect();
+fn image_to_buffer(img: Rgba32FImage) -> Buffer<f32> {
+    let width = img.width();
+    let height = img.height();
+    let raw = img.into_raw();
+    let pixels = bytemuck::cast_vec(raw);
     Buffer {
         pixels,
-        width: img.width(),
-        height: img.height(),
+        width,
+        height,
     }
 }
