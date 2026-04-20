@@ -86,7 +86,7 @@ pub struct Args {
     pub mipmap_count: Option<usize>,
 
     /// Filter used for mipmap downsampling. Requires --mipmap.
-    #[arg(long, default_value = "catmull-rom", requires = "mipmap")]
+    #[arg(long, default_value = "triangle", requires = "mipmap")]
     pub mipmap_filter: MipmapFilterArg,
 
     /// Enable zstd supercompression for KTX2 output.

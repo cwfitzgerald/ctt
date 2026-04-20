@@ -14,8 +14,8 @@ use super::buffer::Buffer;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum MipmapFilter {
     Nearest,
-    Triangle,
     #[default]
+    Triangle,
     CatmullRom,
     Gaussian,
     Lanczos3,
