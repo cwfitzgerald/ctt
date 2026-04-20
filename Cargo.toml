@@ -33,6 +33,7 @@ bytemuck = "1"
 cc = "1"
 clap = { version = "4", features = ["derive"] }
 ddsfile = "0.6"
+fast_image_resize = "6"
 fern = "0.7"
 half = { version = "2", features = ["bytemuck"] }
 image = { version = "0.25", default-features = false }

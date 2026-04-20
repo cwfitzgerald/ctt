@@ -42,8 +42,8 @@ ctt-compressonator = { workspace = true, optional = true }
 ctt-etcpak = { workspace = true, optional = true }
 ctt-intel-texture-compressor = { workspace = true, optional = true }
 ddsfile = { workspace = true }
+fast_image_resize = { workspace = true }
 half = { workspace = true }
-image = { workspace = true }
 ktx2 = { workspace = true }
 log = { workspace = true }
 miniz_oxide = { workspace = true }

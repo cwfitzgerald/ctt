@@ -1,16 +1,18 @@
 //! Mipmap generation on f32 pipeline buffers.
 //!
-//! We route through [`image::Rgba32FImage`] so we can use `image::imageops`
-//! for filtered downsampling. This restricts mipmap to the f32 pipeline for
-//! now; widening to f64 or uint can slot in later.
+//! Backed by `fast_image_resize` for SIMD-accelerated filtered downsampling
+//! of RGBA32F data. Restricted to the f32 pipeline for now; widening to f64
+//! or uint can slot in later.
 
-use image::{ImageBuffer, Rgba, Rgba32FImage, imageops};
+use fast_image_resize::images::{Image, ImageRef};
+use fast_image_resize::pixels::PixelType;
+use fast_image_resize::{FilterType, ResizeAlg, ResizeOptions, Resizer};
 
 use crate::error::{Error, Result};
 
 use super::buffer::Buffer;
 
-/// Filter types for mipmap downsampling. Mirrors [`imageops::FilterType`].
+/// Filter types for mipmap downsampling.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum MipmapFilter {
     Nearest,
@@ -22,13 +24,13 @@ pub enum MipmapFilter {
 }
 
 impl MipmapFilter {
-    fn to_image_filter(self) -> imageops::FilterType {
+    fn to_resize_alg(self) -> ResizeAlg {
         match self {
-            Self::Nearest => imageops::FilterType::Nearest,
-            Self::Triangle => imageops::FilterType::Triangle,
-            Self::CatmullRom => imageops::FilterType::CatmullRom,
-            Self::Gaussian => imageops::FilterType::Gaussian,
-            Self::Lanczos3 => imageops::FilterType::Lanczos3,
+            Self::Nearest => ResizeAlg::Nearest,
+            Self::Triangle => ResizeAlg::Convolution(FilterType::Bilinear),
+            Self::CatmullRom => ResizeAlg::Convolution(FilterType::CatmullRom),
+            Self::Gaussian => ResizeAlg::Convolution(FilterType::Gaussian),
+            Self::Lanczos3 => ResizeAlg::Convolution(FilterType::Lanczos3),
         }
     }
 }
@@ -52,38 +54,47 @@ pub fn generate(
         return Err(Error::UnsupportedFormat("mipmap count must be >= 1".into()));
     }
 
-    let imf = filter.to_image_filter();
+    let options = ResizeOptions::new()
+        .resize_alg(filter.to_resize_alg())
+        .use_alpha(false);
+    let mut resizer = Resizer::new();
     let mut out = Vec::with_capacity(target);
     out.push(base);
 
     while out.len() < target {
         profiling::scope!("mip_level");
-        // Borrow the previous level as a zero-copy image view so `imageops`
-        // can read it without taking ownership. The borrow ends when the
-        // block does, freeing `out` for the push below.
-        let resized = {
+        let next = {
             let prev = out.last().unwrap();
             let new_w = (prev.width / 2).max(1);
             let new_h = (prev.height / 2).max(1);
-            let view: ImageBuffer<Rgba<f32>, &[f32]> =
-                ImageBuffer::from_raw(prev.width, prev.height, bytemuck::cast_slice(&prev.pixels))
-                    .expect("buffer dimensions match pixel count");
-            imageops::resize(&view, new_w, new_h, imf)
+            let src = ImageRef::new(
+                prev.width,
+                prev.height,
+                bytemuck::cast_slice(&prev.pixels),
+                PixelType::F32x4,
+            )
+            .expect("buffer dimensions match pixel count");
+            let mut dst_pixels = vec![[0.0f32; 4]; (new_w * new_h) as usize];
+            {
+                let mut dst = Image::from_slice_u8(
+                    new_w,
+                    new_h,
+                    bytemuck::cast_slice_mut(&mut dst_pixels),
+                    PixelType::F32x4,
+                )
+                .expect("destination dimensions match pixel count");
+                resizer
+                    .resize(&src, &mut dst, &options)
+                    .map_err(|e| Error::UnsupportedFormat(format!("resize failed: {e}")))?;
+            }
+            Buffer {
+                pixels: dst_pixels,
+                width: new_w,
+                height: new_h,
+            }
         };
-        out.push(image_to_buffer(resized));
+        out.push(next);
     }
 
     Ok(out)
-}
-
-fn image_to_buffer(img: Rgba32FImage) -> Buffer<f32> {
-    let width = img.width();
-    let height = img.height();
-    let raw = img.into_raw();
-    let pixels = bytemuck::cast_vec(raw);
-    Buffer {
-        pixels,
-        width,
-        height,
-    }
 }
