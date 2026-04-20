@@ -130,11 +130,52 @@ unsafe fn rcp_refined_avx2(x: std::arch::x86_64::__m256) -> std::arch::x86_64::_
     _mm256_mul_ps(y, correction)
 }
 
+/// AVX-512 counterpart of [`rsqrt_refined_avx2`]. Uses `rsqrt14ps`
+/// (~2⁻¹⁴ initial relative error); one NR step squares that to ~2⁻²⁸,
+/// comfortably below f32 ε.
+///
+/// # Safety
+/// * AVX-512 F must be available (enforced by `target_feature`).
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx512f,avx512vl,avx512bw")]
+#[inline]
+unsafe fn rsqrt_refined_avx512(x: std::arch::x86_64::__m512) -> std::arch::x86_64::__m512 {
+    use std::arch::x86_64::*;
+    let y = _mm512_rsqrt14_ps(x);
+    let y_sq = _mm512_mul_ps(y, y);
+    let half_x = _mm512_mul_ps(_mm512_set1_ps(0.5), x);
+    let correction = _mm512_fnmadd_ps(half_x, y_sq, _mm512_set1_ps(1.5));
+    _mm512_mul_ps(y, correction)
+}
+
+/// AVX-512 counterpart of [`rcp_refined_avx2`]. Uses `rcp14ps`; one NR
+/// step squares the error to well below f32 ε.
+///
+/// # Safety
+/// * AVX-512 F must be available (enforced by `target_feature`).
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx512f,avx512vl,avx512bw")]
+#[inline]
+unsafe fn rcp_refined_avx512(x: std::arch::x86_64::__m512) -> std::arch::x86_64::__m512 {
+    use std::arch::x86_64::*;
+    let y = _mm512_rcp14_ps(x);
+    let correction = _mm512_fnmadd_ps(x, y, _mm512_set1_ps(2.0));
+    _mm512_mul_ps(y, correction)
+}
+
 pub fn store_srgb8_f32(buf: &Buffer<f32>, channels: usize) -> Vec<u8> {
     profiling::scope!("store_srgb8_f32");
 
     #[cfg(target_arch = "x86_64")]
     {
+        if channels == 4
+            && is_x86_feature_detected!("avx512f")
+            && is_x86_feature_detected!("avx512bw")
+            && is_x86_feature_detected!("avx512vl")
+        {
+            // SAFETY: runtime check confirms avx512f + bw + vl are available.
+            return unsafe { store_srgb8_f32_avx512::<false>(buf) };
+        }
         if channels == 4 && is_x86_feature_detected!("avx2") && is_x86_feature_detected!("fma") {
             // SAFETY: runtime check confirms avx2 + fma are available.
             return unsafe { store_srgb8_f32_avx2_fma::<false>(buf) };
@@ -162,6 +203,13 @@ pub fn store_bgra8_srgb_f32(buf: &Buffer<f32>) -> Vec<u8> {
 
     #[cfg(target_arch = "x86_64")]
     {
+        if is_x86_feature_detected!("avx512f")
+            && is_x86_feature_detected!("avx512bw")
+            && is_x86_feature_detected!("avx512vl")
+        {
+            // SAFETY: runtime check confirms avx512f + bw + vl are available.
+            return unsafe { store_srgb8_f32_avx512::<true>(buf) };
+        }
         if is_x86_feature_detected!("avx2") && is_x86_feature_detected!("fma") {
             // SAFETY: runtime check confirms avx2 + fma are available.
             return unsafe { store_srgb8_f32_avx2_fma::<true>(buf) };
@@ -273,9 +321,17 @@ unsafe fn encode_srgb_pixel_sse4_1<const BGRA: bool>(lanes: std::arch::x86_64::_
 /// Processes one pixel (4 f32 → 4 u8 bytes) per iteration via
 /// [`encode_srgb_pixel_sse4_1`]. See that helper for the piecewise form and
 /// accuracy guarantees.
+///
+/// **Not part of the public API.** Exposed as `pub` + `doc(hidden)` only so
+/// `benches/` (a separate crate) can measure this kernel directly without
+/// going through dispatch. No stability guarantees — may be renamed,
+/// removed, or have its signature changed across patch releases. Real
+/// callers should use [`store_srgb8_f32`] or [`store_bgra8_srgb_f32`],
+/// which pick the best available kernel at runtime.
+#[doc(hidden)]
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "sse4.1")]
-unsafe fn store_srgb8_f32_sse4_1<const BGRA: bool>(buf: &Buffer<f32>) -> Vec<u8> {
+pub unsafe fn store_srgb8_f32_sse4_1<const BGRA: bool>(buf: &Buffer<f32>) -> Vec<u8> {
     use std::arch::x86_64::*;
 
     profiling::scope!("store_srgb8_f32_sse4_1");
@@ -300,15 +356,91 @@ unsafe fn store_srgb8_f32_sse4_1<const BGRA: bool>(buf: &Buffer<f32>) -> Vec<u8>
     out
 }
 
+/// Encode one `__m256` of two `[R, G, B, A]` linear-f32 pixels into a packed
+/// `__m128i` of 8 sRGB-u16 lanes (one per output byte, awaiting the final
+/// `packus_epi16` that the caller chains across two of these to produce 16
+/// bytes — or against itself for an 8-byte tail store).
+///
+/// `BGRA = false` → byte order `R,G,B,A` per pixel (`R8G8B8A8_SRGB`);
+/// `BGRA = true`  → byte order `B,G,R,A` per pixel (`B8G8R8A8_SRGB`).
+///
+/// See [`encode_srgb_pixel_sse4_1`] for the piecewise form and accuracy
+/// guarantees — the math is identical, just widened to 8 lanes.
+///
+/// # Safety
+/// * AVX2 and FMA must be available (enforced by `target_feature`).
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2,fma")]
+#[inline]
+unsafe fn encode_srgb_pixels_avx2<const BGRA: bool>(
+    lanes: std::arch::x86_64::__m256,
+) -> std::arch::x86_64::__m128i {
+    use std::arch::x86_64::*;
+
+    // Per-128-bit-lane shuffle swaps R↔B within each pixel; alpha stays at
+    // lanes 3 and 7 so the alpha-bypass blend still applies.
+    let lanes = if BGRA {
+        _mm256_shuffle_ps::<0b11_00_01_10>(lanes, lanes)
+    } else {
+        lanes
+    };
+
+    let coeff_a = _mm256_set1_ps(SRGB_OETF_MINIMAX_A);
+    let coeff_b = _mm256_set1_ps(SRGB_OETF_MINIMAX_B);
+    let coeff_c = _mm256_set1_ps(SRGB_OETF_MINIMAX_C);
+    let linear_scale = _mm256_set1_ps(12.92);
+    let threshold = _mm256_set1_ps(0.003_130_8);
+    let scale_255 = _mm256_set1_ps(255.0);
+    let zero = _mm256_setzero_ps();
+    let one = _mm256_set1_ps(1.0);
+    // Lanes 3 and 7 are the alpha channel in the [R,G,B,A,R,G,B,A] layout.
+    let alpha_lane_mask = _mm256_castsi256_ps(_mm256_setr_epi32(0, 0, 0, -1, 0, 0, 0, -1));
+
+    let x = _mm256_max_ps(_mm256_min_ps(lanes, one), zero);
+
+    let quarter = _mm256_sqrt_ps(_mm256_sqrt_ps(x));
+    let diff = _mm256_sub_ps(quarter, coeff_a);
+    // SAFETY: helpers require avx2+fma, matched by the enclosing `target_feature`.
+    let r3 = unsafe { rsqrt_refined_avx2(diff) };
+    let inner = _mm256_sub_ps(r3, coeff_b);
+    let cube = _mm256_mul_ps(_mm256_mul_ps(inner, inner), inner);
+    // SAFETY: as above.
+    let rcp = unsafe { rcp_refined_avx2(cube) };
+    let curve = _mm256_sub_ps(rcp, coeff_c);
+    let linear = _mm256_mul_ps(x, linear_scale);
+
+    let use_linear = _mm256_cmp_ps::<_CMP_LT_OQ>(x, threshold);
+    let rgb = _mm256_blendv_ps(curve, linear, use_linear);
+    let encoded = _mm256_blendv_ps(rgb, x, alpha_lane_mask);
+
+    let scaled = _mm256_mul_ps(encoded, scale_255);
+    let i32s = _mm256_cvtps_epi32(scaled);
+    let lo = _mm256_castsi256_si128(i32s);
+    let hi = _mm256_extracti128_si256::<1>(i32s);
+    _mm_packus_epi32(lo, hi)
+}
+
 /// AVX2 + FMA path for 4-channel sRGB store, parameterized by output byte
 /// order: `BGRA = false` → `R8G8B8A8_SRGB`; `BGRA = true` → `B8G8R8A8_SRGB`.
 ///
-/// Processes two pixels (8 f32 → 8 u8 bytes) per iteration; any 1-pixel odd
-/// tail is handled by [`encode_srgb_pixel_sse4_1`] so the tail stays
-/// vectorized and consistent with the SSE4.1 fast path.
+/// Processes four pixels (16 f32 → 16 u8 bytes) per iteration via two
+/// chained calls to [`encode_srgb_pixels_avx2`], whose 8-u16 outputs are
+/// joined by a single `packus_epi16` for one 16-byte unaligned store.
+/// Running two independent OETF chains per iteration exposes more ILP than
+/// the previous 2-pixel layout while keeping the same per-pixel intrinsic
+/// count.
+///
+/// A 0-3 pixel tail is handled by an optional 2-pixel AVX2 step (helper
+/// packed against itself for an 8-byte store) plus an optional 1-pixel
+/// [`encode_srgb_pixel_sse4_1`] step, so the tail stays vectorized.
+///
+/// **Not part of the public API.** See [`store_srgb8_f32_sse4_1`] for the
+/// rationale; use [`store_srgb8_f32`] / [`store_bgra8_srgb_f32`] for the
+/// stable, runtime-dispatched entry points.
+#[doc(hidden)]
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2,fma")]
-unsafe fn store_srgb8_f32_avx2_fma<const BGRA: bool>(buf: &Buffer<f32>) -> Vec<u8> {
+pub unsafe fn store_srgb8_f32_avx2_fma<const BGRA: bool>(buf: &Buffer<f32>) -> Vec<u8> {
     use std::arch::x86_64::*;
 
     profiling::scope!("store_srgb8_f32_avx2_fma");
@@ -318,66 +450,159 @@ unsafe fn store_srgb8_f32_avx2_fma<const BGRA: bool>(buf: &Buffer<f32>) -> Vec<u
     let src_base = buf.pixels.as_ptr() as *const f32;
     let dst_base = out.as_mut_ptr();
 
-    let pair_count = total_pixels / 2;
-    let tail = total_pixels % 2;
+    let quad_count = total_pixels / 4;
+    let tail_pixels = total_pixels % 4;
 
     // SAFETY: every intrinsic and pointer op below runs with avx2+fma enabled
     // (target_feature on the enclosing fn). `src_base` spans `total_pixels * 4`
     // f32 lanes by construction of `Buffer`, and `out` was sized for the same
     // `total_pixels * 4` u8 bytes.
     unsafe {
-        let coeff_a = _mm256_set1_ps(SRGB_OETF_MINIMAX_A);
-        let coeff_b = _mm256_set1_ps(SRGB_OETF_MINIMAX_B);
-        let coeff_c = _mm256_set1_ps(SRGB_OETF_MINIMAX_C);
-        let linear_scale = _mm256_set1_ps(12.92);
-        let threshold = _mm256_set1_ps(0.003_130_8);
-        let scale_255 = _mm256_set1_ps(255.0);
-        let zero = _mm256_setzero_ps();
-        let one = _mm256_set1_ps(1.0);
-        // Lanes 3 and 7 are the alpha channel in the [R,G,B,A,R,G,B,A] layout.
-        let alpha_lane_mask = _mm256_castsi256_ps(_mm256_setr_epi32(0, 0, 0, -1, 0, 0, 0, -1));
-
-        for i in 0..pair_count {
-            let lanes = _mm256_loadu_ps(src_base.add(i * 8));
-            // Per-128-bit-lane shuffle swaps R↔B within each pixel; alpha stays
-            // at lanes 3 and 7. See `encode_srgb_pixel_sse4_1` for the mask.
-            let lanes = if BGRA {
-                _mm256_shuffle_ps::<0b11_00_01_10>(lanes, lanes)
-            } else {
-                lanes
-            };
-            let x = _mm256_max_ps(_mm256_min_ps(lanes, one), zero);
-
-            let quarter = _mm256_sqrt_ps(_mm256_sqrt_ps(x));
-            let diff = _mm256_sub_ps(quarter, coeff_a);
-            let r3 = rsqrt_refined_avx2(diff);
-            let inner = _mm256_sub_ps(r3, coeff_b);
-            let cube = _mm256_mul_ps(_mm256_mul_ps(inner, inner), inner);
-            let rcp = rcp_refined_avx2(cube);
-            let curve = _mm256_sub_ps(rcp, coeff_c);
-            let linear = _mm256_mul_ps(x, linear_scale);
-
-            let use_linear = _mm256_cmp_ps::<_CMP_LT_OQ>(x, threshold);
-            let rgb = _mm256_blendv_ps(curve, linear, use_linear);
-            let encoded = _mm256_blendv_ps(rgb, x, alpha_lane_mask);
-
-            let scaled = _mm256_mul_ps(encoded, scale_255);
-            let i32s = _mm256_cvtps_epi32(scaled);
-            let lo = _mm256_castsi256_si128(i32s);
-            let hi = _mm256_extracti128_si256::<1>(i32s);
-            let u16s = _mm_packus_epi32(lo, hi);
-            let u8s = _mm_packus_epi16(u16s, u16s);
-
-            _mm_storel_epi64(dst_base.add(i * 8) as *mut __m128i, u8s);
+        // 4 pixels (16 f32 → 16 u8 bytes) per iteration.
+        for i in 0..quad_count {
+            let lanes_a = _mm256_loadu_ps(src_base.add(i * 16));
+            let lanes_b = _mm256_loadu_ps(src_base.add(i * 16 + 8));
+            let u16s_a = encode_srgb_pixels_avx2::<BGRA>(lanes_a);
+            let u16s_b = encode_srgb_pixels_avx2::<BGRA>(lanes_b);
+            let u8s = _mm_packus_epi16(u16s_a, u16s_b);
+            _mm_storeu_si128(dst_base.add(i * 16) as *mut __m128i, u8s);
         }
 
-        if tail == 1 {
-            let lanes = _mm_loadu_ps(src_base.add(pair_count * 8));
+        // 0-3 pixel tail: at most one 2-pixel AVX2 step + one 1-pixel SSE4.1
+        // step. `encode_srgb_pixel_sse4_1` requires only sse4.1, which avx2
+        // implies — the call site is already inside the enclosing avx2+fma
+        // target_feature scope.
+        let mut offset = quad_count * 16;
+        if tail_pixels >= 2 {
+            let lanes = _mm256_loadu_ps(src_base.add(offset));
+            let u16s = encode_srgb_pixels_avx2::<BGRA>(lanes);
+            let u8s = _mm_packus_epi16(u16s, u16s);
+            _mm_storel_epi64(dst_base.add(offset) as *mut __m128i, u8s);
+            offset += 8;
+        }
+        if tail_pixels % 2 == 1 {
+            let lanes = _mm_loadu_ps(src_base.add(offset));
             let packed = encode_srgb_pixel_sse4_1::<BGRA>(lanes);
-            dst_base
-                .add(pair_count * 8)
-                .cast::<u32>()
-                .write_unaligned(packed);
+            dst_base.add(offset).cast::<u32>().write_unaligned(packed);
+        }
+    }
+
+    out
+}
+
+/// Encode one `__m512` of four `[R, G, B, A]` linear-f32 pixels into a
+/// packed `__m128i` of 16 sRGB-u8 bytes, shared between the AVX-512 main
+/// loop and its masked 1-3 pixel tail.
+///
+/// `BGRA = false` → byte order `R,G,B,A` per pixel (`R8G8B8A8_SRGB`);
+/// `BGRA = true`  → byte order `B,G,R,A` per pixel (`B8G8R8A8_SRGB`).
+///
+/// See [`encode_srgb_pixel_sse4_1`] for the piecewise form and accuracy
+/// guarantees — the math is identical, just widened to 16 lanes and using
+/// `rsqrt14`/`rcp14` (initial ~2⁻¹⁴ error, NR-refined well below f32 ε).
+///
+/// # Safety
+/// * AVX-512 F must be available (enforced by `target_feature`).
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx512f,avx512vl,avx512bw")]
+#[inline]
+unsafe fn encode_srgb_pixels_avx512<const BGRA: bool>(
+    lanes: std::arch::x86_64::__m512,
+) -> std::arch::x86_64::__m128i {
+    use std::arch::x86_64::*;
+
+    // Per-128-bit-lane shuffle swaps R↔B within each pixel; alpha stays at
+    // lanes 3/7/11/15 so the alpha-bypass blend still applies.
+    let lanes = if BGRA {
+        _mm512_shuffle_ps::<0b11_00_01_10>(lanes, lanes)
+    } else {
+        lanes
+    };
+
+    let coeff_a = _mm512_set1_ps(SRGB_OETF_MINIMAX_A);
+    let coeff_b = _mm512_set1_ps(SRGB_OETF_MINIMAX_B);
+    let coeff_c = _mm512_set1_ps(SRGB_OETF_MINIMAX_C);
+    let linear_scale = _mm512_set1_ps(12.92);
+    let threshold = _mm512_set1_ps(0.003_130_8);
+    let scale_255 = _mm512_set1_ps(255.0);
+    let zero = _mm512_setzero_ps();
+    let one = _mm512_set1_ps(1.0);
+    // Lanes 3, 7, 11, 15 are alpha in the four-pixel [R,G,B,A] × 4 layout.
+    let alpha_lane_mask: __mmask16 = 0b1000_1000_1000_1000;
+
+    let x = _mm512_max_ps(_mm512_min_ps(lanes, one), zero);
+
+    let quarter = _mm512_sqrt_ps(_mm512_sqrt_ps(x));
+    let diff = _mm512_sub_ps(quarter, coeff_a);
+    // SAFETY: helpers require avx512f, matched by the enclosing `target_feature`.
+    let r3 = unsafe { rsqrt_refined_avx512(diff) };
+    let inner = _mm512_sub_ps(r3, coeff_b);
+    let cube = _mm512_mul_ps(_mm512_mul_ps(inner, inner), inner);
+    // SAFETY: as above.
+    let rcp = unsafe { rcp_refined_avx512(cube) };
+    let curve = _mm512_sub_ps(rcp, coeff_c);
+    let linear = _mm512_mul_ps(x, linear_scale);
+
+    let use_linear = _mm512_cmp_ps_mask::<_CMP_LT_OQ>(x, threshold);
+    let rgb = _mm512_mask_blend_ps(use_linear, curve, linear);
+    let encoded = _mm512_mask_blend_ps(alpha_lane_mask, rgb, x);
+
+    // Round-to-nearest-even + unsigned-saturating pack i32 → u8. Values are
+    // in [0, ~255.2] after clamp + scale, so unsigned saturation is correct.
+    let scaled = _mm512_mul_ps(encoded, scale_255);
+    let i32s = _mm512_cvtps_epi32(scaled);
+    _mm512_cvtusepi32_epi8(i32s)
+}
+
+/// AVX-512 path for 4-channel sRGB store, parameterized by output byte
+/// order: `BGRA = false` → `R8G8B8A8_SRGB`; `BGRA = true` → `B8G8R8A8_SRGB`.
+///
+/// Processes four pixels (16 f32 → 16 u8 bytes) per iteration via
+/// [`encode_srgb_pixels_avx512`]. A 1-3 pixel masked AVX-512 tail handles
+/// any remainder without dropping to a narrower width.
+///
+/// **Not part of the public API.** See [`store_srgb8_f32_sse4_1`] for the
+/// rationale; use [`store_srgb8_f32`] / [`store_bgra8_srgb_f32`] for the
+/// stable, runtime-dispatched entry points.
+#[doc(hidden)]
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx512f,avx512vl,avx512bw")]
+pub unsafe fn store_srgb8_f32_avx512<const BGRA: bool>(buf: &Buffer<f32>) -> Vec<u8> {
+    use std::arch::x86_64::*;
+
+    profiling::scope!("store_srgb8_f32_avx512");
+
+    let total_pixels = buf.pixels.len();
+    let mut out = vec![0u8; total_pixels * 4];
+    let src_base = buf.pixels.as_ptr() as *const f32;
+    let dst_base = out.as_mut_ptr();
+
+    let quad_count = total_pixels / 4;
+    let tail_pixels = total_pixels % 4;
+
+    // SAFETY: every intrinsic and pointer op below runs with avx512f+bw+vl
+    // enabled (target_feature on the enclosing fn). `src_base` spans
+    // `total_pixels * 4` f32 lanes by construction of `Buffer`, and `out`
+    // was sized for the same `total_pixels * 4` u8 bytes.
+    unsafe {
+        // 4 pixels (16 f32 → 16 u8 bytes) per iteration.
+        for i in 0..quad_count {
+            let lanes = _mm512_loadu_ps(src_base.add(i * 16));
+            let u8s = encode_srgb_pixels_avx512::<BGRA>(lanes);
+            _mm_storeu_si128(dst_base.add(i * 16) as *mut __m128i, u8s);
+        }
+
+        // 1-3 pixel tail in a single masked AVX-512 iteration. The mask
+        // suppresses both the f32 load and the byte store for lanes beyond
+        // the remaining pixel count, so the intervening math can run
+        // unmasked on garbage without touching memory.
+        if tail_pixels > 0 {
+            let offset = quad_count * 16;
+            let mask: __mmask16 = (1u16 << (tail_pixels * 4)) - 1;
+
+            let lanes = _mm512_maskz_loadu_ps(mask, src_base.add(offset));
+            let u8s = encode_srgb_pixels_avx512::<BGRA>(lanes);
+            _mm_mask_storeu_epi8(dst_base.add(offset) as *mut i8, mask, u8s);
         }
     }
 
@@ -558,7 +783,7 @@ mod simd_tests {
             return;
         }
 
-        // 3 pixels: one AVX2 iteration (2 px) + one SSE4.1 tail (1 px).
+        // 3 pixels: 2-pixel AVX2 tail step + 1-pixel SSE4.1 tail step.
         let pixels = vec![
             [0.0, 0.1, 0.5, 1.0],
             [0.25, 0.75, 0.9, 0.5],
@@ -582,6 +807,30 @@ mod simd_tests {
                 }
             };
             assert_eq!(&avx2[8..12], &sse4_tail[..], "bgra={bgra}");
+        }
+    }
+
+    #[test]
+    fn avx2_quad_plus_tail_counts_match_lut() {
+        if !(is_x86_feature_detected!("avx2") && is_x86_feature_detected!("fma")) {
+            return;
+        }
+
+        // Exercise every tail residue (0, 1, 2, 3) on top of at least one
+        // 4-pixel main-loop iteration so the destination offset has to
+        // compound across main + 2-pixel AVX2 tail + 1-pixel SSE4.1 tail.
+        let mut pixels = Vec::with_capacity(11);
+        for i in 0..11 {
+            let t = i as f32 / 10.0;
+            pixels.push([t, (t * 0.7).clamp(0.0, 1.0), 1.0 - t, t * t]);
+        }
+
+        for n in [4usize, 5, 6, 7, 8, 9, 10, 11] {
+            let buf = buf_from(pixels[..n].to_vec());
+            let rgba = unsafe { store_srgb8_f32_avx2_fma::<false>(&buf) };
+            assert_within_u8_tolerance::<false>(&rgba, &buf.pixels);
+            let bgra = unsafe { store_srgb8_f32_avx2_fma::<true>(&buf) };
+            assert_within_u8_tolerance::<true>(&bgra, &buf.pixels);
         }
     }
 
@@ -620,5 +869,100 @@ mod simd_tests {
         assert_eq!(got[4], 255); // R = 1.5 → 255
         assert_eq!(got[5], 0); // G = -1.0 → 0
         assert_eq!(got[7], 255); // A = 1.2 → 255
+    }
+
+    fn has_avx512() -> bool {
+        is_x86_feature_detected!("avx512f")
+            && is_x86_feature_detected!("avx512bw")
+            && is_x86_feature_detected!("avx512vl")
+    }
+
+    #[test]
+    fn avx512_rgba_matches_lut_within_u8_tolerance() {
+        if !has_avx512() {
+            return;
+        }
+        let buf = buf_from(fine_grid_pixels());
+        let got = unsafe { store_srgb8_f32_avx512::<false>(&buf) };
+        assert_within_u8_tolerance::<false>(&got, &buf.pixels);
+    }
+
+    #[test]
+    fn avx512_bgra_matches_lut_within_u8_tolerance() {
+        if !has_avx512() {
+            return;
+        }
+        let buf = buf_from(fine_grid_pixels());
+        let got = unsafe { store_srgb8_f32_avx512::<true>(&buf) };
+        assert_within_u8_tolerance::<true>(&got, &buf.pixels);
+    }
+
+    #[test]
+    fn avx512_rgba_u8_roundtrip_is_exact() {
+        if !has_avx512() {
+            return;
+        }
+        let buf = buf_from(u8_roundtrip_pixels());
+        let got = unsafe { store_srgb8_f32_avx512::<false>(&buf) };
+        assert_roundtrips(&got);
+    }
+
+    #[test]
+    fn avx512_bgra_u8_roundtrip_is_exact() {
+        if !has_avx512() {
+            return;
+        }
+        let buf = buf_from(u8_roundtrip_pixels());
+        let got = unsafe { store_srgb8_f32_avx512::<true>(&buf) };
+        assert_roundtrips(&got);
+    }
+
+    #[test]
+    fn avx512_tail_matches_lut_within_u8_tolerance() {
+        if !has_avx512() {
+            return;
+        }
+
+        // 7 pixels exercises one 4-pixel main-loop iteration plus a
+        // 3-pixel masked tail.
+        let pixels = vec![
+            [0.0, 0.1, 0.5, 1.0],
+            [0.25, 0.75, 0.9, 0.5],
+            [0.123, 0.456, 0.789, 0.321],
+            [0.2, 0.4, 0.6, 0.8],
+            [0.01, 0.99, 0.33, 0.77],
+            [0.02, 0.98, 0.66, 0.44],
+            [0.05, 0.95, 0.5, 0.5],
+        ];
+        let buf = buf_from(pixels);
+
+        let rgba = unsafe { store_srgb8_f32_avx512::<false>(&buf) };
+        assert_within_u8_tolerance::<false>(&rgba, &buf.pixels);
+
+        let bgra = unsafe { store_srgb8_f32_avx512::<true>(&buf) };
+        assert_within_u8_tolerance::<true>(&bgra, &buf.pixels);
+    }
+
+    #[test]
+    fn avx512_multiple_main_plus_tail_matches_lut() {
+        if !has_avx512() {
+            return;
+        }
+
+        // 15 pixels exercises multiple 4-pixel main iterations plus a
+        // 3-pixel masked tail, so the destination offset has to compound
+        // correctly across them.
+        let mut pixels = Vec::with_capacity(15);
+        for i in 0..15 {
+            let t = i as f32 / 14.0;
+            pixels.push([t, (t * 0.7).clamp(0.0, 1.0), 1.0 - t, t * t]);
+        }
+        let buf = buf_from(pixels);
+
+        let rgba = unsafe { store_srgb8_f32_avx512::<false>(&buf) };
+        assert_within_u8_tolerance::<false>(&rgba, &buf.pixels);
+
+        let bgra = unsafe { store_srgb8_f32_avx512::<true>(&buf) };
+        assert_within_u8_tolerance::<true>(&bgra, &buf.pixels);
     }
 }

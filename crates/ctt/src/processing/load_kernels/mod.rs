@@ -5,7 +5,7 @@
 //! handled separately in [`super::alpha`]. sRGB decoding is applied here
 //! (RGB channels only; alpha rides through as linear).
 
-mod srgb;
+pub(crate) mod srgb;
 pub use srgb::{load_bgr8_srgb_f32, load_bgra8_srgb_f32, load_srgb8_f32};
 
 use half::f16;

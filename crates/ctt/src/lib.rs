@@ -64,3 +64,31 @@ mod processing;
 mod quality;
 mod surface;
 pub(crate) mod vk_format;
+
+/// **Not part of the public API.** Re-exports the internal sRGB kernels so
+/// that `benches/` (a separate crate) can measure them directly without
+/// going through the public dispatch layer. Items here have no stability
+/// guarantees — they may be renamed, removed, or behave differently across
+/// patch releases. Real callers should go through the crate's normal
+/// public entry points (`convert`, etc.), which dispatch to the best
+/// available kernel at runtime.
+#[doc(hidden)]
+pub mod bench_internals {
+    pub use crate::processing::Buffer;
+
+    pub use crate::processing::load_kernels::{
+        load_bgr8_srgb_f32, load_bgra8_srgb_f32, load_srgb8_f32,
+    };
+    pub use crate::processing::store_kernels::{
+        store_bgr8_srgb_f32, store_bgra8_srgb_f32, store_srgb8_f32,
+    };
+
+    #[cfg(target_arch = "x86_64")]
+    pub use crate::processing::load_kernels::srgb::{
+        load_srgb8_rgba_f32_avx2_fma, load_srgb8_rgba_f32_avx512, load_srgb8_rgba_f32_sse4_1,
+    };
+    #[cfg(target_arch = "x86_64")]
+    pub use crate::processing::store_kernels::srgb::{
+        store_srgb8_f32_avx2_fma, store_srgb8_f32_avx512, store_srgb8_f32_sse4_1,
+    };
+}

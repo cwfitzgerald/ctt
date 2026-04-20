@@ -10,7 +10,7 @@ resolver = "3"
 [workspace.package]
 version = "0.3.0"
 edition = "2024"
-rust-version = "1.88"
+rust-version = "1.89"
 authors = ["The ctt developers"]
 license = "MIT OR Apache-2.0 OR Zlib"
 repository = "https://github.com/cwfitzgerald/ctt"
@@ -32,6 +32,7 @@ anyhow = "1"
 bytemuck = "1"
 cc = "1"
 clap = { version = "4", features = ["derive"] }
+criterion = "0.8"
 ddsfile = "0.6"
 fast_image_resize = "6"
 fern = "0.7"
