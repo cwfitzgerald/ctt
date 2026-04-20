@@ -102,7 +102,7 @@ fn parse_compressed(lower: &str, original: &str) -> Result<ktx2::Format, Error> 
         "bc7" => Ok(F::BC7_UNORM_BLOCK),
         "etc1" | "etc2_rgb" => Ok(F::ETC2_R8G8B8_UNORM_BLOCK),
         "etc2_rgba1" | "etc2_rgb_a1" => Ok(F::ETC2_R8G8B8A1_UNORM_BLOCK),
-        "etc2_rgba" => Ok(F::ETC2_R8G8B8A8_UNORM_BLOCK),
+        "etc2" | "etc2_rgba" => Ok(F::ETC2_R8G8B8A8_UNORM_BLOCK),
         "eac_r" | "etc2_r" | "etc2_r11" => Ok(F::EAC_R11_UNORM_BLOCK),
         "eac_rg" | "etc2_rg" | "etc2_rg11" => Ok(F::EAC_R11G11_UNORM_BLOCK),
         other => {

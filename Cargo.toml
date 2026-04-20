@@ -37,9 +37,9 @@ fast_image_resize = "6"
 fern = "0.7"
 half = { version = "2", features = ["bytemuck"] }
 image = { version = "0.25", default-features = false }
-ktx2 = { git = "https://github.com/BVE-Reborn/ktx2.git", rev = "49e6fed" }
+ktx2 = { version = "0.5" }
 log = "0.4"
-miniz_oxide = "0.8"
+miniz_oxide = "0.9"
 paste = "1"
 profiling = "1"
 thiserror = "2"
