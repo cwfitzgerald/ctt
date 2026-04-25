@@ -78,11 +78,70 @@ pub fn load_i16_snorm_f32(surface: &Surface, channels: usize) -> Result<Buffer<f
 
 pub fn load_f16_f32(surface: &Surface, channels: usize) -> Result<Buffer<f32>> {
     profiling::scope!("load_f16_f32");
-    read_pixels_f32(surface, channels, 2, |bytes, lanes| {
-        let (chunks, _) = bytes.as_chunks::<2>();
-        for (lane, &chunk) in lanes.iter_mut().zip(chunks) {
-            *lane = f16::from_bits(u16::from_le_bytes(chunk)).to_f32();
+
+    // On little-endian (every realistic target), the file's f16 bytes match
+    // the native f16 in-memory representation, so we can cast and dispatch
+    // through `half`'s bulk SIMD-accelerated converter. On big-endian we'd be
+    // misinterpreting the bytes — fall back to the scalar `from_le_bytes`
+    // path that the rest of the codebase uses.
+    #[cfg(target_endian = "little")]
+    {
+        load_f16_f32_bulk(surface, channels)
+    }
+
+    #[cfg(target_endian = "big")]
+    {
+        read_pixels_f32(surface, channels, 2, |bytes, lanes| {
+            let (chunks, _) = bytes.as_chunks::<2>();
+            for (lane, &chunk) in lanes.iter_mut().zip(chunks) {
+                *lane = f16::from_bits(u16::from_le_bytes(chunk)).to_f32();
+            }
+        })
+    }
+}
+
+#[cfg(target_endian = "little")]
+fn load_f16_f32_bulk(surface: &Surface, channels: usize) -> Result<Buffer<f32>> {
+    use half::slice::HalfFloatSliceExt;
+
+    let pixel_bytes = channels * 2;
+    validate_surface(surface, pixel_bytes)?;
+
+    let w = surface.width as usize;
+    let h = surface.height as usize;
+    let stride = surface.stride as usize;
+    let row_bytes = w * pixel_bytes;
+
+    // Pre-fill default lanes (alpha=1.0) for sub-4-channel inputs.
+    let mut pixels = vec![[0.0f32, 0.0, 0.0, 1.0]; w * h];
+
+    if channels == 4 {
+        // Each pixel is 4×f16 mapping 1:1 onto 4×f32 — bulk-convert each row
+        // straight into the destination lanes.
+        for (row_idx, row_region) in surface.data.chunks(stride).take(h).enumerate() {
+            let src: &[f16] = bytemuck::cast_slice(&row_region[..row_bytes]);
+            let dst_pixels = &mut pixels[row_idx * w..(row_idx + 1) * w];
+            let dst: &mut [f32] = bytemuck::cast_slice_mut(dst_pixels);
+            src.convert_to_f32_slice(dst);
         }
+    } else {
+        // 1–3 channels: bulk-convert each row into a packed temp buffer, then
+        // scatter into the leading lanes. The default alpha=1.0 stays put.
+        let mut row_f32 = vec![0f32; w * channels];
+        for (row_idx, row_region) in surface.data.chunks(stride).take(h).enumerate() {
+            let src: &[f16] = bytemuck::cast_slice(&row_region[..row_bytes]);
+            src.convert_to_f32_slice(&mut row_f32);
+            let dst_pixels = &mut pixels[row_idx * w..(row_idx + 1) * w];
+            for (pixel, chunk) in dst_pixels.iter_mut().zip(row_f32.chunks_exact(channels)) {
+                pixel[..channels].copy_from_slice(chunk);
+            }
+        }
+    }
+
+    Ok(Buffer {
+        pixels,
+        width: surface.width,
+        height: surface.height,
     })
 }
 

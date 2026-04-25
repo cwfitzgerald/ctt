@@ -62,5 +62,9 @@ criterion = { workspace = true }
 name = "srgb"
 harness = false
 
+[[bench]]
+name = "f16"
+harness = false
+
 [lints]
 workspace = true

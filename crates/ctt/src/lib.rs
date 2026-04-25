@@ -84,8 +84,10 @@ pub mod bench_internals {
         store_bgra8_srgb_f32_serial, store_srgb8_f32_serial,
     };
     pub use crate::processing::store_kernels::{
-        store_bgr8_srgb_f32, store_bgra8_srgb_f32, store_srgb8_f32,
+        store_bgr8_srgb_f32, store_bgra8_srgb_f32, store_f16_f32, store_srgb8_f32,
     };
+
+    pub use crate::processing::load_kernels::load_f16_f32;
 
     #[cfg(target_arch = "x86_64")]
     pub use crate::processing::load_kernels::srgb::{

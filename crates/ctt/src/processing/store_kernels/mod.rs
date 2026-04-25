@@ -77,12 +77,34 @@ pub fn store_i16_snorm_f32(buf: &Buffer<f32>, channels: usize) -> Vec<u8> {
 
 pub fn store_f16_f32(buf: &Buffer<f32>, channels: usize) -> Vec<u8> {
     profiling::scope!("store_f16_f32");
+
+    // 4-channel stores map 1:1 onto the bulk converter and beat the scalar
+    // loop. Sub-4-channel stores need a gather pass, which (per benchmarking)
+    // costs more than it saves vs. plain `f16::from_f32` per lane — keep
+    // those on the scalar path. Big-endian also stays scalar so the file's
+    // little-endian byte order is preserved.
+    #[cfg(target_endian = "little")]
+    if channels == 4 {
+        return store_f16_f32_bulk_rgba(buf);
+    }
+
     write_pixels(buf, channels, 2, |lanes, bytes| {
         let (chunks, _) = bytes.as_chunks_mut::<2>();
         for (&lane, chunk) in lanes.iter().zip(chunks) {
             *chunk = f16::from_f32(lane).to_le_bytes();
         }
     })
+}
+
+#[cfg(target_endian = "little")]
+fn store_f16_f32_bulk_rgba(buf: &Buffer<f32>) -> Vec<u8> {
+    use half::slice::HalfFloatSliceExt;
+
+    let mut out = vec![0u8; buf.pixels.len() * 8];
+    let src: &[f32] = bytemuck::cast_slice(&buf.pixels);
+    let dst: &mut [f16] = bytemuck::cast_slice_mut(&mut out);
+    dst.convert_from_f32_slice(src);
+    out
 }
 
 pub fn store_f32_f32(buf: &Buffer<f32>, channels: usize) -> Vec<u8> {

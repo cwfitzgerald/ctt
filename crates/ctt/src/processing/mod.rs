@@ -352,6 +352,67 @@ mod tests {
     }
 
     #[test]
+    fn f16_rgba_roundtrip_exact() {
+        // RGBA f16 (channels = 4) exercises the bulk fast path that maps
+        // 4×f16 directly onto 4×f32 lanes.
+        use half::f16;
+        let values: Vec<f32> = (0..16).map(|i| i as f32 * 0.125 - 1.0).collect();
+        let mut data = Vec::new();
+        for &v in &values {
+            data.extend_from_slice(&f16::from_f32(v).to_le_bytes());
+        }
+        let surface = make_surface(data.clone(), 4, 1, ktx2::Format::R16G16B16A16_SFLOAT);
+        let buf = load::load_f32(&surface).unwrap();
+        // Lanes match what we encoded.
+        for (i, pixel) in buf.pixels.iter().enumerate() {
+            for c in 0..4 {
+                let want = f16::from_f32(values[i * 4 + c]).to_f32();
+                assert_eq!(
+                    pixel[c], want,
+                    "pixel {i} chan {c}: got {} want {want}",
+                    pixel[c]
+                );
+            }
+        }
+        let out = store::store_f32(
+            buf,
+            ktx2::Format::R16G16B16A16_SFLOAT,
+            ColorSpace::Linear,
+            AlphaMode::Opaque,
+        )
+        .unwrap();
+        assert_eq!(out.data, data);
+    }
+
+    #[test]
+    fn f16_rg_roundtrip_with_default_alpha() {
+        // 2-channel f16 exercises the scatter path. Missing channels must
+        // load as 0 and alpha must default to 1.0.
+        use half::f16;
+        let values = [0.25f32, -0.5, 1.0, 0.75];
+        let mut data = Vec::new();
+        for &v in &values {
+            data.extend_from_slice(&f16::from_f32(v).to_le_bytes());
+        }
+        let surface = make_surface(data.clone(), 2, 1, ktx2::Format::R16G16_SFLOAT);
+        let buf = load::load_f32(&surface).unwrap();
+        for (i, pixel) in buf.pixels.iter().enumerate() {
+            assert_eq!(pixel[0], f16::from_f32(values[i * 2]).to_f32());
+            assert_eq!(pixel[1], f16::from_f32(values[i * 2 + 1]).to_f32());
+            assert_eq!(pixel[2], 0.0);
+            assert_eq!(pixel[3], 1.0);
+        }
+        let out = store::store_f32(
+            buf,
+            ktx2::Format::R16G16_SFLOAT,
+            ColorSpace::Linear,
+            AlphaMode::Opaque,
+        )
+        .unwrap();
+        assert_eq!(out.data, data);
+    }
+
+    #[test]
     fn u32_uint_roundtrip() {
         let vals: [u32; 4] = [1, 2, 3, 4];
         let mut data = Vec::new();
