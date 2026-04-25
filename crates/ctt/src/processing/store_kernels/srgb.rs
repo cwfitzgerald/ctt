@@ -59,11 +59,11 @@ fn srgb_oetf_fast(c: f32) -> f32 {
 // With NR refinement, the worst-case adversarial error over ±1.5·2⁻¹² on each
 // approximate op stays ~8e-4 — comfortably inside ±0.5/255. See
 // `srgb-approx.py` / `srgb-opt.py` / `srgb-sim.py`.
-#[cfg(target_arch = "x86_64")]
+#[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
 const SRGB_OETF_MINIMAX_A: f32 = 0.075_058_33;
-#[cfg(target_arch = "x86_64")]
+#[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
 const SRGB_OETF_MINIMAX_B: f32 = 0.048_553_98;
-#[cfg(target_arch = "x86_64")]
+#[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
 const SRGB_OETF_MINIMAX_C: f32 = 0.027_579_91;
 
 // One Newton-Raphson iteration squares the initial ~1.5·2⁻¹² relative error of
@@ -186,6 +186,25 @@ pub fn store_srgb8_f32(buf: &Buffer<f32>, channels: usize) -> Vec<u8> {
         }
     }
 
+    #[cfg(target_arch = "aarch64")]
+    {
+        if channels == 4 && std::arch::is_aarch64_feature_detected!("neon") {
+            // SAFETY: runtime check confirms NEON is available.
+            return unsafe { store_srgb8_f32_neon::<false>(buf) };
+        }
+    }
+
+    store_srgb8_f32_serial(buf, channels)
+}
+
+/// Serial LUT path for sRGB8 stores.
+///
+/// **Not part of the public API.** Exposed so benchmarks can compare the
+/// scalar implementation directly against each runtime-selectable SIMD mode.
+#[doc(hidden)]
+pub fn store_srgb8_f32_serial(buf: &Buffer<f32>, channels: usize) -> Vec<u8> {
+    profiling::scope!("store_srgb8_f32_serial");
+
     write_pixels(buf, channels, 1, |lanes, bytes| {
         for (c, (&lane, byte)) in lanes.iter().zip(bytes.iter_mut()).enumerate() {
             let encoded = if c < 3 {
@@ -219,6 +238,25 @@ pub fn store_bgra8_srgb_f32(buf: &Buffer<f32>) -> Vec<u8> {
             return unsafe { store_srgb8_f32_sse4_1::<true>(buf) };
         }
     }
+
+    #[cfg(target_arch = "aarch64")]
+    {
+        if std::arch::is_aarch64_feature_detected!("neon") {
+            // SAFETY: runtime check confirms NEON is available.
+            return unsafe { store_srgb8_f32_neon::<true>(buf) };
+        }
+    }
+
+    store_bgra8_srgb_f32_serial(buf)
+}
+
+/// Serial LUT path for BGRA sRGB8 stores.
+///
+/// **Not part of the public API.** Exposed so benchmarks can compare the
+/// scalar implementation directly against each runtime-selectable SIMD mode.
+#[doc(hidden)]
+pub fn store_bgra8_srgb_f32_serial(buf: &Buffer<f32>) -> Vec<u8> {
+    profiling::scope!("store_bgra8_srgb_f32_serial");
 
     write_pixels(buf, 4, 1, |lanes, bytes| {
         let arr = <&mut [u8; 4]>::try_from(bytes).expect("4-byte pixel");
@@ -609,6 +647,138 @@ pub unsafe fn store_srgb8_f32_avx512<const BGRA: bool>(buf: &Buffer<f32>) -> Vec
     out
 }
 
+/// Encode one `[R, G, B, A]` linear-f32 pixel into four saturated u16 lanes
+/// containing the final sRGB-u8 byte values.
+///
+/// `BGRA = false` → byte order `R,G,B,A`; `BGRA = true` → `B,G,R,A`.
+///
+/// See [`encode_srgb_pixel_sse4_1`] for the piecewise form and accuracy
+/// guarantees. This NEON variant uses the same minimax curve but maps the
+/// reciprocal steps to full-precision AArch64 vector division.
+///
+/// # Safety
+/// * The NEON feature must be available (enforced by `target_feature`).
+#[cfg(target_arch = "aarch64")]
+#[target_feature(enable = "neon")]
+#[inline]
+unsafe fn encode_srgb_lanes_neon<const BGRA: bool>(
+    lanes: std::arch::aarch64::float32x4_t,
+) -> std::arch::aarch64::uint16x4_t {
+    use std::arch::aarch64::*;
+
+    let lanes = if BGRA {
+        let r = vgetq_lane_f32::<0>(lanes);
+        let b = vgetq_lane_f32::<2>(lanes);
+        let lanes = vsetq_lane_f32::<0>(b, lanes);
+        vsetq_lane_f32::<2>(r, lanes)
+    } else {
+        lanes
+    };
+
+    let zero = vdupq_n_f32(0.0);
+    let one = vdupq_n_f32(1.0);
+    let x = vmaxq_f32(vminq_f32(lanes, one), zero);
+
+    let coeff_a = vdupq_n_f32(SRGB_OETF_MINIMAX_A);
+    let coeff_b = vdupq_n_f32(SRGB_OETF_MINIMAX_B);
+    let coeff_c = vdupq_n_f32(SRGB_OETF_MINIMAX_C);
+    let linear_scale = vdupq_n_f32(12.92);
+    let threshold = vdupq_n_f32(0.003_130_8);
+    let scale_255 = vdupq_n_f32(255.0);
+    let alpha_lane_mask = vsetq_lane_u32::<3>(u32::MAX, vdupq_n_u32(0));
+
+    let quarter = vsqrtq_f32(vsqrtq_f32(x));
+    let diff = vsubq_f32(quarter, coeff_a);
+    let r3 = vdivq_f32(one, vsqrtq_f32(diff));
+    let inner = vsubq_f32(r3, coeff_b);
+    let cube = vmulq_f32(vmulq_f32(inner, inner), inner);
+    let rcp = vdivq_f32(one, cube);
+    let curve = vsubq_f32(rcp, coeff_c);
+    let linear = vmulq_f32(x, linear_scale);
+
+    let use_linear = vcltq_f32(x, threshold);
+    let rgb = vbslq_f32(use_linear, linear, curve);
+    let encoded = vbslq_f32(alpha_lane_mask, x, rgb);
+    let scaled = vmulq_f32(encoded, scale_255);
+    vqmovun_s32(vcvtnq_s32_f32(scaled))
+}
+
+/// Encode one pixel into a packed little-endian RGBA/BGRA `u32`.
+///
+/// # Safety
+/// * The NEON feature must be available (enforced by `target_feature`).
+#[cfg(target_arch = "aarch64")]
+#[target_feature(enable = "neon")]
+#[inline]
+unsafe fn encode_srgb_pixel_neon<const BGRA: bool>(lanes: std::arch::aarch64::float32x4_t) -> u32 {
+    use std::arch::aarch64::*;
+
+    // SAFETY: same NEON target feature as this helper.
+    let u16s = unsafe { encode_srgb_lanes_neon::<BGRA>(lanes) };
+    let u8s = vqmovn_u16(vcombine_u16(u16s, u16s));
+    vget_lane_u32::<0>(vreinterpret_u32_u8(u8s))
+}
+
+/// NEON path for 4-channel sRGB store, parameterized by output byte order:
+/// `BGRA = false` → `R8G8B8A8_SRGB`; `BGRA = true` → `B8G8R8A8_SRGB`.
+///
+/// Processes four pixels (16 f32 → 16 u8 bytes) per iteration and handles
+/// any 1-3 pixel tail with the same per-pixel NEON encoder.
+///
+/// **Not part of the public API.** See [`store_srgb8_f32_sse4_1`] for the
+/// rationale; use [`store_srgb8_f32`] / [`store_bgra8_srgb_f32`] for the
+/// stable, runtime-dispatched entry points.
+#[doc(hidden)]
+#[cfg(target_arch = "aarch64")]
+#[target_feature(enable = "neon")]
+pub unsafe fn store_srgb8_f32_neon<const BGRA: bool>(buf: &Buffer<f32>) -> Vec<u8> {
+    use std::arch::aarch64::*;
+
+    profiling::scope!("store_srgb8_f32_neon");
+
+    let total_pixels = buf.pixels.len();
+    let mut out = vec![0u8; total_pixels * 4];
+    let src_base = buf.pixels.as_ptr() as *const f32;
+    let dst_base = out.as_mut_ptr();
+
+    let quad_count = total_pixels / 4;
+    let tail_pixels = total_pixels % 4;
+
+    // SAFETY: every intrinsic and pointer op below runs with NEON enabled
+    // (target_feature on the enclosing fn). `src_base` spans
+    // `total_pixels * 4` f32 lanes by construction of `Buffer`, and `out`
+    // was sized for the same `total_pixels * 4` u8 bytes.
+    unsafe {
+        for i in 0..quad_count {
+            let offset = i * 16;
+            let p0 = vld1q_f32(src_base.add(offset));
+            let p1 = vld1q_f32(src_base.add(offset + 4));
+            let p2 = vld1q_f32(src_base.add(offset + 8));
+            let p3 = vld1q_f32(src_base.add(offset + 12));
+
+            let u16s0 = encode_srgb_lanes_neon::<BGRA>(p0);
+            let u16s1 = encode_srgb_lanes_neon::<BGRA>(p1);
+            let u16s2 = encode_srgb_lanes_neon::<BGRA>(p2);
+            let u16s3 = encode_srgb_lanes_neon::<BGRA>(p3);
+
+            let bytes01 = vqmovn_u16(vcombine_u16(u16s0, u16s1));
+            let bytes23 = vqmovn_u16(vcombine_u16(u16s2, u16s3));
+            let bytes = vcombine_u8(bytes01, bytes23);
+            vst1q_u8(dst_base.add(offset), bytes);
+        }
+
+        let mut offset = quad_count * 16;
+        for _ in 0..tail_pixels {
+            let lanes = vld1q_f32(src_base.add(offset));
+            let packed = encode_srgb_pixel_neon::<BGRA>(lanes);
+            dst_base.add(offset).cast::<u32>().write_unaligned(packed);
+            offset += 4;
+        }
+    }
+
+    out
+}
+
 #[cfg(all(test, target_arch = "x86_64"))]
 mod simd_tests {
     use super::*;
@@ -964,5 +1134,170 @@ mod simd_tests {
 
         let bgra = unsafe { store_srgb8_f32_avx512::<true>(&buf) };
         assert_within_u8_tolerance::<true>(&bgra, &buf.pixels);
+    }
+}
+
+#[cfg(all(test, target_arch = "aarch64"))]
+mod neon_tests {
+    use super::*;
+
+    fn has_neon() -> bool {
+        std::arch::is_aarch64_feature_detected!("neon")
+    }
+
+    fn reference_bytes<const BGRA: bool>(pixels: &[[f32; 4]]) -> Vec<u8> {
+        let mut out = vec![0u8; pixels.len() * 4];
+        for (pixel, bytes) in pixels.iter().zip(out.chunks_exact_mut(4)) {
+            let (r, g, b, a) = (pixel[0], pixel[1], pixel[2], pixel[3]);
+            let r_u8 = (srgb_oetf_fast(r) * 255.0).round() as u8;
+            let g_u8 = (srgb_oetf_fast(g) * 255.0).round() as u8;
+            let b_u8 = (srgb_oetf_fast(b) * 255.0).round() as u8;
+            let a_u8 = (a.clamp(0.0, 1.0) * 255.0).round() as u8;
+            if BGRA {
+                bytes.copy_from_slice(&[b_u8, g_u8, r_u8, a_u8]);
+            } else {
+                bytes.copy_from_slice(&[r_u8, g_u8, b_u8, a_u8]);
+            }
+        }
+        out
+    }
+
+    fn assert_within_u8_tolerance<const BGRA: bool>(actual: &[u8], pixels: &[[f32; 4]]) {
+        let reference = reference_bytes::<BGRA>(pixels);
+        assert_eq!(actual.len(), reference.len());
+        for (i, (&got, &want)) in actual.iter().zip(&reference).enumerate() {
+            let diff = got.abs_diff(want);
+            assert!(
+                diff <= 1,
+                "pixel {} byte {} got={got} want={want} (BGRA={BGRA})",
+                i / 4,
+                i % 4,
+            );
+        }
+    }
+
+    fn u8_roundtrip_pixels() -> Vec<[f32; 4]> {
+        fn srgb_eotf_exact(c: f32) -> f32 {
+            if c <= 0.040_45 {
+                c / 12.92
+            } else {
+                ((c + 0.055) / 1.055).powf(2.4)
+            }
+        }
+        (0..=255u8)
+            .map(|b| {
+                let lin = srgb_eotf_exact(b as f32 / 255.0);
+                [lin, lin, lin, b as f32 / 255.0]
+            })
+            .collect()
+    }
+
+    fn assert_roundtrips(bytes: &[u8]) {
+        for b in 0..=255u8 {
+            let base = b as usize * 4;
+            assert_eq!(bytes[base], b, "byte 0 roundtrip failed for value {b}");
+            assert_eq!(bytes[base + 1], b, "byte 1 roundtrip failed for value {b}");
+            assert_eq!(bytes[base + 2], b, "byte 2 roundtrip failed for value {b}");
+            assert_eq!(bytes[base + 3], b, "byte 3 roundtrip failed for value {b}");
+        }
+    }
+
+    fn fine_grid_pixels() -> Vec<[f32; 4]> {
+        let n = 1024usize;
+        (0..n)
+            .map(|i| {
+                let x = i as f32 / (n - 1) as f32;
+                [x, (x * 0.5 + 0.2).clamp(0.0, 1.0), x * x, x]
+            })
+            .collect()
+    }
+
+    fn buf_from(pixels: Vec<[f32; 4]>) -> Buffer<f32> {
+        let width = pixels.len() as u32;
+        Buffer {
+            pixels,
+            width,
+            height: 1,
+        }
+    }
+
+    #[test]
+    fn neon_rgba_matches_lut_within_u8_tolerance() {
+        if !has_neon() {
+            return;
+        }
+        let buf = buf_from(fine_grid_pixels());
+        let got = unsafe { store_srgb8_f32_neon::<false>(&buf) };
+        assert_within_u8_tolerance::<false>(&got, &buf.pixels);
+    }
+
+    #[test]
+    fn neon_bgra_matches_lut_within_u8_tolerance() {
+        if !has_neon() {
+            return;
+        }
+        let buf = buf_from(fine_grid_pixels());
+        let got = unsafe { store_srgb8_f32_neon::<true>(&buf) };
+        assert_within_u8_tolerance::<true>(&got, &buf.pixels);
+    }
+
+    #[test]
+    fn neon_rgba_u8_roundtrip_is_exact() {
+        if !has_neon() {
+            return;
+        }
+        let buf = buf_from(u8_roundtrip_pixels());
+        let got = unsafe { store_srgb8_f32_neon::<false>(&buf) };
+        assert_roundtrips(&got);
+    }
+
+    #[test]
+    fn neon_bgra_u8_roundtrip_is_exact() {
+        if !has_neon() {
+            return;
+        }
+        let buf = buf_from(u8_roundtrip_pixels());
+        let got = unsafe { store_srgb8_f32_neon::<true>(&buf) };
+        assert_roundtrips(&got);
+    }
+
+    #[test]
+    fn neon_tail_matches_lut_within_u8_tolerance() {
+        if !has_neon() {
+            return;
+        }
+
+        let pixels = vec![
+            [0.0, 0.1, 0.5, 1.0],
+            [0.25, 0.75, 0.9, 0.5],
+            [0.123, 0.456, 0.789, 0.321],
+            [0.2, 0.4, 0.6, 0.8],
+            [0.01, 0.99, 0.33, 0.77],
+            [0.02, 0.98, 0.66, 0.44],
+            [0.05, 0.95, 0.5, 0.5],
+        ];
+        let buf = buf_from(pixels);
+
+        let rgba = unsafe { store_srgb8_f32_neon::<false>(&buf) };
+        assert_within_u8_tolerance::<false>(&rgba, &buf.pixels);
+
+        let bgra = unsafe { store_srgb8_f32_neon::<true>(&buf) };
+        assert_within_u8_tolerance::<true>(&bgra, &buf.pixels);
+    }
+
+    #[test]
+    fn neon_bgra_swaps_r_and_b_bytes() {
+        if !has_neon() {
+            return;
+        }
+
+        let buf = buf_from(vec![[1.0, 0.0, 0.25, 0.5]]);
+        let rgba = unsafe { store_srgb8_f32_neon::<false>(&buf) };
+        let bgra = unsafe { store_srgb8_f32_neon::<true>(&buf) };
+
+        assert_eq!(bgra[0], rgba[2]);
+        assert_eq!(bgra[1], rgba[1]);
+        assert_eq!(bgra[2], rgba[0]);
+        assert_eq!(bgra[3], rgba[3]);
     }
 }

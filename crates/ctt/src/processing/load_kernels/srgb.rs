@@ -35,11 +35,11 @@ fn srgb_eotf(c: f32) -> f32 {
 // With `x = byte / 255`, the curve branch fits `((x + 0.055) / 1.055)^2.4`
 // with max abs error ≈ 1.28e-4 — well inside ±0.5/255, so u8 round-trip
 // stays bit-exact versus the LUT path. See `srgb-opt.py`.
-#[cfg(target_arch = "x86_64")]
+#[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
 const SRGB_MINIMAX_A: f32 = -0.983_177_1;
-#[cfg(target_arch = "x86_64")]
+#[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
 const SRGB_MINIMAX_B: f32 = -0.083_670_19;
-#[cfg(target_arch = "x86_64")]
+#[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
 const SRGB_MINIMAX_C: f32 = -0.121_285_7;
 
 pub fn load_srgb8_f32(surface: &Surface, channels: usize) -> Result<Buffer<f32>> {
@@ -64,6 +64,25 @@ pub fn load_srgb8_f32(surface: &Surface, channels: usize) -> Result<Buffer<f32>>
             return unsafe { load_srgb8_rgba_f32_sse4_1(surface) };
         }
     }
+
+    #[cfg(target_arch = "aarch64")]
+    {
+        if channels == 4 && std::arch::is_aarch64_feature_detected!("neon") {
+            // SAFETY: runtime check confirms NEON is available.
+            return unsafe { load_srgb8_rgba_f32_neon(surface) };
+        }
+    }
+
+    load_srgb8_f32_serial(surface, channels)
+}
+
+/// Serial LUT path for sRGB8 loads.
+///
+/// **Not part of the public API.** Exposed so benchmarks can compare the
+/// scalar implementation directly against each runtime-selectable SIMD mode.
+#[doc(hidden)]
+pub fn load_srgb8_f32_serial(surface: &Surface, channels: usize) -> Result<Buffer<f32>> {
+    profiling::scope!("load_srgb8_f32_serial");
 
     let lut = &*EOTF_LUT;
     read_pixels_f32(surface, channels, 1, |bytes, lanes| {
@@ -415,6 +434,141 @@ pub unsafe fn load_srgb8_rgba_f32_avx512(surface: &Surface) -> Result<Buffer<f32
     })
 }
 
+/// Decode one 4-lane `[R, G, B, A]` u8 vector into linear f32 lanes.
+///
+/// See [`decode_srgb_pixel_sse4_1`] for the piecewise form and accuracy
+/// guarantees — the math is identical, just mapped to AArch64 NEON.
+///
+/// # Safety
+/// * The NEON feature must be available (enforced by `target_feature`).
+#[cfg(target_arch = "aarch64")]
+#[target_feature(enable = "neon")]
+#[inline]
+unsafe fn decode_srgb_lanes_neon(
+    as_u32: std::arch::aarch64::uint32x4_t,
+) -> std::arch::aarch64::float32x4_t {
+    use std::arch::aarch64::*;
+
+    let as_f32 = vcvtq_f32_u32(as_u32);
+
+    let coeff_a = vdupq_n_f32(SRGB_MINIMAX_A);
+    let coeff_b = vdupq_n_f32(SRGB_MINIMAX_B);
+    let coeff_c = vdupq_n_f32(SRGB_MINIMAX_C);
+    let inv_255 = vdupq_n_f32(1.0 / 255.0);
+    let inv_255_12_92 = vdupq_n_f32(1.0 / (255.0 * 12.92));
+    let alpha_lane_mask = vsetq_lane_u32::<3>(u32::MAX, vdupq_n_u32(0));
+    let curve_threshold = vdupq_n_u32(10);
+
+    let x_norm = vmulq_f32(as_f32, inv_255);
+    let linear = vmulq_f32(as_f32, inv_255_12_92);
+    let t = vsqrtq_f32(x_norm);
+    let u = vaddq_f32(vmulq_f32(x_norm, coeff_a), coeff_b);
+    let v = vaddq_f32(vmulq_f32(x_norm, coeff_c), t);
+    let curve = vmulq_f32(vmulq_f32(u, u), v);
+    let use_curve = vcgtq_u32(as_u32, curve_threshold);
+    let rgb = vbslq_f32(use_curve, curve, linear);
+    vbslq_f32(alpha_lane_mask, x_norm, rgb)
+}
+
+/// Decode one 4-byte sRGB RGBA pixel into `[R, G, B, A]` linear f32 lanes.
+///
+/// # Safety
+/// * The NEON feature must be available (enforced by `target_feature`).
+/// * `bytes_ptr` must be valid for a 4-byte read.
+#[cfg(target_arch = "aarch64")]
+#[target_feature(enable = "neon")]
+#[inline]
+unsafe fn decode_srgb_pixel_neon(bytes_ptr: *const u8) -> std::arch::aarch64::float32x4_t {
+    use std::arch::aarch64::*;
+
+    let mut lanes = vdupq_n_u32(0);
+    // SAFETY: caller guarantees 4 valid bytes at bytes_ptr.
+    unsafe {
+        lanes = vsetq_lane_u32::<0>(*bytes_ptr.add(0) as u32, lanes);
+        lanes = vsetq_lane_u32::<1>(*bytes_ptr.add(1) as u32, lanes);
+        lanes = vsetq_lane_u32::<2>(*bytes_ptr.add(2) as u32, lanes);
+        lanes = vsetq_lane_u32::<3>(*bytes_ptr.add(3) as u32, lanes);
+    }
+    // SAFETY: same NEON target feature as this helper.
+    unsafe { decode_srgb_lanes_neon(lanes) }
+}
+
+/// NEON path for `R8G8B8A8_SRGB` (and equivalent 4-channel sRGB layouts).
+///
+/// Processes four pixels (16 bytes → 16 f32s) per iteration. A 1-3 pixel
+/// tail is handled by the same NEON per-pixel helper, so the whole path stays
+/// vectorized on M1/aarch64.
+///
+/// **Not part of the public API.** See
+/// [`load_srgb8_rgba_f32_sse4_1`] for the rationale; use
+/// [`load_srgb8_f32`] for the stable, runtime-dispatched entry point.
+#[doc(hidden)]
+#[cfg(target_arch = "aarch64")]
+#[target_feature(enable = "neon")]
+pub unsafe fn load_srgb8_rgba_f32_neon(surface: &Surface) -> Result<Buffer<f32>> {
+    use std::arch::aarch64::*;
+
+    profiling::scope!("load_srgb8_rgba_f32_neon");
+    super::validate_surface(surface, 4)?;
+
+    let w = surface.width as usize;
+    let h = surface.height as usize;
+    let stride = surface.stride as usize;
+    let row_bytes = w * 4;
+    let total_pixels = w * h;
+
+    let mut pixels: Vec<[f32; 4]> = Vec::with_capacity(total_pixels);
+    let out_base = pixels.as_mut_ptr() as *mut f32;
+
+    // SAFETY: every intrinsic and pointer op below runs with NEON enabled
+    // (target_feature on the enclosing fn) and within the capacity reserved
+    // for `pixels`; validate_surface has already bounded the input slice.
+    unsafe {
+        let mut out_f32 = 0usize;
+
+        for row_region in surface.data.chunks(stride).take(h) {
+            let row = &row_region[..row_bytes];
+            let mut x = 0usize;
+
+            // 4 pixels (16 input bytes, 16 output f32s) per iteration.
+            while x + 16 <= row_bytes {
+                let bytes = vld1q_u8(row.as_ptr().add(x));
+                let lo16 = vmovl_u8(vget_low_u8(bytes));
+                let hi16 = vmovl_u8(vget_high_u8(bytes));
+
+                let rgba0 = vmovl_u16(vget_low_u16(lo16));
+                let rgba1 = vmovl_u16(vget_high_u16(lo16));
+                let rgba2 = vmovl_u16(vget_low_u16(hi16));
+                let rgba3 = vmovl_u16(vget_high_u16(hi16));
+
+                vst1q_f32(out_base.add(out_f32), decode_srgb_lanes_neon(rgba0));
+                vst1q_f32(out_base.add(out_f32 + 4), decode_srgb_lanes_neon(rgba1));
+                vst1q_f32(out_base.add(out_f32 + 8), decode_srgb_lanes_neon(rgba2));
+                vst1q_f32(out_base.add(out_f32 + 12), decode_srgb_lanes_neon(rgba3));
+
+                out_f32 += 16;
+                x += 16;
+            }
+
+            while x < row_bytes {
+                let result = decode_srgb_pixel_neon(row.as_ptr().add(x));
+                vst1q_f32(out_base.add(out_f32), result);
+                out_f32 += 4;
+                x += 4;
+            }
+        }
+
+        debug_assert_eq!(out_f32, total_pixels * 4);
+        pixels.set_len(total_pixels);
+    }
+
+    Ok(Buffer {
+        pixels,
+        width: surface.width,
+        height: surface.height,
+    })
+}
+
 #[cfg(all(test, target_arch = "x86_64"))]
 mod simd_tests {
     use super::*;
@@ -673,6 +827,122 @@ mod simd_tests {
 
         let surface = srgb_surface(data, w, h, stride);
         let simd = unsafe { load_srgb8_rgba_f32_avx512(&surface).unwrap() };
+
+        assert_eq!(simd.pixels.len(), 4);
+        assert!((simd.pixels[0][3] - 40.0 / 255.0).abs() < 1e-6);
+        assert!((simd.pixels[3][3] - 160.0 / 255.0).abs() < 1e-6);
+    }
+}
+
+#[cfg(all(test, target_arch = "aarch64"))]
+mod neon_tests {
+    use super::*;
+    use crate::alpha::AlphaMode;
+    use crate::surface::{ColorSpace, Surface};
+
+    fn has_neon() -> bool {
+        std::arch::is_aarch64_feature_detected!("neon")
+    }
+
+    fn srgb_surface(data: Vec<u8>, width: u32, height: u32, stride: u32) -> Surface {
+        Surface {
+            data,
+            width,
+            height,
+            stride,
+            format: ktx2::Format::R8G8B8A8_SRGB,
+            color_space: ColorSpace::Srgb,
+            alpha: AlphaMode::Opaque,
+        }
+    }
+
+    fn full_domain_surface() -> Surface {
+        let w: u32 = 256;
+        let h: u32 = 2;
+        let mut data = vec![0u8; (w * h * 4) as usize];
+        for x in 0..w as usize {
+            let row_a = x * 4;
+            data[row_a] = x as u8;
+            data[row_a + 1] = (255 - x) as u8;
+            data[row_a + 2] = ((x * 7) & 0xff) as u8;
+            data[row_a + 3] = x as u8;
+
+            let row_b = (w as usize + x) * 4;
+            data[row_b] = x as u8;
+            data[row_b + 1] = x as u8;
+            data[row_b + 2] = x as u8;
+            data[row_b + 3] = 255;
+        }
+        srgb_surface(data, w, h, w * 4)
+    }
+
+    fn assert_within_u8_tolerance(pixels: &[[f32; 4]], source: &[u8]) {
+        let lut = &*EOTF_LUT;
+        let tol = 0.5 / 255.0;
+        for (i, px) in pixels.iter().enumerate() {
+            let base = i * 4;
+            let rb = source[base];
+            let gb = source[base + 1];
+            let bb = source[base + 2];
+            let ab = source[base + 3];
+            assert!((px[0] - lut[rb as usize]).abs() < tol);
+            assert!((px[1] - lut[gb as usize]).abs() < tol);
+            assert!((px[2] - lut[bb as usize]).abs() < tol);
+            assert!((px[3] - ab as f32 / 255.0).abs() < 1e-6);
+        }
+    }
+
+    #[test]
+    fn neon_srgb_matches_lut_within_u8_tolerance() {
+        if !has_neon() {
+            return;
+        }
+        let surface = full_domain_surface();
+        let simd = unsafe { load_srgb8_rgba_f32_neon(&surface).unwrap() };
+        assert_within_u8_tolerance(&simd.pixels, &surface.data);
+    }
+
+    #[test]
+    fn neon_srgb_tail_matches_lut_within_u8_tolerance() {
+        if !has_neon() {
+            return;
+        }
+
+        let data = vec![
+            0u8, 10, 11, 255, //
+            128, 200, 255, 64, //
+            17, 42, 99, 200, //
+            77, 88, 99, 111, //
+            1, 2, 3, 4, //
+            250, 240, 230, 220, //
+            5, 100, 200, 255,
+        ];
+        let surface = srgb_surface(data.clone(), 7, 1, 7 * 4);
+        let simd = unsafe { load_srgb8_rgba_f32_neon(&surface).unwrap() };
+        assert_within_u8_tolerance(&simd.pixels, &data);
+    }
+
+    #[test]
+    fn neon_srgb_stride_padding_is_skipped() {
+        if !has_neon() {
+            return;
+        }
+
+        let w = 2u32;
+        let h = 2u32;
+        let stride = w * 4 + 4;
+        let mut data = Vec::new();
+        let rows = [
+            [10u8, 20, 30, 40, 50, 60, 70, 80],
+            [90, 100, 110, 120, 130, 140, 150, 160],
+        ];
+        for r in &rows {
+            data.extend_from_slice(r);
+            data.extend_from_slice(&[0xFE, 0xFE, 0xFE, 0xFE]);
+        }
+
+        let surface = srgb_surface(data, w, h, stride);
+        let simd = unsafe { load_srgb8_rgba_f32_neon(&surface).unwrap() };
 
         assert_eq!(simd.pixels.len(), 4);
         assert!((simd.pixels[0][3] - 40.0 / 255.0).abs() < 1e-6);
