@@ -88,16 +88,56 @@ pub fn convert(image: Image, mut settings: ConvertSettings) -> Result<PipelineOu
         .take()
         .unwrap_or_else(|| Arc::new(EncoderRegistry::default_registry()));
 
-    let input_fmt = image.surfaces[0][0].format;
+    let input_base = &image.surfaces[0][0];
+    let input_fmt = input_base.format;
+    let input_cs = input_base.color_space;
+    let input_alpha = input_base.alpha;
+
     let (target_fmt, encoder_step) = resolve_target(input_fmt, &mut settings, &registry)?;
 
-    // Compressed-in == compressed-out fast path.
+    let target_cs = settings.output_color_space.unwrap_or(input_cs);
+    let target_alpha = settings.output_alpha.unwrap_or(input_alpha);
+
+    // Format that ends up in the output container: the encoder's target when
+    // one is set, otherwise the resolved target format.
+    let final_target_fmt = encoder_step
+        .as_ref()
+        .map(|s| s.target_format)
+        .unwrap_or(target_fmt);
+
+    log::debug!(
+        "convert: {input_fmt:?} ({input_cs:?}, {input_alpha:?}) → \
+         {final_target_fmt:?} ({target_cs:?}, {target_alpha:?}) \
+         container={:?} swizzle={} mipmap={}",
+        settings.container,
+        settings.swizzle.is_some(),
+        settings.mipmap,
+    );
+
+    // Passthrough whenever the bytes already represent the requested output:
+    // identical format (modulo the sRGB tag, which rides on the surface),
+    // matching color space and alpha, and no pixel-level rewrite. Covers
+    // compressed-in == compressed-out and avoids a lossy load/store roundtrip
+    // for uncompressed identity conversions.
+    let (input_base_fmt, _) = input_fmt.normalize();
+    let (target_base_fmt, _) = final_target_fmt.normalize();
+    let formats_match = input_base_fmt == target_base_fmt;
+    let no_pixel_work = settings.swizzle.is_none() && !settings.mipmap;
+
+    if formats_match && input_cs == target_cs && input_alpha == target_alpha && no_pixel_work {
+        log::debug!("convert: taking passthrough path (format and processing match)");
+        return passthrough::run(image, final_target_fmt, settings.container);
+    }
+
+    // Compressed inputs that didn't qualify for passthrough have nowhere to
+    // go — the float/integer pipelines can't decode compressed data. Defer
+    // to passthrough::run's strict format check so the error is meaningful.
     if input_fmt.is_compressed() {
-        let final_target = match &encoder_step {
-            Some(step) => step.target_format,
-            None => target_fmt,
-        };
-        return passthrough::run(image, final_target, settings.container);
+        log::debug!(
+            "convert: compressed input did not qualify for passthrough; \
+             falling back to passthrough format check"
+        );
+        return passthrough::run(image, final_target_fmt, settings.container);
     }
 
     let variant = processing::pick_variant(input_fmt, target_fmt).ok_or_else(|| {
@@ -111,6 +151,8 @@ pub fn convert(image: Image, mut settings: ConvertSettings) -> Result<PipelineOu
             "integer/float family mismatch: {input_fmt:?} → {target_fmt:?}"
         )));
     }
+
+    log::debug!("convert: routing through {variant:?} pipeline");
 
     match variant {
         Variant::F32 => convert_f32(image, settings, target_fmt, encoder_step),
