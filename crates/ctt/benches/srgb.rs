@@ -2,8 +2,8 @@
 //!
 //! All benches run on the same 2048×2048 image. Kernels gated on CPU
 //! features are skipped if the host lacks the feature, so this bench is
-//! safe to run on any x86_64 machine — the subset that fires is whatever
-//! the host can execute.
+//! safe to run on x86_64 and aarch64 machines — the subset that fires is
+//! whatever the host can execute.
 //!
 //! Throughput is reported in pixels/second via
 //! `Throughput::Elements(pixel_count)`.
@@ -86,9 +86,12 @@ fn bench_load(c: &mut Criterion) {
     let mut g = c.benchmark_group("srgb_load_2048x2048");
     g.throughput(Throughput::Elements(PIXEL_COUNT));
 
-    // Public runtime-dispatched entry points. These route through the
-    // best available kernel; benched here so we can see the dispatch
-    // overhead relative to the direct kernel calls below.
+    g.bench_function("load_srgb8_f32_serial_rgba", |b| {
+        b.iter(|| ctt::bench_internals::load_srgb8_f32_serial(black_box(&rgba), 4).unwrap());
+    });
+
+    // Scalar comparison paths that are not covered by the 4-channel SIMD
+    // specializations.
     g.bench_function("scalar_bgra", |b| {
         b.iter(|| ctt::bench_internals::load_bgra8_srgb_f32(black_box(&rgba)).unwrap());
     });
@@ -125,6 +128,18 @@ fn bench_load(c: &mut Criterion) {
         }
     }
 
+    #[cfg(target_arch = "aarch64")]
+    {
+        use ctt::bench_internals::load_srgb8_rgba_f32_neon;
+
+        if std::arch::is_aarch64_feature_detected!("neon") {
+            g.bench_function("neon", |b| {
+                // SAFETY: runtime feature check confirmed NEON is available.
+                b.iter(|| unsafe { load_srgb8_rgba_f32_neon(black_box(&rgba)).unwrap() });
+            });
+        }
+    }
+
     g.finish();
 }
 
@@ -140,6 +155,13 @@ fn bench_store(c: &mut Criterion) {
 
     let mut g = c.benchmark_group("srgb_store_2048x2048");
     g.throughput(Throughput::Elements(PIXEL_COUNT));
+
+    g.bench_function("store_srgb8_f32_serial_rgba", |b| {
+        b.iter(|| ctt::bench_internals::store_srgb8_f32_serial(black_box(&buf), 4));
+    });
+    g.bench_function("store_bgra8_srgb_f32_serial", |b| {
+        b.iter(|| ctt::bench_internals::store_bgra8_srgb_f32_serial(black_box(&buf)));
+    });
 
     g.bench_function("scalar_bgr", |b| {
         b.iter(|| ctt::bench_internals::store_bgr8_srgb_f32(black_box(&buf3)));
@@ -182,6 +204,22 @@ fn bench_store(c: &mut Criterion) {
             g.bench_function("avx512_bgra", |b| {
                 // SAFETY: runtime feature check confirmed avx512f+bw+vl are available.
                 b.iter(|| unsafe { store_srgb8_f32_avx512::<true>(black_box(&buf)) });
+            });
+        }
+    }
+
+    #[cfg(target_arch = "aarch64")]
+    {
+        use ctt::bench_internals::store_srgb8_f32_neon;
+
+        if std::arch::is_aarch64_feature_detected!("neon") {
+            g.bench_function("neon_rgba", |b| {
+                // SAFETY: runtime feature check confirmed NEON is available.
+                b.iter(|| unsafe { store_srgb8_f32_neon::<false>(black_box(&buf)) });
+            });
+            g.bench_function("neon_bgra", |b| {
+                // SAFETY: runtime feature check confirmed NEON is available.
+                b.iter(|| unsafe { store_srgb8_f32_neon::<true>(black_box(&buf)) });
             });
         }
     }

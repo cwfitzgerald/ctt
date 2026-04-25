@@ -76,8 +76,12 @@ pub(crate) mod vk_format;
 pub mod bench_internals {
     pub use crate::processing::Buffer;
 
+    pub use crate::processing::load_kernels::srgb::load_srgb8_f32_serial;
     pub use crate::processing::load_kernels::{
         load_bgr8_srgb_f32, load_bgra8_srgb_f32, load_srgb8_f32,
+    };
+    pub use crate::processing::store_kernels::srgb::{
+        store_bgra8_srgb_f32_serial, store_srgb8_f32_serial,
     };
     pub use crate::processing::store_kernels::{
         store_bgr8_srgb_f32, store_bgra8_srgb_f32, store_srgb8_f32,
@@ -91,4 +95,9 @@ pub mod bench_internals {
     pub use crate::processing::store_kernels::srgb::{
         store_srgb8_f32_avx2_fma, store_srgb8_f32_avx512, store_srgb8_f32_sse4_1,
     };
+
+    #[cfg(target_arch = "aarch64")]
+    pub use crate::processing::load_kernels::srgb::load_srgb8_rgba_f32_neon;
+    #[cfg(target_arch = "aarch64")]
+    pub use crate::processing::store_kernels::srgb::store_srgb8_f32_neon;
 }
