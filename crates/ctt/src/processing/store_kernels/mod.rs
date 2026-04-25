@@ -4,7 +4,7 @@
 //! Input lanes are in *linear*, *premultiplied* space (for float pipelines);
 //! unpremultiplication and sRGB re-encoding happen at the callers / here.
 
-mod srgb;
+pub(crate) mod srgb;
 pub use srgb::{store_bgr8_srgb_f32, store_bgra8_srgb_f32, store_srgb8_f32};
 
 use half::f16;

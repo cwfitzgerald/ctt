@@ -35,7 +35,11 @@ ispc-build-from-source = [
 ]
 
 [dependencies]
-bytemuck = { workspace = true, features = ["extern_crate_alloc", "min_const_generics"] }
+bytemuck = { workspace = true, features = [
+  "extern_crate_alloc",
+  "min_const_generics",
+] }
+criterion = { workspace = true }
 ctt-astcenc = { workspace = true, optional = true }
 ctt-bc7enc-rdo = { workspace = true, optional = true }
 ctt-compressonator = { workspace = true, optional = true }
@@ -50,6 +54,13 @@ miniz_oxide = { workspace = true }
 profiling = { workspace = true }
 thiserror = { workspace = true }
 zstd = { workspace = true }
+
+[dev-dependencies]
+criterion = { workspace = true }
+
+[[bench]]
+name = "srgb"
+harness = false
 
 [lints]
 workspace = true
