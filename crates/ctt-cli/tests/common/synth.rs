@@ -128,6 +128,52 @@ pub fn make_compressed_image(
     }
 }
 
+/// Deterministic per-byte pattern: each byte is its index modulo 256.
+fn pattern_bytes(len: usize) -> Vec<u8> {
+    (0..len).map(|i| (i & 0xff) as u8).collect()
+}
+
+/// Synthesize a compressed [`Image`] of `width`×`height` filled with a
+/// deterministic byte pattern. The contents are not "valid" compressed
+/// blocks for any particular decoder, but they round-trip exactly through
+/// container encode/decode, which is what passthrough tests exercise.
+pub fn synth_compressed(format: Format, width: u32, height: u32) -> Image {
+    let (block_w, block_h) = format.block_size().expect("compressed format");
+    let bytes_per_block = format.bytes_per_block().expect("compressed format");
+    let blocks_x = width.div_ceil(block_w as u32);
+    let blocks_y = height.div_ceil(block_h as u32);
+    let total = (blocks_x * blocks_y) as usize * bytes_per_block;
+    make_compressed_image(
+        pattern_bytes(total),
+        width,
+        height,
+        format,
+        ColorSpace::Linear,
+        AlphaMode::Opaque,
+    )
+}
+
+/// Synthesize an uncompressed [`Image`] of `width`×`height` filled with a
+/// deterministic byte pattern in the requested format.
+pub fn synth_uncompressed(
+    format: Format,
+    width: u32,
+    height: u32,
+    color_space: ColorSpace,
+    alpha: AlphaMode,
+) -> Image {
+    let bpp = format.bytes_per_pixel().expect("uncompressed format");
+    let total = (width * height) as usize * bpp;
+    make_image(
+        pattern_bytes(total),
+        width,
+        height,
+        format,
+        color_space,
+        alpha,
+    )
+}
+
 /// Encode an `Image` as KTX2 bytes.
 pub fn to_ktx2(image: Image) -> Vec<u8> {
     encode(image, Container::Ktx2(None))

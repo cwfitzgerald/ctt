@@ -5,6 +5,7 @@
 
 mod common;
 
+mod color_alpha;
 mod compression;
 mod containers;
 mod cubemap;
@@ -12,3 +13,4 @@ mod encoder_select;
 mod errors;
 mod mipmap;
 mod passthrough;
+mod swizzle;
