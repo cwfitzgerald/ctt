@@ -40,13 +40,21 @@ pub struct Args {
     #[arg(long)]
     pub swizzle: Option<String>,
 
-    /// Color space of the input image(s).
-    #[arg(long, visible_alias = "ic", default_value = "srgb")]
-    pub input_color_space: ColorSpaceArg,
+    /// Override the input color space.
+    ///
+    /// Container formats (KTX2, DDS) carry color-space metadata, which is
+    /// honored by default. For formats without metadata (PNG, JPEG, …) the
+    /// fallback is sRGB. Pass this flag to override either.
+    #[arg(long, visible_alias = "ic")]
+    pub input_color_space: Option<ColorSpaceArg>,
 
-    /// Alpha mode of the input image(s).
-    #[arg(long, visible_alias = "ia", default_value = "straight")]
-    pub input_alpha: AlphaModeArg,
+    /// Override the input alpha mode.
+    ///
+    /// Container formats (KTX2, DDS) carry alpha metadata, which is honored
+    /// by default. For formats without metadata the fallback is straight.
+    /// Pass this flag to override either.
+    #[arg(long, visible_alias = "ia")]
+    pub input_alpha: Option<AlphaModeArg>,
 
     /// Desired color space of the output. If omitted, matches the input.
     #[arg(long, visible_alias = "oc")]

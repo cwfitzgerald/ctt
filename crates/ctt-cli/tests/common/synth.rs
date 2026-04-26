@@ -1,0 +1,204 @@
+//! Synthesis helpers: build `Image`s and serialize them to KTX2/DDS bytes.
+
+use std::path::Path;
+
+use ctt::{
+    AlphaMode, ColorSpace, Container, ConvertSettings, Format, FormatExt, Image, PipelineOutput,
+    Surface,
+};
+
+/// Solid color RGBA8 image data.
+pub fn rgba8_solid(w: u32, h: u32, color: [u8; 4]) -> Vec<u8> {
+    let mut buf = Vec::with_capacity((w * h * 4) as usize);
+    for _ in 0..w * h {
+        buf.extend_from_slice(&color);
+    }
+    buf
+}
+
+/// Distinguishable per-pixel RGBA8 data: r=x%256, g=y%256, b=(x^y)%256, a=255.
+pub fn rgba8_gradient(w: u32, h: u32) -> Vec<u8> {
+    let mut buf = Vec::with_capacity((w * h * 4) as usize);
+    for y in 0..h {
+        for x in 0..w {
+            buf.extend_from_slice(&[
+                (x & 0xff) as u8,
+                (y & 0xff) as u8,
+                ((x ^ y) & 0xff) as u8,
+                255,
+            ]);
+        }
+    }
+    buf
+}
+
+/// Six visually distinct colors in +X, -X, +Y, -Y, +Z, -Z order.
+pub const CUBEMAP_FACE_COLORS: [[u8; 4]; 6] = [
+    [255, 0, 0, 255],   // +X — red
+    [0, 255, 255, 255], // -X — cyan
+    [0, 255, 0, 255],   // +Y — green
+    [255, 0, 255, 255], // -Y — magenta
+    [0, 0, 255, 255],   // +Z — blue
+    [255, 255, 0, 255], // -Z — yellow
+];
+
+/// Build a single-layer single-mip [`Image`] from raw uncompressed pixel data.
+pub fn make_image(
+    data: Vec<u8>,
+    width: u32,
+    height: u32,
+    format: Format,
+    color_space: ColorSpace,
+    alpha: AlphaMode,
+) -> Image {
+    let bpp = format.bytes_per_pixel().expect("uncompressed format") as u32;
+    Image {
+        surfaces: vec![vec![Surface {
+            data,
+            width,
+            height,
+            stride: width * bpp,
+            format,
+            color_space,
+            alpha,
+        }]],
+        is_cubemap: false,
+    }
+}
+
+/// Build a cubemap [`Image`] from six per-face RGBA8 surfaces.
+pub fn make_cubemap_rgba8(
+    face_w: u32,
+    face_h: u32,
+    faces: [Vec<u8>; 6],
+    color_space: ColorSpace,
+    alpha: AlphaMode,
+) -> Image {
+    let surfaces: Vec<Vec<Surface>> = faces
+        .into_iter()
+        .map(|data| {
+            vec![Surface {
+                data,
+                width: face_w,
+                height: face_h,
+                stride: face_w * 4,
+                format: Format::R8G8B8A8_UNORM,
+                color_space,
+                alpha,
+            }]
+        })
+        .collect();
+    Image {
+        surfaces,
+        is_cubemap: true,
+    }
+}
+
+/// Build a single image holding raw block bytes for a compressed format.
+///
+/// `data` must be a single mip level's worth of compressed bytes.
+pub fn make_compressed_image(
+    data: Vec<u8>,
+    width: u32,
+    height: u32,
+    format: Format,
+    color_space: ColorSpace,
+    alpha: AlphaMode,
+) -> Image {
+    let (block_w, block_h) = format.block_size().expect("compressed format");
+    let bytes_per_block = format.bytes_per_block().expect("compressed format");
+    let blocks_x = width.div_ceil(block_w as u32);
+    let stride = blocks_x * bytes_per_block as u32;
+    assert_eq!(
+        data.len(),
+        (blocks_x * height.div_ceil(block_h as u32)) as usize * bytes_per_block,
+        "compressed payload size mismatch"
+    );
+    Image {
+        surfaces: vec![vec![Surface {
+            data,
+            width,
+            height,
+            stride,
+            format,
+            color_space,
+            alpha,
+        }]],
+        is_cubemap: false,
+    }
+}
+
+/// Encode an `Image` as KTX2 bytes.
+pub fn to_ktx2(image: Image) -> Vec<u8> {
+    encode(image, Container::Ktx2(None))
+}
+
+/// Encode an `Image` as DDS bytes.
+pub fn to_dds(image: Image) -> Vec<u8> {
+    encode(image, Container::Dds)
+}
+
+/// Encode an `Image` into a container, returning the encoded bytes.
+fn encode(image: Image, container: Container) -> Vec<u8> {
+    match ctt::convert(
+        image,
+        ConvertSettings {
+            format: None,
+            container,
+            ..Default::default()
+        },
+    )
+    .expect("ctt::convert succeeded")
+    {
+        PipelineOutput::Encoded(bytes) => bytes,
+        PipelineOutput::Raw(_) => panic!("expected encoded output"),
+    }
+}
+
+/// Write a KTX2-encoded image to `path`.
+pub fn write_ktx2(image: Image, path: &Path) {
+    std::fs::write(path, to_ktx2(image)).expect("write ktx2");
+}
+
+/// Write a DDS-encoded image to `path`.
+pub fn write_dds(image: Image, path: &Path) {
+    std::fs::write(path, to_dds(image)).expect("write dds");
+}
+
+/// Build a 4×3-tile cross-layout image whose 6 face tiles are each filled
+/// with a distinct color in the +X/-X/+Y/-Y/+Z/-Z palette.
+///
+/// Layout:
+/// ```text
+///     [+Y]
+/// [-X][+Z][+X][-Z]
+///     [-Y]
+/// ```
+/// Returns RGBA8 bytes of size (face*4) × (face*3).
+pub fn cross_layout_rgba8(face: u32) -> Vec<u8> {
+    let w = face * 4;
+    let h = face * 3;
+    let mut buf = vec![0u8; (w * h * 4) as usize];
+
+    // (col, row) of each face in face-tile units, matching split_cross.
+    let positions = [
+        (2u32, 1u32, CUBEMAP_FACE_COLORS[0]), // +X
+        (0, 1, CUBEMAP_FACE_COLORS[1]),       // -X
+        (1, 0, CUBEMAP_FACE_COLORS[2]),       // +Y
+        (1, 2, CUBEMAP_FACE_COLORS[3]),       // -Y
+        (1, 1, CUBEMAP_FACE_COLORS[4]),       // +Z
+        (3, 1, CUBEMAP_FACE_COLORS[5]),       // -Z
+    ];
+
+    for (col, row, color) in positions {
+        let x0 = col * face;
+        let y0 = row * face;
+        for py in 0..face {
+            for px in 0..face {
+                let off = (((y0 + py) * w + (x0 + px)) * 4) as usize;
+                buf[off..off + 4].copy_from_slice(&color);
+            }
+        }
+    }
+    buf
+}
