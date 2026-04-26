@@ -201,6 +201,25 @@ fn encode(image: Image, container: Container) -> Vec<u8> {
     }
 }
 
+/// Encode an `Image` with a generated `mip_count`-deep mip chain into KTX2.
+pub fn to_ktx2_with_mips(image: Image, mip_count: usize) -> Vec<u8> {
+    match ctt::convert(
+        image,
+        ConvertSettings {
+            format: None,
+            container: Container::Ktx2(None),
+            mipmap: true,
+            mipmap_count: Some(mip_count),
+            ..Default::default()
+        },
+    )
+    .expect("ctt::convert succeeded")
+    {
+        PipelineOutput::Encoded(bytes) => bytes,
+        PipelineOutput::Raw(_) => panic!("expected encoded output"),
+    }
+}
+
 /// Write a KTX2-encoded image to `path`.
 pub fn write_ktx2(image: Image, path: &Path) {
     std::fs::write(path, to_ktx2(image)).expect("write ktx2");

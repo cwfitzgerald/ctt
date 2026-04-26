@@ -164,3 +164,97 @@ fn astc_4x4_ktx2_to_dds() {
 fn astc_4x4_dds_to_ktx2() {
     assert_dds_to_ktx2_roundtrip(Format::ASTC_4x4_UNORM_BLOCK);
 }
+
+// ── Container inference ──────────────────────────────────────────────────
+
+/// `.ktx2` extension with no `--container` flag picks KTX2 output.
+#[test]
+fn extension_ktx2_infers_ktx2() {
+    let f = TestFixture::new();
+    let input = f.data_file("rgba8_16x16_linear.ktx2");
+    let output = f.output_file("inferred.ktx2");
+
+    run_cli([
+        "ctt",
+        input.to_str().unwrap(),
+        "-o",
+        output.to_str().unwrap(),
+    ])
+    .expect("run succeeded");
+
+    let bytes = read(&output);
+    assert!(
+        bytes.starts_with(assert::KTX2_MAGIC),
+        ".ktx2 extension must produce KTX2 output"
+    );
+}
+
+/// `.dds` extension with no `--container` flag picks DDS output.
+#[test]
+fn extension_dds_infers_dds() {
+    let f = TestFixture::new();
+    let input = f.data_file("bc7_4x4.ktx2");
+    let output = f.output_file("inferred.dds");
+
+    run_cli([
+        "ctt",
+        input.to_str().unwrap(),
+        "-o",
+        output.to_str().unwrap(),
+    ])
+    .expect("run succeeded");
+
+    let bytes = read(&output);
+    assert!(
+        bytes.starts_with(assert::DDS_MAGIC),
+        ".dds extension must produce DDS output"
+    );
+}
+
+/// `--container ktx2` overrides a `.dds` extension.
+#[test]
+fn container_flag_overrides_dds_extension() {
+    let f = TestFixture::new();
+    let input = f.data_file("bc7_4x4.ktx2");
+    let output = f.output_file("override.dds");
+
+    run_cli([
+        "ctt",
+        input.to_str().unwrap(),
+        "-o",
+        output.to_str().unwrap(),
+        "--container",
+        "ktx2",
+    ])
+    .expect("run succeeded");
+
+    let bytes = read(&output);
+    assert!(
+        bytes.starts_with(assert::KTX2_MAGIC),
+        "--container ktx2 must override .dds extension"
+    );
+}
+
+/// `--container dds` overrides a `.ktx2` extension.
+#[test]
+fn container_flag_overrides_ktx2_extension() {
+    let f = TestFixture::new();
+    let input = f.data_file("bc7_4x4.ktx2");
+    let output = f.output_file("override.ktx2");
+
+    run_cli([
+        "ctt",
+        input.to_str().unwrap(),
+        "-o",
+        output.to_str().unwrap(),
+        "--container",
+        "dds",
+    ])
+    .expect("run succeeded");
+
+    let bytes = read(&output);
+    assert!(
+        bytes.starts_with(assert::DDS_MAGIC),
+        "--container dds must override .ktx2 extension"
+    );
+}

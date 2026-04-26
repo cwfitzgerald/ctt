@@ -1,6 +1,8 @@
 //! Cubemap construction tests.
 
-use crate::common::synth::CUBEMAP_FACE_COLORS;
+use ctt::Format;
+
+use crate::common::synth::{CUBEMAP_FACE_COLORS, synth_compressed, write_ktx2};
 use crate::common::{TestFixture, assert, read, run_cli};
 
 /// 6 distinct-color KTX2 inputs + `--cubemap` → KTX2 cubemap; the
@@ -83,5 +85,96 @@ fn cross_layout_splits_into_cubemap() {
             first, color,
             "face {i} first pixel: expected {color:?}, got {first:?}"
         );
+    }
+}
+
+/// 6 BC7 KTX2 inputs + `--cubemap` produce a BC7 cubemap with all 6 faces
+/// preserved at their compressed byte representation.
+fn assert_compressed_cubemap_preserved(format: Format, ktx2_format: ktx2::Format) {
+    let f = TestFixture::new();
+    let face_paths: Vec<_> = (0..6)
+        .map(|i| f.output_file(&format!("face_{i}.ktx2")))
+        .collect();
+    for path in &face_paths {
+        write_ktx2(synth_compressed(format, 8, 8), path);
+    }
+    let output = f.output_file("cube.ktx2");
+
+    let mut argv: Vec<String> = vec!["ctt".to_string()];
+    for p in &face_paths {
+        argv.push(p.to_str().unwrap().to_string());
+    }
+    argv.extend([
+        "-o".to_string(),
+        output.to_str().unwrap().to_string(),
+        "--cubemap".to_string(),
+    ]);
+
+    run_cli(argv).expect("run succeeded");
+
+    let bytes = read(&output);
+    let info = assert::parse_ktx2(&bytes);
+    assert_eq!(info.face_count, 6, "{format:?}: must be a cubemap");
+    assert_eq!(info.width, 8);
+    assert_eq!(info.height, 8);
+    assert_eq!(
+        info.format,
+        Some(ktx2_format),
+        "{format:?}: format must be preserved"
+    );
+
+    let decoded = assert::decode(&bytes);
+    assert!(decoded.is_cubemap);
+    assert_eq!(decoded.surfaces.len(), 6);
+    let expected = assert::decode(&read(&face_paths[0])).surfaces[0][0]
+        .data
+        .clone();
+    for (i, layer) in decoded.surfaces.iter().enumerate() {
+        assert_eq!(
+            layer[0].data, expected,
+            "face {i}: compressed bytes must match the source face"
+        );
+    }
+}
+
+#[test]
+fn six_bc7_inputs_assemble_into_bc7_cubemap() {
+    assert_compressed_cubemap_preserved(Format::BC7_UNORM_BLOCK, ktx2::Format::BC7_UNORM_BLOCK);
+}
+
+#[test]
+fn six_bc6h_inputs_assemble_into_bc6h_cubemap() {
+    assert_compressed_cubemap_preserved(Format::BC6H_UFLOAT_BLOCK, ktx2::Format::BC6H_UFLOAT_BLOCK);
+}
+
+/// Already-cubemap KTX2 input + `--cubemap` is a no-op assembly: the existing
+/// cubemap is forwarded through, face count and per-face colors preserved.
+#[test]
+fn already_cubemap_input_with_cubemap_flag_is_passthrough() {
+    let f = TestFixture::new();
+    let input = f.data_file("cube_palette_16.ktx2");
+    let output = f.output_file("out.ktx2");
+
+    run_cli([
+        "ctt",
+        input.to_str().unwrap(),
+        "-o",
+        output.to_str().unwrap(),
+        "--cubemap",
+    ])
+    .expect("run succeeded");
+
+    let bytes = read(&output);
+    let info = assert::parse_ktx2(&bytes);
+    assert_eq!(info.face_count, 6);
+    assert_eq!(info.width, 16);
+    assert_eq!(info.height, 16);
+
+    let decoded = assert::decode(&bytes);
+    assert!(decoded.is_cubemap);
+    for (i, color) in CUBEMAP_FACE_COLORS.iter().enumerate() {
+        let face = &decoded.surfaces[i][0];
+        let first = &face.data[..4];
+        assert_eq!(first, color, "face {i}: expected {color:?}, got {first:?}");
     }
 }

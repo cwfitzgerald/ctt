@@ -5,12 +5,15 @@
 
 mod common;
 
+mod arrays;
 mod color_alpha;
 mod compression;
 mod containers;
 mod cubemap;
+mod edge_cases;
 mod encoder_select;
 mod errors;
 mod mipmap;
 mod passthrough;
+mod supercompression;
 mod swizzle;
