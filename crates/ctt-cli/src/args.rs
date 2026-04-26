@@ -4,7 +4,7 @@ use clap::Parser;
 
 /// ctt — texture compression tool
 #[derive(Debug, Parser)]
-#[command(name = "ctt", version, about)]
+#[command(name = "ctt", version, about, max_term_width = 100)]
 pub struct Args {
     /// Input image file(s). For cubemaps with separate faces, provide 6 files.
     #[arg(required_unless_present = "list_encoders")]
@@ -98,6 +98,7 @@ pub struct Args {
     pub mipmap_filter: MipmapFilterArg,
 
     /// Enable zstd supercompression for KTX2 output.
+    ///
     /// Optionally takes a compression level: negative (fast mode) through 22
     /// (maximum compression). Default when omitted: 0, which maps to the zstd
     /// library default (currently level 3).

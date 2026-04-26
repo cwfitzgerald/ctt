@@ -39,7 +39,7 @@ ctt = { workspace = true, features = [
   "encoder-etcpak",
   "encoder-intel",
 ] }
-clap = { workspace = true }
+clap = { workspace = true, features = ["wrap_help"] }
 image = { workspace = true, features = ["default"] }
 bytemuck = { workspace = true }
 fern = { workspace = true }
