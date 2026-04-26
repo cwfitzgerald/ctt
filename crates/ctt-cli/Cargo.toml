@@ -11,16 +11,25 @@ description = "Command-line interface for the ctt texture compression library"
 keywords = ["texture", "compression", "gpu", "cli"]
 categories = ["command-line-utilities", "graphics"]
 default-run = "ctt"
+autotests = false
 
 [features]
 default = ["ispc-prebuilt"]
 ispc-prebuilt = ["ctt/ispc-prebuilt"]
 ispc-build-from-source = ["ctt/ispc-build-from-source"]
 
+[lib]
+name = "ctt_cli"
+path = "src/lib.rs"
+
 [[bin]]
 name = "ctt"
 path = "src/main.rs"
 doc = false
+
+[[test]]
+name = "root"
+path = "tests/root.rs"
 
 [dependencies]
 ctt = { workspace = true, features = [
@@ -36,6 +45,11 @@ bytemuck = { workspace = true }
 fern = { workspace = true }
 profiling = { workspace = true }
 log = { workspace = true }
+
+[dev-dependencies]
+ktx2 = { workspace = true }
+ddsfile = { workspace = true }
+tempfile = { workspace = true }
 
 [lints]
 workspace = true

@@ -1,0 +1,15 @@
+[package]
+name = "regen-test-data"
+version = "0.0.0"
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+anyhow = { workspace = true }
+# Only the BC7 fixture needs an encoder; everything else is passthrough.
+# Encoder is pinned explicitly to `bc7e` in the binary so this stays stable.
+ctt = { workspace = true, features = ["encoder-bc7enc", "ispc-prebuilt"] }
+
+[lints]
+workspace = true

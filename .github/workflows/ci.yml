@@ -106,21 +106,21 @@ jobs:
 
       # build-from-source
       - name: Clippy (build-from-source)
-        run: cargo clippy --target ${{ matrix.target }} --all-targets --no-default-features --features ctt-cli/ispc-build-from-source
+        run: cargo clippy --target ${{ matrix.target }} --all-targets --workspace --exclude regen-test-data --no-default-features --features ctt-cli/ispc-build-from-source
 
       - name: Build (build-from-source)
-        run: cargo build --target ${{ matrix.target }} --no-default-features --features ctt-cli/ispc-build-from-source
+        run: cargo build --target ${{ matrix.target }} --workspace --exclude regen-test-data --no-default-features --features ctt-cli/ispc-build-from-source
 
       - name: Doc (build-from-source)
-        run: cargo doc --target ${{ matrix.target }} --no-deps --no-default-features --features ctt-cli/ispc-build-from-source
+        run: cargo doc --target ${{ matrix.target }} --no-deps --workspace --exclude regen-test-data --no-default-features --features ctt-cli/ispc-build-from-source
 
       - name: Test (build-from-source)
         if: ${{ matrix.test }}
-        run: cargo nextest run --target ${{ matrix.target }} --no-default-features --features ctt-cli/ispc-build-from-source
+        run: cargo nextest run --target ${{ matrix.target }} --workspace --exclude regen-test-data --no-default-features --features ctt-cli/ispc-build-from-source
 
       - name: Doctest (build-from-source)
         if: ${{ matrix.test }}
-        run: cargo test --doc --target ${{ matrix.target }} --no-default-features --features ctt-cli/ispc-build-from-source
+        run: cargo test --doc --target ${{ matrix.target }} --workspace --exclude regen-test-data --no-default-features --features ctt-cli/ispc-build-from-source
 
   no-prebuilt-in-build-from-source:
     name: No prebuilt in build-from-source
