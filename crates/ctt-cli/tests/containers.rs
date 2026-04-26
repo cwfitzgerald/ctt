@@ -90,9 +90,7 @@ fn bc7_ktx2_to_dds_payload_preserved() {
     assert::assert_payload_eq(&read(&input), &out_bytes);
 }
 
-// ── Container conversion sweep (KTX2 ↔ DDS) ──────────────────────────────
-//
-// Each non-ETC compressed format from the Phase 1 list, both directions.
+// One representative test per supported compressed format, both directions.
 // DDS does not support ETC; that error case is covered in errors.rs.
 
 #[test]
@@ -164,8 +162,6 @@ fn astc_4x4_ktx2_to_dds() {
 fn astc_4x4_dds_to_ktx2() {
     assert_dds_to_ktx2_roundtrip(Format::ASTC_4x4_UNORM_BLOCK);
 }
-
-// ── Container inference ──────────────────────────────────────────────────
 
 /// `.ktx2` extension with no `--container` flag picks KTX2 output.
 #[test]

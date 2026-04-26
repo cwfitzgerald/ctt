@@ -1,7 +1,7 @@
 //! End-to-end tests for the ctt CLI.
 //!
 //! All test files are submodules of this single test root so the shared
-//! `common` helpers compile once. See `plans/e2e-tests.md`.
+//! `common` helpers compile once.
 
 mod common;
 

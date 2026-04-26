@@ -20,8 +20,8 @@ pub use args::{
     AlphaModeArg, Args, ColorSpaceArg, ContainerArg, CubemapLayoutArg, MipmapFilterArg, QualityArg,
 };
 
-/// Initialize the logger at the requested verbosity. Idempotent: safe to
-/// call from many tests in the same process.
+/// Initialize the logger at the requested verbosity. The `OnceLock` makes
+/// it safe to call from many tests in the same process.
 pub fn setup_logger(verbose: u8) {
     static INIT: OnceLock<()> = OnceLock::new();
     INIT.get_or_init(|| {
@@ -30,7 +30,7 @@ pub fn setup_logger(verbose: u8) {
             1 => log::LevelFilter::Debug,
             _ => log::LevelFilter::Trace,
         };
-        let _ = fern::Dispatch::new()
+        fern::Dispatch::new()
             .format(|out, message, record| match record.level() {
                 log::Level::Error => out.finish(format_args!("error: {message}")),
                 log::Level::Warn => out.finish(format_args!("warning: {message}")),
@@ -38,7 +38,8 @@ pub fn setup_logger(verbose: u8) {
             })
             .level(level)
             .chain(std::io::stderr())
-            .apply();
+            .apply()
+            .expect("failed to initialize logger");
     });
 }
 

@@ -46,17 +46,13 @@ impl TestFixture {
 
     /// Resolve a checked-in golden input under `tests/data/`.
     pub fn data_file(&self, name: &str) -> PathBuf {
-        let p = data_dir().join(name);
-        log::debug!("fixture data file: {}", p.display());
-        p
+        data_dir().join(name)
     }
 
     /// Path inside the tempdir for a test-produced artifact. The file
     /// itself is created by whatever the test runs (e.g. `ctt_cli::run`).
     pub fn output_file(&self, name: &str) -> PathBuf {
-        let p = self.tmp.path().join(name);
-        log::debug!("fixture output file: {}", p.display());
-        p
+        self.tmp.path().join(name)
     }
 }
 

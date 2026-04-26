@@ -152,12 +152,10 @@ fn explicit_input_color_space_overrides_container_metadata() {
     assert_eq!(img.surfaces[0][0].color_space, ctt::ColorSpace::Srgb);
 }
 
-// ── Compressed passthrough sweep ─────────────────────────────────────────
-//
 // One representative test per supported compressed format. Each builds a
 // synthetic 8×8 KTX2 input and asserts the CLI passthrough is byte-identical.
-// Quality presets, ASTC block sizes, and other format variants are pass-
-// through metadata; only one block-size per family is exercised here.
+// Only one block-size per family is exercised; ASTC block-size variants and
+// quality presets are passthrough metadata.
 
 #[test]
 fn bc1_passthrough_byte_equal() {
@@ -209,8 +207,6 @@ fn astc_4x4_passthrough_byte_equal() {
     assert_compressed_ktx2_passthrough(Format::ASTC_4x4_UNORM_BLOCK);
 }
 
-// ── Uncompressed identity sweep ──────────────────────────────────────────
-//
 // One representative per uncompressed format family. Synthesized KTX2
 // inputs round-trip byte-identical through CLI passthrough.
 

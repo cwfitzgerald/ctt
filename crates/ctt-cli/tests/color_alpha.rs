@@ -169,8 +169,8 @@ fn output_alpha_opaque_only_retags() {
     let (data, _, alpha, _) = first_surface(&read(&output));
     // KTX2 collapses Opaque to "not premultiplied" on disk, which decodes
     // back as Straight. The DFD bit that distinguishes Opaque is not in
-    // the container, so we can't assert tag == Opaque after a roundtrip.
-    // Per the plan's intent, the data must be unchanged.
+    // the container, so we can't assert tag == Opaque after a roundtrip;
+    // accept either, but the data must be unchanged.
     assert!(
         matches!(alpha, AlphaMode::Straight | AlphaMode::Opaque),
         "alpha tag should be Straight or Opaque, got {alpha:?}"
