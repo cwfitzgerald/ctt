@@ -3,20 +3,22 @@
 //! # Quick start
 //!
 //! ```ignore
-//! use ctt::{convert, ConvertSettings, Container, TargetFormat, Format, Image, Surface, ColorSpace, AlphaMode};
+//! use ctt::{convert, ConvertSettings, Container, TargetFormat, Format, Image, Surface, ColorSpace, AlphaMode, TextureKind};
 //!
 //! let surface = Surface {
 //!     data: pixel_bytes,
 //!     width: 512,
 //!     height: 512,
+//!     depth: 1,
 //!     stride: 512 * 4,
+//!     slice_stride: 0,
 //!     format: Format::R8G8B8A8_UNORM,
 //!     color_space: ColorSpace::Srgb,
 //!     alpha: AlphaMode::Straight,
 //! };
 //! let image = Image {
 //!     surfaces: vec![vec![surface]],
-//!     is_cubemap: false,
+//!     kind: TextureKind::Texture2D,
 //! };
 //!
 //! let ktx2_bytes = convert(image, ConvertSettings {
@@ -43,7 +45,7 @@ pub use error::{Error, Result};
 pub use format::{TargetFormat, format_short_name, parse_format};
 pub use processing::{MipmapFilter, PipelineOutput, Swizzle, SwizzleChannel};
 pub use quality::Quality;
-pub use surface::{ColorSpace, Image, Surface};
+pub use surface::{ColorSpace, Image, Surface, TextureKind};
 pub use vk_format::{ChannelKind, FormatExt};
 
 // ---- Public modules for advanced use ----

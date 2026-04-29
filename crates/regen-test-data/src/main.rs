@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 use anyhow::Result;
 use ctt::{
     AlphaMode, ColorSpace, Container, ConvertSettings, Format, FormatExt, Image, PipelineOutput,
-    Quality, Surface, TargetFormat,
+    Quality, Surface, TargetFormat, TextureKind,
 };
 
 const FACE_COLORS: [[u8; 4]; 6] = [
@@ -121,7 +121,9 @@ fn write_cubemap_palette_ktx2(dir: &Path, face: u32, name: &str) -> Result<()> {
                 data: rgba8_solid(face, face, color),
                 width: face,
                 height: face,
+                depth: 1,
                 stride: face * 4,
+                slice_stride: 0,
                 format: Format::R8G8B8A8_UNORM,
                 color_space: ColorSpace::Linear,
                 alpha: AlphaMode::Opaque,
@@ -130,7 +132,7 @@ fn write_cubemap_palette_ktx2(dir: &Path, face: u32, name: &str) -> Result<()> {
         .collect();
     let image = Image {
         surfaces,
-        is_cubemap: true,
+        kind: TextureKind::Cubemap,
     };
     write_container(dir.join(name), image, Container::Ktx2(None))
 }
@@ -195,12 +197,14 @@ fn make_rgba8_image(
             data,
             width: w,
             height: h,
+            depth: 1,
             stride: w * bpp,
+            slice_stride: 0,
             format: Format::R8G8B8A8_UNORM,
             color_space,
             alpha,
         }]],
-        is_cubemap: false,
+        kind: TextureKind::Texture2D,
     }
 }
 

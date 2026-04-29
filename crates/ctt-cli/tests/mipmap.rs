@@ -1,6 +1,6 @@
 //! Mipmap generation tests.
 
-use ctt::{AlphaMode, ColorSpace, Format};
+use ctt::{AlphaMode, ColorSpace, Format, TextureKind};
 
 use crate::common::synth::{
     CUBEMAP_FACE_COLORS, make_cubemap_rgba8, rgba8_solid, synth_uncompressed, write_ktx2,
@@ -189,7 +189,7 @@ fn mipmap_plus_cubemap_per_face_mip_chain() {
     assert_eq!(info.level_count, 4, "8×8 produces a 4-level chain");
 
     let decoded = assert::decode(&bytes);
-    assert!(decoded.is_cubemap);
+    assert_eq!(decoded.kind, TextureKind::Cubemap);
     assert_eq!(decoded.surfaces.len(), 6);
     let expected_dims = [(8u32, 8u32), (4, 4), (2, 2), (1, 1)];
     for face_idx in 0..6 {

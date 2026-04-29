@@ -4,7 +4,7 @@ use std::path::Path;
 
 use ctt::{
     AlphaMode, ColorSpace, Container, ConvertSettings, Format, FormatExt, Image, PipelineOutput,
-    Surface,
+    Surface, TextureKind,
 };
 
 /// Solid color RGBA8 image data.
@@ -57,12 +57,14 @@ pub fn make_image(
             data,
             width,
             height,
+            depth: 1,
             stride: width * bpp,
+            slice_stride: 0,
             format,
             color_space,
             alpha,
         }]],
-        is_cubemap: false,
+        kind: TextureKind::Texture2D,
     }
 }
 
@@ -81,7 +83,9 @@ pub fn make_cubemap_rgba8(
                 data,
                 width: face_w,
                 height: face_h,
+                depth: 1,
                 stride: face_w * 4,
+                slice_stride: 0,
                 format: Format::R8G8B8A8_UNORM,
                 color_space,
                 alpha,
@@ -90,7 +94,7 @@ pub fn make_cubemap_rgba8(
         .collect();
     Image {
         surfaces,
-        is_cubemap: true,
+        kind: TextureKind::Cubemap,
     }
 }
 
@@ -119,12 +123,14 @@ pub fn make_compressed_image(
             data,
             width,
             height,
+            depth: 1,
             stride,
+            slice_stride: 0,
             format,
             color_space,
             alpha,
         }]],
-        is_cubemap: false,
+        kind: TextureKind::Texture2D,
     }
 }
 
@@ -228,6 +234,139 @@ pub fn write_ktx2(image: Image, path: &Path) {
 /// Write a DDS-encoded image to `path`.
 pub fn write_dds(image: Image, path: &Path) {
     std::fs::write(path, to_dds(image)).expect("write dds");
+}
+
+/// Write a single-layer RGBA8 PNG of `width`×`height` filled with `color`.
+pub fn write_solid_rgba8_png(path: &Path, width: u32, height: u32, color: [u8; 4]) {
+    let pixels: Vec<u8> = color.repeat((width * height) as usize);
+    image::save_buffer(
+        path,
+        &pixels,
+        width,
+        height,
+        image::ExtendedColorType::Rgba8,
+    )
+    .expect("write png");
+}
+
+/// Build a multi-layer Image from N tightly-packed RGBA8 layers (each
+/// `width`×`height`). All layers share color space and alpha mode.
+pub fn make_array_image(
+    layers: Vec<Vec<u8>>,
+    width: u32,
+    height: u32,
+    color_space: ColorSpace,
+    alpha: AlphaMode,
+) -> Image {
+    let surfaces: Vec<Vec<Surface>> = layers
+        .into_iter()
+        .map(|data| {
+            vec![Surface {
+                data,
+                width,
+                height,
+                depth: 1,
+                stride: width * 4,
+                slice_stride: 0,
+                format: Format::R8G8B8A8_UNORM,
+                color_space,
+                alpha,
+            }]
+        })
+        .collect();
+    Image {
+        surfaces,
+        kind: ctt::TextureKind::Texture2D,
+    }
+}
+
+/// Build a cubemap-array Image with `cubes` cubes, each containing 6 distinct
+/// per-face colors (palette palette is the standard +X/-X/+Y/-Y/+Z/-Z palette,
+/// rotated by `cube_idx` so each cube is visually distinct).
+pub fn make_cubemap_array_rgba8(cubes: usize, face: u32) -> Image {
+    let mut surfaces: Vec<Vec<Surface>> = Vec::with_capacity(cubes * 6);
+    for cube_idx in 0..cubes {
+        for face_idx in 0..6 {
+            let palette = CUBEMAP_FACE_COLORS[(face_idx + cube_idx) % 6];
+            let data = palette.repeat((face * face) as usize);
+            surfaces.push(vec![Surface {
+                data,
+                width: face,
+                height: face,
+                depth: 1,
+                stride: face * 4,
+                slice_stride: 0,
+                format: Format::R8G8B8A8_UNORM,
+                color_space: ColorSpace::Linear,
+                alpha: AlphaMode::Opaque,
+            }]);
+        }
+    }
+    Image {
+        surfaces,
+        kind: ctt::TextureKind::Cubemap,
+    }
+}
+
+/// Build a 3D (volume) Image with `depth` Z-slices of width×height RGBA8.
+/// Each slice is a solid color from `slice_colors[z]`.
+pub fn make_volume_rgba8(width: u32, height: u32, slice_colors: Vec<[u8; 4]>) -> Image {
+    let depth = slice_colors.len() as u32;
+    let stride = width * 4;
+    let slice_stride = stride * height;
+    let mut data = Vec::with_capacity((slice_stride * depth) as usize);
+    for color in &slice_colors {
+        data.extend(color.repeat((width * height) as usize));
+    }
+    Image {
+        surfaces: vec![vec![Surface {
+            data,
+            width,
+            height,
+            depth,
+            stride,
+            slice_stride,
+            format: Format::R8G8B8A8_UNORM,
+            color_space: ColorSpace::Linear,
+            alpha: AlphaMode::Opaque,
+        }]],
+        kind: ctt::TextureKind::Texture3D,
+    }
+}
+
+/// Build a multi-layer compressed Image where each layer carries a
+/// deterministic byte pattern offset by its layer index. All layers share
+/// dimensions and format.
+pub fn synth_compressed_array(format: Format, width: u32, height: u32, layers: usize) -> Image {
+    let (block_w, block_h) = format.block_size().expect("compressed format");
+    let bytes_per_block = format.bytes_per_block().expect("compressed format");
+    let blocks_x = width.div_ceil(block_w as u32);
+    let blocks_y = height.div_ceil(block_h as u32);
+    let stride = blocks_x * bytes_per_block as u32;
+    let total = (blocks_x * blocks_y) as usize * bytes_per_block;
+
+    let surfaces: Vec<Vec<Surface>> = (0..layers)
+        .map(|layer_idx| {
+            let data: Vec<u8> = (0..total)
+                .map(|i| ((i + layer_idx * 17) & 0xff) as u8)
+                .collect();
+            vec![Surface {
+                data,
+                width,
+                height,
+                depth: 1,
+                stride,
+                slice_stride: 0,
+                format,
+                color_space: ColorSpace::Linear,
+                alpha: AlphaMode::Opaque,
+            }]
+        })
+        .collect();
+    Image {
+        surfaces,
+        kind: ctt::TextureKind::Texture2D,
+    }
 }
 
 /// Build a 4×3-tile cross-layout image whose 6 face tiles are each filled

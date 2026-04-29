@@ -13,7 +13,7 @@ use ctt::input::{InputOverrides, decode_container};
 use ctt::{
     AlphaMode, ColorSpace, Container, ConvertSettings, CubemapInput, Error, Format, FormatExt,
     Image, Ktx2Supercompression, MipmapFilter, PipelineOutput, Quality, Surface, Swizzle,
-    SwizzleChannel, format_short_name, parse_format, split_cubemap,
+    SwizzleChannel, TextureKind, format_short_name, parse_format, split_cubemap,
 };
 
 pub use args::{
@@ -81,6 +81,9 @@ pub fn run(args: Args) -> Result<(), Box<dyn std::error::Error>> {
     let image = if args.cubemap {
         log::info!("Cubemap mode, layout: {:?}", args.cubemap_layout);
         build_cubemap_image(images, args.cubemap_layout)?
+    } else if args.volume {
+        log::info!("Volume mode: stacking {} slices", images.len());
+        build_volume_image(images, &args.input)?
     } else if images.len() == 1 {
         images.into_iter().next().unwrap()
     } else {
@@ -276,7 +279,7 @@ fn load_images(
             let surface = load_standard_image(&data, color_space, alpha)?;
             Image {
                 surfaces: vec![vec![surface]],
-                is_cubemap: false,
+                kind: TextureKind::Texture2D,
             }
         };
 
@@ -309,7 +312,9 @@ fn load_standard_image(
                 data: buf.into_raw(),
                 width,
                 height,
+                depth: 1,
                 stride: width,
+                slice_stride: 0,
                 format: Format::R8_UNORM,
                 color_space,
                 alpha,
@@ -321,7 +326,9 @@ fn load_standard_image(
                 data: buf.into_raw(),
                 width,
                 height,
+                depth: 1,
                 stride: width * 2,
+                slice_stride: 0,
                 format: Format::R8G8_UNORM,
                 color_space,
                 alpha,
@@ -333,7 +340,9 @@ fn load_standard_image(
                 data: buf.into_raw(),
                 width,
                 height,
+                depth: 1,
                 stride: width * 3,
+                slice_stride: 0,
                 format: Format::R8G8B8_UNORM,
                 color_space,
                 alpha,
@@ -345,7 +354,9 @@ fn load_standard_image(
                 data: buf.into_raw(),
                 width,
                 height,
+                depth: 1,
                 stride: width * 4,
+                slice_stride: 0,
                 format: Format::R8G8B8A8_UNORM,
                 color_space,
                 alpha,
@@ -357,7 +368,9 @@ fn load_standard_image(
                 data: bytemuck::cast_slice(buf.as_raw()).to_vec(),
                 width,
                 height,
+                depth: 1,
                 stride: width * 2,
+                slice_stride: 0,
                 format: Format::R16_UNORM,
                 color_space,
                 alpha,
@@ -369,7 +382,9 @@ fn load_standard_image(
                 data: bytemuck::cast_slice(buf.as_raw()).to_vec(),
                 width,
                 height,
+                depth: 1,
                 stride: width * 4,
+                slice_stride: 0,
                 format: Format::R16G16_UNORM,
                 color_space,
                 alpha,
@@ -381,7 +396,9 @@ fn load_standard_image(
                 data: bytemuck::cast_slice(buf.as_raw()).to_vec(),
                 width,
                 height,
+                depth: 1,
                 stride: width * 6,
+                slice_stride: 0,
                 format: Format::R16G16B16_UNORM,
                 color_space,
                 alpha,
@@ -393,7 +410,9 @@ fn load_standard_image(
                 data: bytemuck::cast_slice(buf.as_raw()).to_vec(),
                 width,
                 height,
+                depth: 1,
                 stride: width * 8,
+                slice_stride: 0,
                 format: Format::R16G16B16A16_UNORM,
                 color_space,
                 alpha,
@@ -405,7 +424,9 @@ fn load_standard_image(
                 data: bytemuck::cast_slice(buf.as_raw()).to_vec(),
                 width,
                 height,
+                depth: 1,
                 stride: width * 12,
+                slice_stride: 0,
                 format: Format::R32G32B32_SFLOAT,
                 color_space,
                 alpha,
@@ -417,7 +438,9 @@ fn load_standard_image(
                 data: bytemuck::cast_slice(buf.as_raw()).to_vec(),
                 width,
                 height,
+                depth: 1,
                 stride: width * 16,
+                slice_stride: 0,
                 format: Format::R32G32B32A32_SFLOAT,
                 color_space,
                 alpha,
@@ -430,7 +453,9 @@ fn load_standard_image(
                 data: rgba.into_raw(),
                 width,
                 height,
+                depth: 1,
                 stride: width * 4,
+                slice_stride: 0,
                 format: Format::R8G8B8A8_UNORM,
                 color_space,
                 alpha,
@@ -445,20 +470,51 @@ fn build_cubemap_image(
     images: Vec<Image>,
     layout_arg: CubemapLayoutArg,
 ) -> Result<Image, Box<dyn std::error::Error>> {
-    if images.len() == 1 && images[0].is_cubemap {
+    // Single already-cubemap input (single cube or cube array): passthrough.
+    if images.len() == 1 && matches!(images[0].kind, TextureKind::Cubemap) {
         return Ok(images.into_iter().next().unwrap());
     }
 
-    if images.len() == 6 {
+    // Multiple already-cubemap inputs: concatenate faces into a cubemap array.
+    if images.len() > 1
+        && images
+            .iter()
+            .all(|i| matches!(i.kind, TextureKind::Cubemap))
+    {
+        validate_mip_counts(&images)?;
+        let mut surfaces = Vec::new();
+        for img in images {
+            surfaces.extend(img.surfaces);
+        }
+        return Ok(Image {
+            surfaces,
+            kind: TextureKind::Cubemap,
+        });
+    }
+
+    // N face images where N is a positive multiple of 6: assemble N/6 cubes.
+    // Each input must be a single-layer image (mips allowed, but uniform across
+    // inputs). N=0 is excluded because clap requires at least one input.
+    if !images.is_empty() && images.len().is_multiple_of(6) {
         validate_mip_counts(&images)?;
 
         for (i, img) in images.iter().enumerate() {
             if img.surfaces.len() != 1 {
-                return Err(Error::CubemapFaceCount(images.len()).into());
-            }
-            if img.is_cubemap {
                 return Err(Error::UnsupportedFormat(format!(
-                    "input {i} is already a cubemap; cannot assemble 6 cubemaps into a cubemap"
+                    "cubemap face input {i} must be single-layer, got {} layer(s)",
+                    img.surfaces.len(),
+                ))
+                .into());
+            }
+            if matches!(img.kind, TextureKind::Cubemap) {
+                return Err(Error::UnsupportedFormat(format!(
+                    "input {i} is already a cubemap; mix-and-match with face inputs is not allowed"
+                ))
+                .into());
+            }
+            if matches!(img.kind, TextureKind::Texture3D) {
+                return Err(Error::UnsupportedFormat(format!(
+                    "input {i} is a 3D texture; cannot be a cubemap face"
                 ))
                 .into());
             }
@@ -471,7 +527,7 @@ fn build_cubemap_image(
 
         return Ok(Image {
             surfaces,
-            is_cubemap: true,
+            kind: TextureKind::Cubemap,
         });
     }
 
@@ -499,15 +555,144 @@ fn build_cubemap_image(
         let surfaces = faces.into_iter().map(|face| vec![face]).collect();
         return Ok(Image {
             surfaces,
-            is_cubemap: true,
+            kind: TextureKind::Cubemap,
         });
     }
 
     Err(Error::CubemapFaceCount(images.len()).into())
 }
 
+/// Stack N single-layer single-mip inputs into one 3D Surface. Each input
+/// must share dimensions, format, color space, and alpha. The Z order is
+/// argv order. Compressed inputs are passed through verbatim, with each
+/// slice's blocks concatenated.
+///
+/// `paths` is parallel to `images` and is consulted only to make slice
+/// mismatch errors point at a specific file.
+fn build_volume_image(
+    images: Vec<Image>,
+    paths: &[std::path::PathBuf],
+) -> Result<Image, Box<dyn std::error::Error>> {
+    if images.is_empty() {
+        return Err(
+            Error::UnsupportedFormat("--volume requires at least one input slice".into()).into(),
+        );
+    }
+    debug_assert_eq!(
+        images.len(),
+        paths.len(),
+        "paths must be parallel to images"
+    );
+
+    // Single already-3D input: passthrough.
+    if images.len() == 1 && matches!(images[0].kind, TextureKind::Texture3D) {
+        return Ok(images.into_iter().next().unwrap());
+    }
+
+    for (i, img) in images.iter().enumerate() {
+        let p = paths[i].display();
+        if !matches!(img.kind, TextureKind::Texture2D) {
+            return Err(Error::UnsupportedFormat(format!(
+                "--volume slice {i} ({p}) must be a 2D image, got {:?}",
+                img.kind,
+            ))
+            .into());
+        }
+        if img.surfaces.len() != 1 || img.surfaces[0].len() != 1 {
+            return Err(Error::UnsupportedFormat(format!(
+                "--volume slice {i} ({p}) must be single-layer single-mip"
+            ))
+            .into());
+        }
+    }
+
+    let depth = images.len() as u32;
+    let first = &images[0].surfaces[0][0];
+    let width = first.width;
+    let height = first.height;
+    let stride = first.stride;
+    let format = first.format;
+    let color_space = first.color_space;
+    let alpha = first.alpha;
+    let slice_stride = first.data.len() as u32;
+    let p0 = paths[0].display();
+
+    let mut data = Vec::with_capacity((slice_stride as usize) * images.len());
+    for (i, img) in images.iter().enumerate() {
+        let s = &img.surfaces[0][0];
+        let p = paths[i].display();
+        if s.width != width || s.height != height {
+            return Err(Error::UnsupportedFormat(format!(
+                "--volume slice {i} ({p}): dimensions {}x{} differ from slice 0 ({p0}, {}x{})",
+                s.width, s.height, width, height,
+            ))
+            .into());
+        }
+        if s.format != format {
+            return Err(Error::UnsupportedFormat(format!(
+                "--volume slice {i} ({p}): format {:?} differs from slice 0 ({p0}, {:?})",
+                s.format, format,
+            ))
+            .into());
+        }
+        if s.color_space != color_space {
+            return Err(Error::UnsupportedFormat(format!(
+                "--volume slice {i} ({p}): color space {:?} differs from slice 0 ({p0}, {:?})",
+                s.color_space, color_space,
+            ))
+            .into());
+        }
+        if s.alpha != alpha {
+            return Err(Error::UnsupportedFormat(format!(
+                "--volume slice {i} ({p}): alpha mode {:?} differs from slice 0 ({p0}, {:?})",
+                s.alpha, alpha,
+            ))
+            .into());
+        }
+        if s.data.len() as u32 != slice_stride {
+            return Err(Error::UnsupportedFormat(format!(
+                "--volume slice {i} ({p}): payload {} bytes differs from slice 0 ({p0}, {} bytes)",
+                s.data.len(),
+                slice_stride,
+            ))
+            .into());
+        }
+        data.extend_from_slice(&s.data);
+    }
+
+    Ok(Image {
+        surfaces: vec![vec![Surface {
+            data,
+            width,
+            height,
+            depth,
+            stride,
+            slice_stride,
+            format,
+            color_space,
+            alpha,
+        }]],
+        kind: TextureKind::Texture3D,
+    })
+}
+
 fn assemble_array(images: Vec<Image>) -> Result<Image, Box<dyn std::error::Error>> {
     validate_mip_counts(&images)?;
+
+    for (i, img) in images.iter().enumerate() {
+        if matches!(img.kind, TextureKind::Cubemap) {
+            return Err(Error::UnsupportedFormat(format!(
+                "input {i} is a cubemap; pass --cubemap to assemble cubemap arrays"
+            ))
+            .into());
+        }
+        if matches!(img.kind, TextureKind::Texture3D) {
+            return Err(Error::UnsupportedFormat(format!(
+                "input {i} is a 3D texture; 3D textures cannot be combined into an array"
+            ))
+            .into());
+        }
+    }
 
     let mut surfaces = Vec::new();
     for img in images {
@@ -516,7 +701,7 @@ fn assemble_array(images: Vec<Image>) -> Result<Image, Box<dyn std::error::Error
 
     Ok(Image {
         surfaces,
-        is_cubemap: false,
+        kind: TextureKind::Texture2D,
     })
 }
 

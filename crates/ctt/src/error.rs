@@ -41,4 +41,7 @@ pub enum Error {
         transform: String,
         reason: String,
     },
+
+    #[error("invalid image: {0}")]
+    InvalidImage(String),
 }

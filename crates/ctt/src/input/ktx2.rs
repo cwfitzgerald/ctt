@@ -2,7 +2,7 @@ use std::borrow::Cow;
 
 use crate::alpha::AlphaMode;
 use crate::error::{Error, Result};
-use crate::surface::{Image, Surface};
+use crate::surface::{Image, Surface, TextureKind};
 use crate::vk_format::FormatExt as _;
 
 /// Decode a KTX2 file from raw bytes into an [`Image`].
@@ -28,18 +28,41 @@ pub fn decode_ktx2_image(data: &[u8]) -> Result<Image> {
         _ => AlphaMode::Straight,
     };
 
-    let is_cubemap = header.face_count == 6;
     let face_count = header.face_count as usize;
     let layer_count = header.layer_count.max(1) as usize;
     let level_count = header.level_count.max(1) as usize;
+    let depth = header.pixel_depth.max(1);
+    let is_cubemap = face_count == 6;
+    let is_3d = header.pixel_depth > 0;
+
+    if is_3d && (is_cubemap || layer_count > 1) {
+        return Err(Error::InputDecoding(
+            "KTX2 3D textures cannot be combined with cubemap faces or array layers".into(),
+        ));
+    }
+
+    let kind = if is_cubemap {
+        TextureKind::Cubemap
+    } else if is_3d {
+        TextureKind::Texture3D
+    } else {
+        TextureKind::Texture2D
+    };
 
     // Total number of "slices" (layers × faces). Each becomes one entry in
-    // Image::surfaces (i.e. one layer in ctt's model).
+    // Image::surfaces (i.e. one layer in ctt's model). 3D textures use a
+    // single slice; the depth axis is folded into Surface::data.
     let slice_count = layer_count * face_count;
 
-    // Pre-compute per-mip sizes so we can split each level's data blob.
-    let mip_slice_sizes =
-        compute_mip_slice_sizes(header.pixel_width, header.pixel_height, level_count, format)?;
+    // Pre-compute per-mip sizes so we can split each level's data blob. For
+    // 3D, each "slice" actually carries `depth_at_mip` Z-slices stacked.
+    let mip_slice_sizes = compute_mip_slice_sizes(
+        header.pixel_width,
+        header.pixel_height,
+        depth,
+        level_count,
+        format,
+    )?;
 
     // Allocate: surfaces[slice][mip]
     let mut surfaces: Vec<Vec<Surface>> = (0..slice_count)
@@ -57,8 +80,11 @@ pub fn decode_ktx2_image(data: &[u8]) -> Result<Image> {
         let expected_slice_size = mip_slice_sizes[mip_idx];
         let mip_w = (header.pixel_width >> mip_idx).max(1);
         let mip_h = (header.pixel_height >> mip_idx).max(1);
+        let mip_d = (depth >> mip_idx).max(1);
 
         let stride = compute_stride(mip_w, format)?;
+        let single_slice_bytes = expected_slice_size / mip_d as usize;
+        let surface_slice_stride = if is_3d { single_slice_bytes as u32 } else { 0 };
 
         for (slice_idx, slice_surfaces) in surfaces.iter_mut().enumerate() {
             let offset = slice_idx * expected_slice_size;
@@ -76,7 +102,9 @@ pub fn decode_ktx2_image(data: &[u8]) -> Result<Image> {
                 data: level_data[offset..end].to_vec(),
                 width: mip_w,
                 height: mip_h,
+                depth: mip_d,
                 stride,
+                slice_stride: surface_slice_stride,
                 format,
                 color_space,
                 alpha,
@@ -85,19 +113,17 @@ pub fn decode_ktx2_image(data: &[u8]) -> Result<Image> {
     }
 
     log::debug!(
-        "KTX2 input: {:?}, {}x{}, {} slices, {} mips, cubemap={}",
+        "KTX2 input: {:?}, {}x{}x{}, {} slices, {} mips, kind={:?}",
         format,
         header.pixel_width,
         header.pixel_height,
+        depth,
         slice_count,
         level_count,
-        is_cubemap,
+        kind,
     );
 
-    Ok(Image {
-        surfaces,
-        is_cubemap,
-    })
+    Ok(Image { surfaces, kind })
 }
 
 /// Decompress a single mip level's data according to the supercompression scheme.
@@ -135,10 +161,12 @@ fn decompress_level<'a>(
     }
 }
 
-/// Compute the byte size of one slice (one layer×face) at each mip level.
+/// Compute the byte size of one slice (one layer×face, or all Z slices for
+/// a 3D texture) at each mip level.
 fn compute_mip_slice_sizes(
     base_width: u32,
     base_height: u32,
+    base_depth: u32,
     level_count: usize,
     format: ktx2::Format,
 ) -> Result<Vec<usize>> {
@@ -147,18 +175,19 @@ fn compute_mip_slice_sizes(
     for mip in 0..level_count {
         let w = (base_width >> mip).max(1);
         let h = (base_height >> mip).max(1);
+        let d = (base_depth >> mip).max(1) as usize;
 
         let size = if format.is_compressed() {
             let (bw, bh) = format.block_size().unwrap();
             let bpb = format.bytes_per_block().unwrap();
             let blocks_x = w.div_ceil(bw as u32) as usize;
             let blocks_y = h.div_ceil(bh as u32) as usize;
-            blocks_x * blocks_y * bpb
+            blocks_x * blocks_y * bpb * d
         } else {
             let bpp = format
                 .bytes_per_pixel()
                 .ok_or_else(|| Error::InputDecoding(format!("unknown bpp for {format:?}")))?;
-            w as usize * h as usize * bpp
+            w as usize * h as usize * bpp * d
         };
 
         sizes.push(size);
@@ -195,12 +224,14 @@ mod tests {
                 data: vec![42u8; 4 * 4 * 4],
                 width: 4,
                 height: 4,
+                depth: 1,
                 stride: 16,
+                slice_stride: 0,
                 format: ktx2::Format::R8G8B8A8_UNORM,
                 color_space: ColorSpace::Srgb,
                 alpha: AlphaMode::Straight,
             }]],
-            is_cubemap: false,
+            kind: TextureKind::Texture2D,
         };
 
         let encoded = encode_ktx2_image(&original, None).unwrap();
@@ -225,7 +256,9 @@ mod tests {
                     data: vec![0xAA; 4 * 4 * 4],
                     width: 4,
                     height: 4,
+                    depth: 1,
                     stride: 16,
+                    slice_stride: 0,
                     format: ktx2::Format::R8G8B8A8_UNORM,
                     color_space: ColorSpace::Linear,
                     alpha: AlphaMode::Straight,
@@ -234,7 +267,9 @@ mod tests {
                     data: vec![0xBB; 2 * 2 * 4],
                     width: 2,
                     height: 2,
+                    depth: 1,
                     stride: 8,
+                    slice_stride: 0,
                     format: ktx2::Format::R8G8B8A8_UNORM,
                     color_space: ColorSpace::Linear,
                     alpha: AlphaMode::Straight,
@@ -243,13 +278,15 @@ mod tests {
                     data: vec![0xCC; 4],
                     width: 1,
                     height: 1,
+                    depth: 1,
                     stride: 4,
+                    slice_stride: 0,
                     format: ktx2::Format::R8G8B8A8_UNORM,
                     color_space: ColorSpace::Linear,
                     alpha: AlphaMode::Straight,
                 },
             ]],
-            is_cubemap: false,
+            kind: TextureKind::Texture2D,
         };
 
         let encoded = encode_ktx2_image(&original, None).unwrap();
@@ -270,12 +307,14 @@ mod tests {
                 data: vec![0xFF; 16],
                 width: 4,
                 height: 4,
+                depth: 1,
                 stride: 16,
+                slice_stride: 0,
                 format: ktx2::Format::BC7_UNORM_BLOCK,
                 color_space: ColorSpace::Srgb,
                 alpha: AlphaMode::Straight,
             }]],
-            is_cubemap: false,
+            kind: TextureKind::Texture2D,
         };
 
         let encoded = encode_ktx2_image(&original, None).unwrap();
@@ -295,7 +334,9 @@ mod tests {
                     data: vec![i as u8; 4 * 4 * 4],
                     width: 4,
                     height: 4,
+                    depth: 1,
                     stride: 16,
+                    slice_stride: 0,
                     format: ktx2::Format::R8G8B8A8_UNORM,
                     color_space: ColorSpace::Linear,
                     alpha: AlphaMode::Straight,
@@ -305,13 +346,13 @@ mod tests {
 
         let original = Image {
             surfaces: faces,
-            is_cubemap: true,
+            kind: TextureKind::Cubemap,
         };
 
         let encoded = encode_ktx2_image(&original, None).unwrap();
         let decoded = decode_ktx2_image(&encoded).unwrap();
 
-        assert!(decoded.is_cubemap);
+        assert_eq!(decoded.kind, TextureKind::Cubemap);
         assert_eq!(decoded.surfaces.len(), 6);
         for i in 0..6 {
             assert_eq!(decoded.surfaces[i][0].data, vec![i as u8; 64]);
@@ -326,12 +367,14 @@ mod tests {
                 data: vec![0; 4 * 4 * 4],
                 width: 4,
                 height: 4,
+                depth: 1,
                 stride: 16,
+                slice_stride: 0,
                 format: ktx2::Format::R8G8B8A8_UNORM,
                 color_space: ColorSpace::Linear,
                 alpha: AlphaMode::Premultiplied,
             }]],
-            is_cubemap: false,
+            kind: TextureKind::Texture2D,
         };
 
         let encoded = encode_ktx2_image(&original, None).unwrap();

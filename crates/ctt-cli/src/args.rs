@@ -26,12 +26,17 @@ pub struct Args {
     pub container: Option<ContainerArg>,
 
     /// Treat input as a cubemap.
-    #[arg(long)]
+    #[arg(long, conflicts_with = "volume")]
     pub cubemap: bool,
 
     /// Cubemap layout when using a single input image.
-    #[arg(long, default_value = "cross")]
+    #[arg(long, default_value = "cross", requires = "cubemap")]
     pub cubemap_layout: CubemapLayoutArg,
+
+    /// Treat each input as a Z slice of a 3D (volume) texture, stacked in
+    /// argv order. Mip generation is unsupported for 3D textures.
+    #[arg(long, conflicts_with = "cubemap", conflicts_with = "mipmap")]
+    pub volume: bool,
 
     /// Remap RGBA channels. 4 characters from: rgba01.
     ///

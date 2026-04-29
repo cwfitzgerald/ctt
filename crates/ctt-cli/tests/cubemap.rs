@@ -1,6 +1,6 @@
 //! Cubemap construction tests.
 
-use ctt::Format;
+use ctt::{Format, TextureKind};
 
 use crate::common::synth::{CUBEMAP_FACE_COLORS, synth_compressed, write_ktx2};
 use crate::common::{TestFixture, assert, read, run_cli};
@@ -39,7 +39,7 @@ fn six_inputs_assemble_into_cubemap() {
     assert_eq!(info.height, 16);
 
     let decoded = assert::decode(&bytes);
-    assert!(decoded.is_cubemap);
+    assert_eq!(decoded.kind, TextureKind::Cubemap);
     assert_eq!(decoded.surfaces.len(), 6);
     for (i, color) in CUBEMAP_FACE_COLORS.iter().enumerate() {
         let face = &decoded.surfaces[i][0];
@@ -124,7 +124,7 @@ fn assert_compressed_cubemap_preserved(format: Format, ktx2_format: ktx2::Format
     );
 
     let decoded = assert::decode(&bytes);
-    assert!(decoded.is_cubemap);
+    assert_eq!(decoded.kind, TextureKind::Cubemap);
     assert_eq!(decoded.surfaces.len(), 6);
     let expected = assert::decode(&read(&face_paths[0])).surfaces[0][0]
         .data
@@ -171,7 +171,7 @@ fn already_cubemap_input_with_cubemap_flag_is_passthrough() {
     assert_eq!(info.height, 16);
 
     let decoded = assert::decode(&bytes);
-    assert!(decoded.is_cubemap);
+    assert_eq!(decoded.kind, TextureKind::Cubemap);
     for (i, color) in CUBEMAP_FACE_COLORS.iter().enumerate() {
         let face = &decoded.surfaces[i][0];
         let first = &face.data[..4];

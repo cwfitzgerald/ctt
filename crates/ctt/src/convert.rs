@@ -83,6 +83,8 @@ impl Default for ConvertSettings {
 /// [`split_cubemap`](crate::split_cubemap) to prepare cubemap inputs beforehand.
 pub fn convert(image: Image, mut settings: ConvertSettings) -> Result<PipelineOutput> {
     profiling::scope!("convert");
+    image.validate()?;
+
     let registry = settings
         .registry
         .take()
@@ -138,6 +140,15 @@ pub fn convert(image: Image, mut settings: ConvertSettings) -> Result<PipelineOu
              falling back to passthrough format check"
         );
         return passthrough::run(image, final_target_fmt, settings.container);
+    }
+
+    // 3D textures only flow through the passthrough fast path. The f32/u32
+    // pipelines treat each Surface as a single 2D plane; they can't yet
+    // process the stacked Z slices that 3D textures carry.
+    if matches!(image.kind, crate::TextureKind::Texture3D) {
+        return Err(Error::UnsupportedConversion(
+            "3D textures are only supported in passthrough mode (no format change, swizzle, or mipmap generation)".into(),
+        ));
     }
 
     let variant = processing::pick_variant(input_fmt, target_fmt).ok_or_else(|| {
@@ -237,7 +248,7 @@ fn convert_f32(
 
     let processed = Image {
         surfaces: out_layers,
-        is_cubemap: image.is_cubemap,
+        kind: image.kind,
     };
 
     let final_image = match encoder_step {
@@ -287,7 +298,7 @@ fn convert_f64(
 
     let processed = Image {
         surfaces: out_layers,
-        is_cubemap: image.is_cubemap,
+        kind: image.kind,
     };
 
     let final_image = match encoder_step {
@@ -324,7 +335,7 @@ fn convert_u32(
 
     let processed = Image {
         surfaces: out_layers,
-        is_cubemap: image.is_cubemap,
+        kind: image.kind,
     };
 
     if encoder_step.is_some() {
@@ -362,7 +373,7 @@ fn convert_u64(
 
     let processed = Image {
         surfaces: out_layers,
-        is_cubemap: image.is_cubemap,
+        kind: image.kind,
     };
 
     if encoder_step.is_some() {
@@ -414,12 +425,14 @@ mod tests {
                 data,
                 width,
                 height,
+                depth: 1,
                 stride: width * bpp,
+                slice_stride: 0,
                 format,
                 color_space: cs,
                 alpha,
             }]],
-            is_cubemap: false,
+            kind: crate::TextureKind::Texture2D,
         }
     }
 
@@ -577,12 +590,14 @@ mod tests {
                 data: bc7_bytes.clone(),
                 width: 4,
                 height: 4,
+                depth: 1,
                 stride: 16,
+                slice_stride: 0,
                 format: ktx2::Format::BC7_UNORM_BLOCK,
                 color_space: ColorSpace::Linear,
                 alpha: AlphaMode::Opaque,
             }]],
-            is_cubemap: false,
+            kind: crate::TextureKind::Texture2D,
         };
         let out = convert(
             image,
@@ -597,6 +612,284 @@ mod tests {
                 assert_eq!(img.surfaces[0][0].data, bc7_bytes);
             }
             _ => panic!("expected Raw output"),
+        }
+    }
+
+    /// Build a 4×2 RGBA8 image whose row stride is `width * 4 + 8` bytes —
+    /// each row carries 8 bytes of trailing padding that the pipeline must
+    /// skip. The padding is filled with 0xCC so any padding-leak shows up
+    /// loudly in the output.
+    fn padded_rgba8_4x2() -> Image {
+        let pad = 0xCCu8;
+        // Row 0: 4 distinct pixels, then 8 bytes padding (stride = 24).
+        let mut data = Vec::new();
+        for x in 0..4u8 {
+            data.extend_from_slice(&[10 + x, 20 + x, 30 + x, 255]);
+        }
+        data.extend_from_slice(&[pad; 8]);
+        for x in 0..4u8 {
+            data.extend_from_slice(&[100 + x, 110 + x, 120 + x, 255]);
+        }
+        data.extend_from_slice(&[pad; 8]);
+
+        Image {
+            surfaces: vec![vec![Surface {
+                data,
+                width: 4,
+                height: 2,
+                depth: 1,
+                stride: 4 * 4 + 8,
+                slice_stride: 0,
+                format: ktx2::Format::R8G8B8A8_UNORM,
+                color_space: ColorSpace::Linear,
+                alpha: AlphaMode::Straight,
+            }]],
+            kind: crate::TextureKind::Texture2D,
+        }
+    }
+
+    /// Encoding path: padded-stride RGBA8 → swizzle to BGRA → Raw.
+    /// The store step always writes a tight stride, and no padding byte
+    /// (0xCC) should bleed into the output.
+    #[test]
+    fn convert_padded_stride_swizzle_to_raw_is_tight() {
+        let image = padded_rgba8_4x2();
+        let out = convert(
+            image,
+            ConvertSettings {
+                container: Container::Raw,
+                swizzle: Some(Swizzle([
+                    processing::SwizzleChannel::B,
+                    processing::SwizzleChannel::G,
+                    processing::SwizzleChannel::R,
+                    processing::SwizzleChannel::A,
+                ])),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let img = match out {
+            PipelineOutput::Raw(img) => img,
+            _ => panic!("expected Raw output"),
+        };
+        let s = &img.surfaces[0][0];
+        // Output must be tight.
+        assert_eq!(s.stride, 4 * 4);
+        assert_eq!(s.data.len(), 4 * 4 * 2);
+        // Padding byte must not appear.
+        assert!(
+            !s.data.contains(&0xCC),
+            "padding leaked into output: {:?}",
+            s.data,
+        );
+        // First pixel of row 0: original (10,20,30,255) → BGRA = (30,20,10,255).
+        assert_eq!(&s.data[0..4], &[30, 20, 10, 255]);
+        // First pixel of row 1: original (100,110,120,255) → (120,110,100,255).
+        let row1 = (4 * 4) as usize;
+        assert_eq!(&s.data[row1..row1 + 4], &[120, 110, 100, 255]);
+    }
+
+    /// Encoding path: padded-stride RGBA8 → BC7 → KTX2.
+    /// Just verifies the pipeline accepts padded input and produces a valid
+    /// KTX2 file. Re-decoding BC7 to check pixel exactness is too brittle
+    /// for an unrelated test, so we assert structural validity only.
+    #[test]
+    fn convert_padded_stride_to_bc7_succeeds() {
+        let image = padded_rgba8_4x2();
+        // 4×2 isn't 4×4-aligned, but tile_to_blocks edge-replicates so this
+        // still produces 1×1 blocks (rounded up to 4×4).
+        let out = convert(
+            image,
+            ConvertSettings {
+                format: Some(TargetFormat::Compressed {
+                    encoder_name: None,
+                    format: ktx2::Format::BC7_UNORM_BLOCK,
+                }),
+                container: Container::ktx2(),
+                quality: Quality::UltraFast,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        match out {
+            PipelineOutput::Encoded(bytes) => {
+                assert_eq!(&bytes[0..12], b"\xabKTX 20\xbb\r\n\x1a\n");
+            }
+            _ => panic!("expected Encoded output"),
+        }
+    }
+
+    /// Passthrough path: padded-stride RGBA8 → KTX2 (format identity, no
+    /// pixel work). The output must be a valid KTX2 file containing the
+    /// tightly-packed pixels — the per-row padding from the input must not
+    /// appear in the level data.
+    #[test]
+    fn convert_padded_stride_uncompressed_passthrough_is_tight() {
+        let image = padded_rgba8_4x2();
+        let out = convert(
+            image,
+            ConvertSettings {
+                container: Container::ktx2(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let bytes = match out {
+            PipelineOutput::Encoded(bytes) => bytes,
+            _ => panic!("expected Encoded output"),
+        };
+        // Round-trip through the KTX2 decoder; each pixel must match the
+        // original padded source row-by-row.
+        let decoded = crate::input::ktx2::decode_ktx2_image(&bytes).unwrap();
+        let s = &decoded.surfaces[0][0];
+        assert_eq!(s.width, 4);
+        assert_eq!(s.height, 2);
+        assert_eq!(s.stride, 4 * 4); // tight on the way out
+        assert!(
+            !s.data.contains(&0xCC),
+            "padding leaked into KTX2 level data"
+        );
+        // Spot-check a pixel from each row.
+        assert_eq!(&s.data[0..4], &[10, 20, 30, 255]);
+        assert_eq!(&s.data[16..20], &[100, 110, 120, 255]);
+    }
+
+    /// Passthrough path: padded-stride BC7 → KTX2.
+    /// 8×4 pixels = 2×1 blocks per row of blocks, but with a row-of-blocks
+    /// stride deliberately wider than 32 bytes (one 16-byte pad block per row).
+    #[test]
+    fn convert_padded_stride_compressed_passthrough_is_tight() {
+        let pad = 0xCCu8;
+        // 2 real BC7 blocks (32 bytes) + 1 block of padding (16 bytes) per
+        // row of blocks. 8×4 has 1 row of blocks vertically (4 / 4 = 1).
+        let block0 = [0x11u8; 16];
+        let block1 = [0x22u8; 16];
+        let mut data = Vec::new();
+        data.extend_from_slice(&block0);
+        data.extend_from_slice(&block1);
+        data.extend_from_slice(&[pad; 16]);
+
+        let image = Image {
+            surfaces: vec![vec![Surface {
+                data,
+                width: 8,
+                height: 4,
+                depth: 1,
+                stride: 2 * 16 + 16, // 2 blocks of payload + 1 block of padding
+                slice_stride: 0,
+                format: ktx2::Format::BC7_UNORM_BLOCK,
+                color_space: ColorSpace::Linear,
+                alpha: AlphaMode::Opaque,
+            }]],
+            kind: crate::TextureKind::Texture2D,
+        };
+
+        let out = convert(
+            image,
+            ConvertSettings {
+                container: Container::ktx2(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let bytes = match out {
+            PipelineOutput::Encoded(bytes) => bytes,
+            _ => panic!("expected Encoded output"),
+        };
+        // Inspect the encoded KTX2 directly: the level index must say 32
+        // bytes (2 BC7 blocks, tight), not 48 (which would mean the padding
+        // block was written into the file). The decoder discards trailing
+        // bytes, so we have to look at the writer's output to catch this.
+        let reader = ktx2::Reader::new(&bytes[..]).expect("valid KTX2");
+        let levels: Vec<_> = reader.levels().collect();
+        assert_eq!(levels.len(), 1);
+        assert_eq!(
+            levels[0].data.len(),
+            2 * 16,
+            "level payload must be tight (2 BC7 blocks), not include the padding block",
+        );
+        assert!(
+            !levels[0].data.contains(&pad),
+            "BC7 padding leaked into KTX2 level data",
+        );
+
+        let decoded = crate::input::ktx2::decode_ktx2_image(&bytes).unwrap();
+        let s = &decoded.surfaces[0][0];
+        assert_eq!(s.format, ktx2::Format::BC7_UNORM_BLOCK);
+        let mut expected = Vec::new();
+        expected.extend_from_slice(&block0);
+        expected.extend_from_slice(&block1);
+        assert_eq!(s.data, expected);
+    }
+
+    /// Passthrough path: 3D RGBA8 with both row and slice padding → KTX2.
+    /// Each Z slice is `4×2 RGBA8 + 8 bytes row pad + 8 bytes slice pad`,
+    /// none of which may surface in the encoded file.
+    #[test]
+    fn convert_padded_slice_stride_3d_passthrough_is_tight() {
+        let pad = 0xCCu8;
+        let row_pad = 8;
+        let slice_pad = 8;
+        let stride = 4 * 4 + row_pad;
+        let slice_payload = stride * 2;
+        let slice_stride = slice_payload + slice_pad;
+        let depth = 3u32;
+
+        let mut data = Vec::with_capacity((slice_stride * depth) as usize);
+        for z in 0..depth as u8 {
+            for y in 0..2u8 {
+                for x in 0..4u8 {
+                    data.extend_from_slice(&[z * 50 + x, y * 30, 0, 255]);
+                }
+                data.extend_from_slice(&[pad; 8]);
+            }
+            data.extend_from_slice(&[pad; 8]);
+        }
+
+        let image = Image {
+            surfaces: vec![vec![Surface {
+                data,
+                width: 4,
+                height: 2,
+                depth,
+                stride,
+                slice_stride,
+                format: ktx2::Format::R8G8B8A8_UNORM,
+                color_space: ColorSpace::Linear,
+                alpha: AlphaMode::Opaque,
+            }]],
+            kind: crate::TextureKind::Texture3D,
+        };
+
+        let out = convert(
+            image,
+            ConvertSettings {
+                container: Container::ktx2(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let bytes = match out {
+            PipelineOutput::Encoded(bytes) => bytes,
+            _ => panic!("expected Encoded output"),
+        };
+        let decoded = crate::input::ktx2::decode_ktx2_image(&bytes).unwrap();
+        let s = &decoded.surfaces[0][0];
+        assert_eq!(s.depth, depth);
+        assert_eq!(s.stride, 4 * 4);
+        assert_eq!(s.slice_stride, 4 * 4 * 2);
+        assert!(
+            !s.data.contains(&pad),
+            "padding leaked into 3D KTX2 level data",
+        );
+        // Spot-check pixel (0,0,z) for each slice.
+        for z in 0..depth as usize {
+            let base = z * (4 * 4 * 2);
+            assert_eq!(
+                &s.data[base..base + 4],
+                &[(z as u8) * 50, 0, 0, 255],
+                "slice {z} pixel (0,0)",
+            );
         }
     }
 

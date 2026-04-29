@@ -79,7 +79,9 @@ pub fn encode_all(image: Image, step: &EncoderStep) -> Result<Image> {
                 data,
                 width: surface.width,
                 height: surface.height,
+                depth: surface.depth,
                 stride: blocks_x * bpp_block,
+                slice_stride: surface.slice_stride,
                 format: step.target_format,
                 color_space: surface.color_space,
                 alpha: surface.alpha,
@@ -90,6 +92,6 @@ pub fn encode_all(image: Image, step: &EncoderStep) -> Result<Image> {
 
     Ok(Image {
         surfaces: new_surfaces,
-        is_cubemap: image.is_cubemap,
+        kind: image.kind,
     })
 }

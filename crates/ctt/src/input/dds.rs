@@ -1,8 +1,8 @@
-use ddsfile::{Caps2, D3DFormat, Dds, DxgiFormat};
+use ddsfile::{Caps2, D3D10ResourceDimension, D3DFormat, Dds, DxgiFormat};
 
 use crate::alpha::AlphaMode;
 use crate::error::{Error, Result};
-use crate::surface::{ColorSpace, Image, Surface};
+use crate::surface::{ColorSpace, Image, Surface, TextureKind};
 use crate::vk_format::FormatExt as _;
 
 /// Map a DXGI format to a `ktx2::Format` + `ColorSpace`.
@@ -210,17 +210,37 @@ pub fn decode_dds_image(data: &[u8]) -> Result<Image> {
     let height = dds.get_height();
     let mip_count = dds.get_num_mipmap_levels() as usize;
     let array_layers = dds.get_num_array_layers() as usize;
+    let depth = dds.get_depth().max(1);
 
     let is_cubemap = dds.header.caps2.contains(Caps2::CUBEMAP);
+    let is_3d = matches!(
+        dds.header10.as_ref().map(|h| h.resource_dimension),
+        Some(D3D10ResourceDimension::Texture3D),
+    ) || depth > 1;
+
+    if is_3d && (is_cubemap || array_layers > 1) {
+        return Err(Error::InputDecoding(
+            "DDS 3D textures cannot be combined with cubemap faces or array layers".into(),
+        ));
+    }
+
+    let kind = if is_cubemap {
+        TextureKind::Cubemap
+    } else if is_3d {
+        TextureKind::Texture3D
+    } else {
+        TextureKind::Texture2D
+    };
 
     log::debug!(
-        "DDS input: {:?}, {}x{}, {} layers, {} mips, cubemap={}",
+        "DDS input: {:?}, {}x{}x{}, {} layers, {} mips, kind={:?}",
         format,
         width,
         height,
+        depth,
         array_layers,
         mip_count,
-        is_cubemap,
+        kind,
     );
 
     // Build surfaces[layer][mip].
@@ -237,8 +257,10 @@ pub fn decode_dds_image(data: &[u8]) -> Result<Image> {
         for mip_idx in 0..mip_count {
             let mip_w = (width >> mip_idx as u32).max(1);
             let mip_h = (height >> mip_idx as u32).max(1);
+            let mip_d = (depth >> mip_idx as u32).max(1);
 
-            let (mip_size, stride) = compute_mip_size_and_stride(mip_w, mip_h, format)?;
+            let (slice_size, stride) = compute_mip_size_and_stride(mip_w, mip_h, format)?;
+            let mip_size = slice_size * mip_d as usize;
 
             if offset + mip_size > layer_data.len() {
                 return Err(Error::InputDecoding(format!(
@@ -252,7 +274,9 @@ pub fn decode_dds_image(data: &[u8]) -> Result<Image> {
                 data: layer_data[offset..offset + mip_size].to_vec(),
                 width: mip_w,
                 height: mip_h,
+                depth: mip_d,
                 stride,
+                slice_stride: if is_3d { slice_size as u32 } else { 0 },
                 format,
                 color_space,
                 alpha: AlphaMode::Straight,
@@ -264,10 +288,7 @@ pub fn decode_dds_image(data: &[u8]) -> Result<Image> {
         surfaces.push(mips);
     }
 
-    Ok(Image {
-        surfaces,
-        is_cubemap,
-    })
+    Ok(Image { surfaces, kind })
 }
 
 /// Compute the byte size and stride for a single mip level.
@@ -307,12 +328,14 @@ mod tests {
                 data: vec![42u8; 4 * 4 * 4],
                 width: 4,
                 height: 4,
+                depth: 1,
                 stride: 16,
+                slice_stride: 0,
                 format: ktx2::Format::R8G8B8A8_UNORM,
                 color_space: ColorSpace::Srgb,
                 alpha: AlphaMode::Straight,
             }]],
-            is_cubemap: false,
+            kind: TextureKind::Texture2D,
         };
 
         let encoded = encode_dds_image(&original).unwrap();
@@ -336,12 +359,14 @@ mod tests {
                 data: vec![0xFF; 16],
                 width: 4,
                 height: 4,
+                depth: 1,
                 stride: 16,
+                slice_stride: 0,
                 format: ktx2::Format::BC7_UNORM_BLOCK,
                 color_space: ColorSpace::Linear,
                 alpha: AlphaMode::Straight,
             }]],
-            is_cubemap: false,
+            kind: TextureKind::Texture2D,
         };
 
         let encoded = encode_dds_image(&original).unwrap();
@@ -361,7 +386,9 @@ mod tests {
                     data: vec![0xAA; 4 * 4 * 4],
                     width: 4,
                     height: 4,
+                    depth: 1,
                     stride: 16,
+                    slice_stride: 0,
                     format: ktx2::Format::R8G8B8A8_UNORM,
                     color_space: ColorSpace::Linear,
                     alpha: AlphaMode::Straight,
@@ -370,7 +397,9 @@ mod tests {
                     data: vec![0xBB; 2 * 2 * 4],
                     width: 2,
                     height: 2,
+                    depth: 1,
                     stride: 8,
+                    slice_stride: 0,
                     format: ktx2::Format::R8G8B8A8_UNORM,
                     color_space: ColorSpace::Linear,
                     alpha: AlphaMode::Straight,
@@ -379,13 +408,15 @@ mod tests {
                     data: vec![0xCC; 4],
                     width: 1,
                     height: 1,
+                    depth: 1,
                     stride: 4,
+                    slice_stride: 0,
                     format: ktx2::Format::R8G8B8A8_UNORM,
                     color_space: ColorSpace::Linear,
                     alpha: AlphaMode::Straight,
                 },
             ]],
-            is_cubemap: false,
+            kind: TextureKind::Texture2D,
         };
 
         let encoded = encode_dds_image(&original).unwrap();
@@ -407,7 +438,9 @@ mod tests {
                     data: vec![i as u8; 4 * 4 * 4],
                     width: 4,
                     height: 4,
+                    depth: 1,
                     stride: 16,
+                    slice_stride: 0,
                     format: ktx2::Format::R8G8B8A8_UNORM,
                     color_space: ColorSpace::Linear,
                     alpha: AlphaMode::Straight,
@@ -417,13 +450,13 @@ mod tests {
 
         let original = Image {
             surfaces: faces,
-            is_cubemap: true,
+            kind: TextureKind::Cubemap,
         };
 
         let encoded = encode_dds_image(&original).unwrap();
         let decoded = decode_dds_image(&encoded).unwrap();
 
-        assert!(decoded.is_cubemap);
+        assert_eq!(decoded.kind, TextureKind::Cubemap);
         assert_eq!(decoded.surfaces.len(), 6);
         for i in 0..6 {
             assert_eq!(decoded.surfaces[i][0].data, vec![i as u8; 64]);

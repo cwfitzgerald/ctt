@@ -1,7 +1,7 @@
 use ddsfile::{AlphaMode, Caps2, D3D10ResourceDimension, Dds, DxgiFormat, NewDxgiParams};
 
 use crate::error::{Error, Result};
-use crate::surface::ColorSpace;
+use crate::surface::{ColorSpace, TextureKind};
 use crate::vk_format::FormatExt as _;
 
 /// Map a `ktx2::Format` + `ColorSpace` to a DXGI format.
@@ -143,35 +143,58 @@ pub fn vk_format_to_dxgi(format: ktx2::Format, color_space: ColorSpace) -> Resul
 pub fn encode_dds_image(image: &crate::surface::Image) -> Result<Vec<u8>> {
     let first = &image.surfaces[0][0];
     let dxgi_format = vk_format_to_dxgi(first.format, first.color_space)?;
+
+    // Image::validate has already enforced kind invariants by the time we get
+    // here (Cubemap multiple-of-6, Texture3D single surface).
+    let is_cubemap = matches!(image.kind, TextureKind::Cubemap);
+    let is_3d = matches!(image.kind, TextureKind::Texture3D);
+
+    let (depth_param, array_layers, resource_dimension) = if is_3d {
+        (
+            Some(first.depth.max(1)),
+            None,
+            D3D10ResourceDimension::Texture3D,
+        )
+    } else {
+        (
+            None,
+            Some(image.surfaces.len() as u32),
+            D3D10ResourceDimension::Texture2D,
+        )
+    };
+
     log::debug!(
-        "DDS: {:?}, {} layers, {} mips",
+        "DDS: {:?}, {} surfaces, {} mips, kind={:?}",
         dxgi_format,
         image.surfaces.len(),
-        image.surfaces[0].len()
+        image.surfaces[0].len(),
+        image.kind,
     );
 
     let mut dds = Dds::new_dxgi(NewDxgiParams {
         height: first.height,
         width: first.width,
-        depth: None,
+        depth: depth_param,
         format: dxgi_format,
         mipmap_levels: Some(image.surfaces[0].len() as u32),
-        array_layers: Some(image.surfaces.len() as u32),
-        caps2: if image.is_cubemap {
+        array_layers,
+        caps2: if is_cubemap {
             Some(Caps2::CUBEMAP | Caps2::CUBEMAP_ALLFACES)
         } else {
             None
         },
-        is_cubemap: image.is_cubemap,
-        resource_dimension: D3D10ResourceDimension::Texture2D,
+        is_cubemap,
+        resource_dimension,
         alpha_mode: AlphaMode::Unknown,
     })
     .map_err(|e| Error::OutputEncoding(format!("DDS creation failed: {e}")))?;
 
+    // tight_data strips per-row and per-slice padding so the DDS payload
+    // matches D3D's expected packing.
     let mut data = Vec::new();
     for layer in &image.surfaces {
         for mip in layer {
-            data.extend_from_slice(&mip.data);
+            data.extend_from_slice(&mip.tight_data());
         }
     }
     dds.data = data;

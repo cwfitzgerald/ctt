@@ -3,7 +3,7 @@ use ktx2::dfd;
 use crate::alpha::AlphaMode;
 use crate::convert::Ktx2Supercompression;
 use crate::error::{Error, Result};
-use crate::surface::Image;
+use crate::surface::{Image, TextureKind};
 use crate::vk_format::FormatExt as _;
 
 /// Encode an [`Image`] as a KTX2 file.
@@ -34,22 +34,36 @@ pub fn encode_ktx2_image(
         first.alpha,
     );
 
+    // Image::validate has already enforced kind invariants by the time we get
+    // here (Cubemap multiple-of-6, Texture3D single surface, depth==1 for 2D).
     let level_count = image.surfaces[0].len() as u32;
-    let face_count = if image.is_cubemap { 6u32 } else { 1u32 };
-    let layer_count = if image.is_cubemap {
-        0u32
-    } else if image.surfaces.len() > 1 {
-        image.surfaces.len() as u32
-    } else {
-        0u32
+    let (face_count, layer_count, pixel_depth) = match image.kind {
+        TextureKind::Texture2D => {
+            let lc = if image.surfaces.len() > 1 {
+                image.surfaces.len() as u32
+            } else {
+                0u32
+            };
+            (1u32, lc, 0u32)
+        }
+        TextureKind::Cubemap => {
+            let cube_count = image.surfaces.len() as u32 / 6;
+            // KTX2: layer_count == 0 for a single cube; > 0 for a cube array.
+            let lc = if cube_count > 1 { cube_count } else { 0 };
+            (6u32, lc, 0u32)
+        }
+        TextureKind::Texture3D => (1u32, 0u32, first.depth.max(1)),
     };
 
-    // Collect all level data.
+    // Collect all level data. Each surface's `tight_data` strips per-row and
+    // per-slice padding so the level bytes match the KTX2 spec layout.
+    // For Texture3D the single Surface's tight bytes already pack all Z
+    // slices contiguously, so the inner loop runs exactly once.
     let mut level_data: Vec<Vec<u8>> = Vec::with_capacity(level_count as usize);
     for mip_idx in 0..level_count as usize {
         let mut mip_data = Vec::new();
         for layer in &image.surfaces {
-            mip_data.extend_from_slice(&layer[mip_idx].data);
+            mip_data.extend_from_slice(&layer[mip_idx].tight_data());
         }
         level_data.push(mip_data);
     }
@@ -140,7 +154,7 @@ pub fn encode_ktx2_image(
         type_size,
         pixel_width: first.width,
         pixel_height: first.height,
-        pixel_depth: 0,
+        pixel_depth,
         layer_count,
         face_count,
         level_count,
@@ -238,12 +252,14 @@ mod tests {
                 data,
                 width: 4,
                 height: 4,
+                depth: 1,
                 stride: 4 * bpp as u32,
+                slice_stride: 0,
                 format,
                 color_space,
                 alpha,
             }]],
-            is_cubemap: false,
+            kind: TextureKind::Texture2D,
         }
     }
 
@@ -274,12 +290,14 @@ mod tests {
                 data: vec![0u8; 16], // 1 block = 16 bytes for 4x4 BC7
                 width: 4,
                 height: 4,
+                depth: 1,
                 stride: 16,
+                slice_stride: 0,
                 format: F::BC7_UNORM_BLOCK,
                 color_space: ColorSpace::Linear,
                 alpha: AlphaMode::Straight,
             }]],
-            is_cubemap: false,
+            kind: TextureKind::Texture2D,
         };
         let bytes = encode_ktx2_image(&image, None).unwrap();
         let reader = ktx2::Reader::new(&bytes[..]).expect("valid KTX2");
@@ -321,12 +339,14 @@ mod tests {
                 data: data.clone(),
                 width: 4,
                 height: 4,
+                depth: 1,
                 stride: 16,
+                slice_stride: 0,
                 format: F::R8G8B8A8_UNORM,
                 color_space: ColorSpace::Linear,
                 alpha: AlphaMode::Straight,
             }]],
-            is_cubemap: false,
+            kind: TextureKind::Texture2D,
         };
         let bytes = encode_ktx2_image(&image, None).unwrap();
         let reader = ktx2::Reader::new(&bytes[..]).expect("valid KTX2");
@@ -347,7 +367,9 @@ mod tests {
                     data: mip0.clone(),
                     width: 4,
                     height: 4,
+                    depth: 1,
                     stride: 16,
+                    slice_stride: 0,
                     format: F::R8G8B8A8_UNORM,
                     color_space: ColorSpace::Linear,
                     alpha: AlphaMode::Straight,
@@ -356,7 +378,9 @@ mod tests {
                     data: mip1.clone(),
                     width: 2,
                     height: 2,
+                    depth: 1,
                     stride: 8,
+                    slice_stride: 0,
                     format: F::R8G8B8A8_UNORM,
                     color_space: ColorSpace::Linear,
                     alpha: AlphaMode::Straight,
@@ -365,13 +389,15 @@ mod tests {
                     data: mip2.clone(),
                     width: 1,
                     height: 1,
+                    depth: 1,
                     stride: 4,
+                    slice_stride: 0,
                     format: F::R8G8B8A8_UNORM,
                     color_space: ColorSpace::Linear,
                     alpha: AlphaMode::Straight,
                 },
             ]],
-            is_cubemap: false,
+            kind: TextureKind::Texture2D,
         };
         let bytes = encode_ktx2_image(&image, None).unwrap();
         let reader = ktx2::Reader::new(&bytes[..]).expect("valid KTX2");
