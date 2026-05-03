@@ -1,32 +1,29 @@
 use ctt_intel_texture_compressor as itc;
 
+use crate::encoders::Quality;
+use crate::encoders::backend::Encoder;
 use crate::encoders::edge;
-use crate::encoders::{Encoder, EncoderSettings, Quality};
 use crate::error::{Error, Result};
 use crate::surface::Surface;
 use crate::vk_format::FormatExt as _;
 
 /// ISPC-specific encoder settings.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 pub struct IspcSettings {
     /// Whether to encode alpha channel (for BC7).
     pub alpha: bool,
 }
 
-impl EncoderSettings for IspcSettings {
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-}
-
 pub struct IspcEncoder;
 
 impl Encoder for IspcEncoder {
-    fn name(&self) -> &str {
+    type Settings = IspcSettings;
+
+    fn name() -> &'static str {
         "intel"
     }
 
-    fn supported_formats(&self) -> &[ktx2::Format] {
+    fn supported_formats() -> &'static [ktx2::Format] {
         &[
             ktx2::Format::BC1_RGBA_UNORM_BLOCK,
             ktx2::Format::BC3_UNORM_BLOCK,
@@ -38,7 +35,7 @@ impl Encoder for IspcEncoder {
         ]
     }
 
-    fn required_input_format(&self, format: ktx2::Format) -> ktx2::Format {
+    fn required_input_format(format: ktx2::Format) -> ktx2::Format {
         use ktx2::Format as F;
         match format {
             F::BC4_UNORM_BLOCK => F::R8_UNORM,
@@ -49,11 +46,10 @@ impl Encoder for IspcEncoder {
     }
 
     fn compress(
-        &self,
         surface: &Surface,
         format: ktx2::Format,
         quality: Quality,
-        settings: Option<&dyn EncoderSettings>,
+        settings: &IspcSettings,
     ) -> Result<Vec<u8>> {
         let (base, _) = format.normalize();
 
@@ -133,10 +129,7 @@ impl Encoder for IspcEncoder {
                 ))
             }
             F::BC7_UNORM_BLOCK => {
-                let alpha = settings
-                    .and_then(|s| s.as_any().downcast_ref::<IspcSettings>())
-                    .is_some_and(|s| s.alpha);
-                let bc7_settings = bc7_settings(quality, alpha);
+                let bc7_settings = bc7_settings(quality, settings.alpha);
                 Ok(encode_unaligned(
                     data,
                     width,
@@ -340,15 +333,13 @@ mod tests {
     #[test]
     fn bc7_non_aligned_5x5() {
         let surface = solid_red_surface(5, 5);
-        let encoder = IspcEncoder;
-        let out = encoder
-            .compress(
-                &surface,
-                ktx2::Format::BC7_UNORM_BLOCK,
-                Quality::UltraFast,
-                None,
-            )
-            .unwrap();
+        let out = IspcEncoder::compress(
+            &surface,
+            ktx2::Format::BC7_UNORM_BLOCK,
+            Quality::UltraFast,
+            &IspcSettings::default(),
+        )
+        .unwrap();
         // 5x5 rounds up to 8x8 blocks: 2×2 = 4 blocks × 16 bytes = 64 bytes.
         assert_eq!(out.len(), 2 * 2 * 16);
         // Every block should decode to close-to-red. Borrow the etcpak decoder.
@@ -370,15 +361,13 @@ mod tests {
         // DecodeBc1 is upstream-buggy — it writes only the first row of each
         // block), so round-trip through it.
         let surface = solid_red_surface(7, 3);
-        let encoder = IspcEncoder;
-        let out = encoder
-            .compress(
-                &surface,
-                ktx2::Format::BC1_RGBA_UNORM_BLOCK,
-                Quality::UltraFast,
-                None,
-            )
-            .unwrap();
+        let out = IspcEncoder::compress(
+            &surface,
+            ktx2::Format::BC1_RGBA_UNORM_BLOCK,
+            Quality::UltraFast,
+            &IspcSettings::default(),
+        )
+        .unwrap();
         // 7×3 rounds up to 8×4 pixels = 2 blocks × 8 bytes = 16 bytes.
         assert_eq!(out.len(), 2 * 8);
         for chunk in out.chunks_exact(8) {
@@ -394,15 +383,13 @@ mod tests {
     fn aligned_fast_path_matches_single_call() {
         // 4×4 aligned image: fast path and slow path should both work.
         let surface = solid_red_surface(4, 4);
-        let encoder = IspcEncoder;
-        let out = encoder
-            .compress(
-                &surface,
-                ktx2::Format::BC7_UNORM_BLOCK,
-                Quality::UltraFast,
-                None,
-            )
-            .unwrap();
+        let out = IspcEncoder::compress(
+            &surface,
+            ktx2::Format::BC7_UNORM_BLOCK,
+            Quality::UltraFast,
+            &IspcSettings::default(),
+        )
+        .unwrap();
         assert_eq!(out.len(), 16);
     }
 }

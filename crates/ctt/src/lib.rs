@@ -23,8 +23,8 @@
 //!
 //! let ktx2_bytes = convert(image, ConvertSettings {
 //!     format: Some(TargetFormat::Compressed {
-//!         encoder_name: None,
 //!         format: Format::BC7_UNORM_BLOCK,
+//!         encoder: Encoder::Auto,
 //!     }),
 //!     container: Container::ktx2(),
 //!     ..Default::default()
@@ -41,6 +41,7 @@ pub use ktx2::Format;
 pub use alpha::AlphaMode;
 pub use convert::{Container, ConvertSettings, Ktx2Supercompression, convert};
 pub use cubemap::{CubemapInput, split_cubemap};
+pub use encoders::{Encoder, EncoderInfo, compiled_in_encoders};
 pub use error::{Error, Result};
 pub use format::{TargetFormat, format_short_name, parse_format};
 pub use processing::{MipmapFilter, PipelineOutput, Swizzle, SwizzleChannel};

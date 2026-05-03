@@ -14,6 +14,7 @@
 /// Any sample outside `0..width × 0..height` is replaced by the nearest edge
 /// pixel (clamp-to-edge).
 #[allow(clippy::too_many_arguments)]
+#[cfg_attr(not(feature = "encoder-intel"), expect(dead_code))]
 pub(crate) fn fill_clamped_block(
     src: &[u8],
     width: u32,

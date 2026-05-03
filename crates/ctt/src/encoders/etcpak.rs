@@ -1,7 +1,8 @@
 use ctt_etcpak as ep;
 
+use crate::encoders::Quality;
+use crate::encoders::backend::Encoder;
 use crate::encoders::edge;
-use crate::encoders::{Encoder, EncoderSettings, Quality};
 use crate::error::Result;
 use crate::surface::Surface;
 use crate::vk_format::FormatExt as _;
@@ -15,20 +16,16 @@ pub struct EtcpakSettings {
     pub use_heuristics: bool,
 }
 
-impl EncoderSettings for EtcpakSettings {
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-}
-
 pub struct EtcpakEncoder;
 
 impl Encoder for EtcpakEncoder {
-    fn name(&self) -> &str {
+    type Settings = EtcpakSettings;
+
+    fn name() -> &'static str {
         "etcpak"
     }
 
-    fn supported_formats(&self) -> &[ktx2::Format] {
+    fn supported_formats() -> &'static [ktx2::Format] {
         &[
             ktx2::Format::ETC2_R8G8B8_UNORM_BLOCK,
             ktx2::Format::ETC2_R8G8B8A8_UNORM_BLOCK,
@@ -41,7 +38,7 @@ impl Encoder for EtcpakEncoder {
         ]
     }
 
-    fn required_input_format(&self, format: ktx2::Format) -> ktx2::Format {
+    fn required_input_format(format: ktx2::Format) -> ktx2::Format {
         use ktx2::Format as F;
         match format {
             // ETC/EAC codecs expect BGRA pixel layout.
@@ -55,21 +52,15 @@ impl Encoder for EtcpakEncoder {
     }
 
     fn compress(
-        &self,
         surface: &Surface,
         format: ktx2::Format,
         quality: Quality,
-        settings: Option<&dyn EncoderSettings>,
+        settings: &EtcpakSettings,
     ) -> Result<Vec<u8>> {
         let (base, _) = format.normalize();
 
-        let ep_settings = settings
-            .and_then(|s| s.as_any().downcast_ref::<EtcpakSettings>())
-            .copied()
-            .unwrap_or_default();
-
-        let use_heuristics = ep_settings.use_heuristics;
-        let dither = ep_settings.dither;
+        let use_heuristics = settings.use_heuristics;
+        let dither = settings.dither;
 
         let bytes_per_block =
             base.bytes_per_block()
@@ -208,10 +199,13 @@ mod tests {
     fn bc3_non_aligned_7x5() {
         // BC3 has a working etcpak decoder, so round-trip solid red.
         let surface = solid_surface(7, 5, [255, 0, 0, 255]);
-        let encoder = EtcpakEncoder;
-        let out = encoder
-            .compress(&surface, ktx2::Format::BC3_UNORM_BLOCK, Quality::Fast, None)
-            .unwrap();
+        let out = EtcpakEncoder::compress(
+            &surface,
+            ktx2::Format::BC3_UNORM_BLOCK,
+            Quality::Fast,
+            &EtcpakSettings::default(),
+        )
+        .unwrap();
         // 7×5 → 8×8 → 2×2 blocks × 16 bytes = 64 bytes.
         assert_eq!(out.len(), 2 * 2 * 16);
         let decoded = ctt_etcpak::decode::decode_bc3(&out, 8, 8);
@@ -225,15 +219,13 @@ mod tests {
         // etcpak expects BGRA input for ETC codecs. Encode solid white which is
         // palette-invariant, then verify the round-trip through decode_rgba.
         let surface = solid_surface(5, 5, [255, 255, 255, 255]);
-        let encoder = EtcpakEncoder;
-        let out = encoder
-            .compress(
-                &surface,
-                ktx2::Format::ETC2_R8G8B8A8_UNORM_BLOCK,
-                Quality::Fast,
-                None,
-            )
-            .unwrap();
+        let out = EtcpakEncoder::compress(
+            &surface,
+            ktx2::Format::ETC2_R8G8B8A8_UNORM_BLOCK,
+            Quality::Fast,
+            &EtcpakSettings::default(),
+        )
+        .unwrap();
         // 5×5 → 8×8 → 4 blocks × 16 bytes = 64 bytes.
         assert_eq!(out.len(), 4 * 16);
         let decoded = ctt_etcpak::decode::decode_rgba(&out, 8, 8);
@@ -251,10 +243,13 @@ mod tests {
     fn aligned_zero_copy_path() {
         // 8×8 is aligned and tight-packed → fast path direct call.
         let surface = solid_surface(8, 8, [128, 128, 128, 255]);
-        let encoder = EtcpakEncoder;
-        let out = encoder
-            .compress(&surface, ktx2::Format::BC3_UNORM_BLOCK, Quality::Fast, None)
-            .unwrap();
+        let out = EtcpakEncoder::compress(
+            &surface,
+            ktx2::Format::BC3_UNORM_BLOCK,
+            Quality::Fast,
+            &EtcpakSettings::default(),
+        )
+        .unwrap();
         assert_eq!(out.len(), 4 * 16);
     }
 }

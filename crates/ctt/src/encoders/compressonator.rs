@@ -1,18 +1,24 @@
 use ctt_compressonator as cmp;
 
-use crate::encoders::{Encoder, EncoderSettings, Quality};
+use crate::encoders::Quality;
+use crate::encoders::backend::Encoder;
 use crate::error::{Error, Result};
 use crate::surface::Surface;
 use crate::vk_format::FormatExt as _;
 
+#[derive(Debug, Clone, Copy, Default)]
+pub struct AmdSettings;
+
 pub struct CompressonatorEncoder;
 
 impl Encoder for CompressonatorEncoder {
-    fn name(&self) -> &str {
+    type Settings = AmdSettings;
+
+    fn name() -> &'static str {
         "amd"
     }
 
-    fn supported_formats(&self) -> &[ktx2::Format] {
+    fn supported_formats() -> &'static [ktx2::Format] {
         &[
             ktx2::Format::BC1_RGBA_UNORM_BLOCK,
             ktx2::Format::BC2_UNORM_BLOCK,
@@ -27,7 +33,7 @@ impl Encoder for CompressonatorEncoder {
         ]
     }
 
-    fn required_input_format(&self, format: ktx2::Format) -> ktx2::Format {
+    fn required_input_format(format: ktx2::Format) -> ktx2::Format {
         use ktx2::Format as F;
         match format {
             F::BC4_UNORM_BLOCK | F::BC4_SNORM_BLOCK => F::R8_UNORM,
@@ -38,11 +44,10 @@ impl Encoder for CompressonatorEncoder {
     }
 
     fn compress(
-        &self,
         surface: &Surface,
         format: ktx2::Format,
         quality: Quality,
-        _settings: Option<&dyn EncoderSettings>,
+        _settings: &AmdSettings,
     ) -> Result<Vec<u8>> {
         let q = quality_to_float(quality);
         let (base, _) = format.normalize();
@@ -152,13 +157,16 @@ mod tests {
     #[test]
     fn bc7_non_aligned_5x5() {
         let surface = solid_red(5, 5);
-        let encoder = CompressonatorEncoder;
         // Compressonator BC7 at UltraFast produces R=0 output on non-MSVC
         // toolchains (Linux, macOS). Use Slow so the NPOT coverage is
         // independent of that upstream quirk.
-        let out = encoder
-            .compress(&surface, ktx2::Format::BC7_UNORM_BLOCK, Quality::Slow, None)
-            .unwrap();
+        let out = CompressonatorEncoder::compress(
+            &surface,
+            ktx2::Format::BC7_UNORM_BLOCK,
+            Quality::Slow,
+            &AmdSettings,
+        )
+        .unwrap();
         // 5x5 → 8×8 → 4 blocks × 16 bytes.
         assert_eq!(out.len(), 4 * 16);
         for chunk in out.chunks_exact(16) {
@@ -173,15 +181,13 @@ mod tests {
     #[test]
     fn bc1_non_aligned_7x3() {
         let surface = solid_red(7, 3);
-        let encoder = CompressonatorEncoder;
-        let out = encoder
-            .compress(
-                &surface,
-                ktx2::Format::BC1_RGBA_UNORM_BLOCK,
-                Quality::UltraFast,
-                None,
-            )
-            .unwrap();
+        let out = CompressonatorEncoder::compress(
+            &surface,
+            ktx2::Format::BC1_RGBA_UNORM_BLOCK,
+            Quality::UltraFast,
+            &AmdSettings,
+        )
+        .unwrap();
         // 7×3 → 8×4 → 2 blocks × 8 bytes.
         assert_eq!(out.len(), 2 * 8);
         for chunk in out.chunks_exact(8) {

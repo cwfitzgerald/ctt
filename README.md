@@ -100,8 +100,8 @@ let image = Image { surfaces: vec![vec![surface]], is_cubemap: false };
 
 let ktx2_bytes = convert(image, ConvertSettings {
     format: Some(TargetFormat::Compressed {
-        encoder_name: None,
         format: Format::BC7_UNORM_BLOCK,
+        encoder: Encoder::Auto,
     }),
     container: Container::ktx2(),
     ..Default::default()

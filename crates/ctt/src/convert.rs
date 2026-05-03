@@ -1,9 +1,7 @@
 //! High-level conversion entry point.
 
-use std::sync::Arc;
-
 use crate::alpha::AlphaMode;
-use crate::encoders::{EncoderRegistry, EncoderSettings, Quality};
+use crate::encoders::Quality;
 use crate::error::{Error, Result};
 use crate::format::TargetFormat;
 use crate::processing::{
@@ -44,6 +42,7 @@ impl Container {
 }
 
 /// Settings for the high-level [`convert`] function.
+#[derive(Default)]
 pub struct ConvertSettings {
     /// Target format. If `None`, the input format is preserved without compression.
     pub format: Option<TargetFormat>,
@@ -55,25 +54,11 @@ pub struct ConvertSettings {
     pub mipmap: bool,
     pub mipmap_count: Option<usize>,
     pub mipmap_filter: mipmap::MipmapFilter,
-    pub encoder_settings: Option<Box<dyn EncoderSettings>>,
-    pub registry: Option<Arc<EncoderRegistry>>,
 }
 
-impl Default for ConvertSettings {
+impl Default for Container {
     fn default() -> Self {
-        Self {
-            format: None,
-            container: Container::Ktx2(None),
-            quality: Quality::default(),
-            output_color_space: None,
-            output_alpha: None,
-            swizzle: None,
-            mipmap: false,
-            mipmap_count: None,
-            mipmap_filter: mipmap::MipmapFilter::default(),
-            encoder_settings: None,
-            registry: None,
-        }
+        Container::Ktx2(None)
     }
 }
 
@@ -85,17 +70,12 @@ pub fn convert(image: Image, mut settings: ConvertSettings) -> Result<PipelineOu
     profiling::scope!("convert");
     image.validate()?;
 
-    let registry = settings
-        .registry
-        .take()
-        .unwrap_or_else(|| Arc::new(EncoderRegistry::default_registry()));
-
     let input_base = &image.surfaces[0][0];
     let input_fmt = input_base.format;
     let input_cs = input_base.color_space;
     let input_alpha = input_base.alpha;
 
-    let (target_fmt, encoder_step) = resolve_target(input_fmt, &mut settings, &registry)?;
+    let (target_fmt, encoder_step) = resolve_target(input_fmt, &mut settings)?;
 
     let target_cs = settings.output_color_space.unwrap_or(input_cs);
     let target_alpha = settings.output_alpha.unwrap_or(input_alpha);
@@ -180,19 +160,13 @@ pub fn convert(image: Image, mut settings: ConvertSettings) -> Result<PipelineOu
 fn resolve_target(
     input_fmt: ktx2::Format,
     settings: &mut ConvertSettings,
-    registry: &Arc<EncoderRegistry>,
 ) -> Result<(ktx2::Format, Option<encode::EncoderStep>)> {
     match settings.format.take() {
-        Some(TargetFormat::Compressed {
-            encoder_name,
-            format,
-        }) => {
+        Some(TargetFormat::Compressed { format, encoder }) => {
             let step = encode::EncoderStep {
                 target_format: format,
-                encoder_name,
                 quality: settings.quality,
-                settings: settings.encoder_settings.take(),
-                registry: Arc::clone(registry),
+                encoder,
             };
             let required_input = step.required_input()?;
             Ok((required_input, Some(step)))
@@ -562,8 +536,8 @@ mod tests {
             image,
             ConvertSettings {
                 format: Some(TargetFormat::Compressed {
-                    encoder_name: None,
                     format: ktx2::Format::BC7_UNORM_BLOCK,
+                    encoder: crate::encoders::Encoder::Auto,
                 }),
                 container: Container::ktx2(),
                 quality: Quality::UltraFast,
@@ -702,8 +676,8 @@ mod tests {
             image,
             ConvertSettings {
                 format: Some(TargetFormat::Compressed {
-                    encoder_name: None,
                     format: ktx2::Format::BC7_UNORM_BLOCK,
+                    encoder: crate::encoders::Encoder::Auto,
                 }),
                 container: Container::ktx2(),
                 quality: Quality::UltraFast,

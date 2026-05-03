@@ -1,4 +1,4 @@
-use crate::encoders::EncoderRegistry;
+use crate::encoders::{Encoder, compiled_in_encoders};
 use crate::error::Error;
 
 /// The target format for a conversion operation.
@@ -6,13 +6,14 @@ use crate::error::Error;
 /// Use [`parse_format`] to construct this from a format string, or build
 /// it directly when you already know the target [`Format`](ktx2::Format).
 pub enum TargetFormat {
-    /// A block-compressed format, optionally targeting a specific encoder.
+    /// A block-compressed format with the chosen encoder backend (and its
+    /// settings) carried alongside. Use [`Encoder::Auto`] for "I don't care
+    /// which encoder, just give me this format".
     Compressed {
-        /// Specific encoder backend to use (e.g. `"intel"`, `"bc7e"`).
-        /// If `None`, the highest-priority encoder that supports the format is used.
-        encoder_name: Option<String>,
         /// The target compressed format (e.g. `Format::BC7_UNORM_BLOCK`).
         format: ktx2::Format,
+        /// Which encoder to use, plus its settings.
+        encoder: Encoder,
     },
     /// An uncompressed pixel format (e.g. `Format::R8G8B8A8_UNORM`).
     Uncompressed(ktx2::Format),
@@ -20,10 +21,12 @@ pub enum TargetFormat {
 
 /// Parse a format string that may be compressed or uncompressed.
 ///
-/// Compressed formats may have an encoder prefix (e.g. `intel_bc7`).
-/// Uncompressed formats accept both WebGPU-style (`rgba8unorm`) and Vulkan-style
+/// Compressed formats may have an encoder prefix (e.g. `intel_bc7`); when
+/// prefixed, the matching [`Encoder`] variant is constructed with default
+/// settings. Bare names (`bc7`) yield [`Encoder::Auto`]. Uncompressed formats
+/// accept both WebGPU-style (`rgba8unorm`) and Vulkan-style
 /// (`r8g8b8a8_unorm`) names.
-pub fn parse_format(s: &str, registry: &EncoderRegistry) -> Result<TargetFormat, Error> {
+pub fn parse_format(s: &str) -> Result<TargetFormat, Error> {
     let lower = s.to_lowercase();
 
     // Try uncompressed first — these names never collide with encoder prefixes.
@@ -31,33 +34,42 @@ pub fn parse_format(s: &str, registry: &EncoderRegistry) -> Result<TargetFormat,
         return Ok(TargetFormat::Uncompressed(format));
     }
 
-    // Try encoder-prefixed compressed formats.
-    let mut prefixes: Vec<String> = registry
-        .encoders()
-        .iter()
-        .map(|e| e.name().to_string())
-        .collect();
-    prefixes.sort_by_key(|p| std::cmp::Reverse(p.len()));
-
-    for prefix in &prefixes {
-        if let Some(rest) = lower
-            .strip_prefix(prefix.as_str())
-            .and_then(|r| r.strip_prefix('_'))
-        {
+    // Try each compiled-in encoder prefix. Sort by descending length so
+    // that longer prefixes ("astcenc") win over shorter ones that happen
+    // to be a substring.
+    let mut infos = compiled_in_encoders();
+    infos.sort_by_key(|info| std::cmp::Reverse(info.name.len()));
+    for info in &infos {
+        let prefix = info.name;
+        if let Some(rest) = lower.strip_prefix(prefix).and_then(|r| r.strip_prefix('_')) {
             let format = parse_compressed(rest, s)?;
-            return Ok(TargetFormat::Compressed {
-                encoder_name: Some(prefix.to_string()),
-                format,
-            });
+            let encoder = encoder_for_prefix(prefix);
+            return Ok(TargetFormat::Compressed { format, encoder });
         }
     }
 
     // Bare compressed format.
     let format = parse_compressed(&lower, s)?;
     Ok(TargetFormat::Compressed {
-        encoder_name: None,
         format,
+        encoder: Encoder::Auto,
     })
+}
+
+fn encoder_for_prefix(name: &str) -> Encoder {
+    match name {
+        #[cfg(feature = "encoder-bc7enc")]
+        "bc7e" => Encoder::Bc7enc(Default::default()),
+        #[cfg(feature = "encoder-intel")]
+        "intel" => Encoder::Intel(Default::default()),
+        #[cfg(feature = "encoder-etcpak")]
+        "etcpak" => Encoder::Etcpak(Default::default()),
+        #[cfg(feature = "encoder-amd")]
+        "amd" => Encoder::Amd(Default::default()),
+        #[cfg(feature = "encoder-astcenc")]
+        "astcenc" => Encoder::Astcenc(Default::default()),
+        _ => Encoder::Auto,
+    }
 }
 
 /// Short display name for a compressed format (used in encoder listings).
@@ -302,8 +314,7 @@ mod tests {
 
     #[test]
     fn parse_format_uncompressed() {
-        let registry = EncoderRegistry::default_registry();
-        match parse_format("rgba8unorm", &registry).unwrap() {
+        match parse_format("rgba8unorm").unwrap() {
             TargetFormat::Uncompressed(f) => assert_eq!(f, F::R8G8B8A8_UNORM),
             _ => panic!("expected uncompressed"),
         }
@@ -311,14 +322,10 @@ mod tests {
 
     #[test]
     fn parse_format_compressed() {
-        let registry = EncoderRegistry::default_registry();
-        match parse_format("bc7", &registry).unwrap() {
-            TargetFormat::Compressed {
-                encoder_name,
-                format,
-            } => {
-                assert_eq!(encoder_name, None);
+        match parse_format("bc7").unwrap() {
+            TargetFormat::Compressed { format, encoder } => {
                 assert_eq!(format, F::BC7_UNORM_BLOCK);
+                assert!(matches!(encoder, Encoder::Auto));
             }
             _ => panic!("expected compressed"),
         }

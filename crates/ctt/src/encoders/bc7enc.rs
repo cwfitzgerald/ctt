@@ -1,4 +1,5 @@
-use crate::encoders::{Encoder, EncoderSettings, Quality};
+use crate::encoders::Quality;
+use crate::encoders::backend::Encoder;
 use crate::error::{Error, Result};
 use crate::surface::Surface;
 
@@ -9,9 +10,9 @@ pub struct Bc7encSettings {
     pub perceptual: bool,
 }
 
-impl EncoderSettings for Bc7encSettings {
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
+impl Default for Bc7encSettings {
+    fn default() -> Self {
+        Self { perceptual: true }
     }
 }
 
@@ -19,34 +20,32 @@ impl EncoderSettings for Bc7encSettings {
 pub struct Bc7encEncoder;
 
 impl Encoder for Bc7encEncoder {
-    fn name(&self) -> &str {
+    type Settings = Bc7encSettings;
+
+    fn name() -> &'static str {
         "bc7e"
     }
 
-    fn supported_formats(&self) -> &[ktx2::Format] {
+    fn supported_formats() -> &'static [ktx2::Format] {
         &[ktx2::Format::BC7_UNORM_BLOCK]
     }
 
-    fn required_input_format(&self, _format: ktx2::Format) -> ktx2::Format {
+    fn required_input_format(_format: ktx2::Format) -> ktx2::Format {
         ktx2::Format::R8G8B8A8_UNORM
     }
 
     fn compress(
-        &self,
         surface: &Surface,
         format: ktx2::Format,
         quality: Quality,
-        settings: Option<&dyn EncoderSettings>,
+        settings: &Bc7encSettings,
     ) -> Result<Vec<u8>> {
         let (base, _) = crate::vk_format::FormatExt::normalize(&format);
         if base != ktx2::Format::BC7_UNORM_BLOCK {
             return Err(Error::UnsupportedFormat(format!("{format:?}")));
         }
 
-        let perceptual = settings
-            .and_then(|s| s.as_any().downcast_ref::<Bc7encSettings>())
-            .map(|s| s.perceptual)
-            .unwrap_or(true);
+        let perceptual = settings.perceptual;
 
         let params = match quality {
             Quality::UltraFast => ctt_bc7enc_rdo::params_init_ultrafast(perceptual),
@@ -96,15 +95,13 @@ mod tests {
     #[test]
     fn bc7_non_aligned_5x5_edges_replicate() {
         let surface = solid_red(5, 5);
-        let encoder = Bc7encEncoder;
-        let out = encoder
-            .compress(
-                &surface,
-                ktx2::Format::BC7_UNORM_BLOCK,
-                Quality::UltraFast,
-                None,
-            )
-            .unwrap();
+        let out = Bc7encEncoder::compress(
+            &surface,
+            ktx2::Format::BC7_UNORM_BLOCK,
+            Quality::UltraFast,
+            &Bc7encSettings::default(),
+        )
+        .unwrap();
         // 5×5 → 8×8 → 4 blocks × 16 bytes.
         assert_eq!(out.len(), 4 * 16);
         // Every block (including the edge-replicated ones) should decode near red.

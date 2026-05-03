@@ -10,8 +10,8 @@ use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 use ctt::{
-    AlphaMode, ColorSpace, Container, ConvertSettings, Format, FormatExt, Image, PipelineOutput,
-    Quality, Surface, TargetFormat, TextureKind,
+    AlphaMode, ColorSpace, Container, ConvertSettings, Encoder, Format, FormatExt, Image,
+    PipelineOutput, Quality, Surface, TargetFormat, TextureKind,
 };
 
 const FACE_COLORS: [[u8; 4]; 6] = [
@@ -151,10 +151,10 @@ fn write_bc7_solid(
         image,
         ConvertSettings {
             format: Some(TargetFormat::Compressed {
+                format: Format::BC7_UNORM_BLOCK,
                 // Pin to bc7e so the golden bytes stay stable even if more
                 // BC7-capable encoders get added to the workspace later.
-                encoder_name: Some("bc7e".to_string()),
-                format: Format::BC7_UNORM_BLOCK,
+                encoder: Encoder::Bc7enc(ctt::encoders::bc7enc::Bc7encSettings::default()),
             }),
             container,
             quality: Quality::UltraFast,

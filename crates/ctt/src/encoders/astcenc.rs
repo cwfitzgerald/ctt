@@ -1,9 +1,13 @@
 use ctt_astcenc as astc;
 
-use crate::encoders::{Encoder, EncoderSettings, Quality};
+use crate::encoders::Quality;
+use crate::encoders::backend::Encoder;
 use crate::error::Result;
 use crate::surface::{ColorSpace, Surface};
 use crate::vk_format::FormatExt as _;
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct AstcencSettings;
 
 /// All 14 valid ASTC 2D block sizes.
 const SUPPORTED_FORMATS: &[ktx2::Format] = &[
@@ -26,25 +30,26 @@ const SUPPORTED_FORMATS: &[ktx2::Format] = &[
 pub struct AstcencEncoder;
 
 impl Encoder for AstcencEncoder {
-    fn name(&self) -> &str {
+    type Settings = AstcencSettings;
+
+    fn name() -> &'static str {
         "astcenc"
     }
 
-    fn supported_formats(&self) -> &[ktx2::Format] {
+    fn supported_formats() -> &'static [ktx2::Format] {
         SUPPORTED_FORMATS
     }
 
-    fn required_input_format(&self, _format: ktx2::Format) -> ktx2::Format {
+    fn required_input_format(_format: ktx2::Format) -> ktx2::Format {
         // astcenc LDR mode expects RGBA U8.
         ktx2::Format::R8G8B8A8_UNORM
     }
 
     fn compress(
-        &self,
         surface: &Surface,
         format: ktx2::Format,
         quality: Quality,
-        _settings: Option<&dyn EncoderSettings>,
+        _settings: &AstcencSettings,
     ) -> Result<Vec<u8>> {
         let (base, color_space) = format.normalize();
 

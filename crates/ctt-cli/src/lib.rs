@@ -6,14 +6,14 @@
 pub mod args;
 
 use std::fs;
-use std::sync::{Arc, OnceLock};
+use std::sync::OnceLock;
 
-use ctt::encoders::EncoderRegistry;
 use ctt::input::{InputOverrides, decode_container};
 use ctt::{
-    AlphaMode, ColorSpace, Container, ConvertSettings, CubemapInput, Error, Format, FormatExt,
-    Image, Ktx2Supercompression, MipmapFilter, PipelineOutput, Quality, Surface, Swizzle,
-    SwizzleChannel, TextureKind, format_short_name, parse_format, split_cubemap,
+    AlphaMode, ColorSpace, Container, ConvertSettings, CubemapInput, Encoder, EncoderInfo, Error,
+    Format, FormatExt, Image, Ktx2Supercompression, MipmapFilter, PipelineOutput, Quality, Surface,
+    Swizzle, SwizzleChannel, TargetFormat, TextureKind, compiled_in_encoders, format_short_name,
+    parse_format, split_cubemap,
 };
 
 pub use args::{
@@ -45,10 +45,8 @@ pub fn setup_logger(verbose: u8) {
 
 /// Run the CLI with already-parsed arguments.
 pub fn run(args: Args) -> Result<(), Box<dyn std::error::Error>> {
-    let registry = Arc::new(EncoderRegistry::default_registry());
-
     if args.list_encoders {
-        print_encoder_table(&registry);
+        print_encoder_table();
         return Ok(());
     }
 
@@ -114,7 +112,9 @@ pub fn run(args: Args) -> Result<(), Box<dyn std::error::Error>> {
     let target_format = args
         .format
         .as_deref()
-        .map(|s| parse_format(s, &registry))
+        .map(parse_format)
+        .transpose()?
+        .map(|tf| merge_encoder_flags(tf, &args))
         .transpose()?;
 
     let settings = ConvertSettings {
@@ -127,8 +127,6 @@ pub fn run(args: Args) -> Result<(), Box<dyn std::error::Error>> {
         mipmap: args.mipmap,
         mipmap_count: args.mipmap_count,
         mipmap_filter: map_mipmap_filter(args.mipmap_filter),
-        encoder_settings: build_encoder_settings(&args),
-        registry: Some(Arc::clone(&registry)),
     };
 
     let output_bytes = match ctt::convert(image, settings)? {
@@ -176,8 +174,8 @@ fn resolve_container(
     }
 }
 
-fn print_encoder_table(registry: &EncoderRegistry) {
-    let encoders = registry.encoders();
+fn print_encoder_table() {
+    let encoders: Vec<EncoderInfo> = compiled_in_encoders();
 
     if encoders.is_empty() {
         println!("No encoder backends are enabled.");
@@ -191,7 +189,7 @@ fn print_encoder_table(registry: &EncoderRegistry) {
     for (i, encoder) in encoders.iter().enumerate() {
         let mut formats = Vec::new();
         let mut has_astc = false;
-        for &f in encoder.supported_formats() {
+        for &f in encoder.supported_formats {
             if f.block_size().is_some() && f.is_compressed() {
                 let (bw, bh) = f.block_size().unwrap();
                 let is_astc = matches!(
@@ -246,12 +244,7 @@ fn print_encoder_table(registry: &EncoderRegistry) {
                 formats.push(format_short_name(f));
             }
         }
-        println!(
-            "{:<10} {:<12} {}",
-            encoder.name(),
-            i + 1,
-            formats.join(", ")
-        );
+        println!("{:<10} {:<12} {}", encoder.name, i + 1, formats.join(", "));
     }
 
     println!();
@@ -738,17 +731,61 @@ fn map_quality(q: QualityArg) -> Quality {
     }
 }
 
-fn build_encoder_settings(args: &Args) -> Option<Box<dyn ctt::encoders::EncoderSettings>> {
-    if args.alpha {
-        return Some(Box::new(ctt::encoders::ispc::IspcSettings { alpha: true }));
-    }
+/// Merge encoder-flavor flags (`--alpha`, `--dither`, `--heuristics`) into
+/// the [`Encoder`] already chosen by [`parse_format`]. Mismatched
+/// combinations error out instead of silently overriding the encoder choice.
+fn merge_encoder_flags(tf: TargetFormat, args: &Args) -> Result<TargetFormat, Error> {
+    let TargetFormat::Compressed { format, encoder } = tf else {
+        if args.alpha || args.dither || args.heuristics {
+            return Err(Error::UnsupportedFormat(
+                "--alpha/--dither/--heuristics require a compressed --format".into(),
+            ));
+        }
+        return Ok(tf);
+    };
+
+    let encoder = apply_flags(encoder, args)?;
+    Ok(TargetFormat::Compressed { format, encoder })
+}
+
+fn apply_flags(encoder: Encoder, args: &Args) -> Result<Encoder, Error> {
+    // Each flag belongs to exactly one backend. Reject when used with the
+    // wrong (or auto) encoder so the user is told explicitly which encoder
+    // a flag applies to instead of having it silently ignored.
+    let encoder = if args.alpha {
+        match encoder {
+            Encoder::Intel(mut s) => {
+                s.alpha = true;
+                Encoder::Intel(s)
+            }
+            _ => {
+                return Err(Error::UnsupportedFormat(
+                    "--alpha only applies when using the intel encoder \
+                     (e.g. --format intel_bc7)"
+                        .into(),
+                ));
+            }
+        }
+    } else {
+        encoder
+    };
+
     if args.dither || args.heuristics {
-        return Some(Box::new(ctt::encoders::etcpak::EtcpakSettings {
-            dither: args.dither,
-            use_heuristics: args.heuristics,
-        }));
+        match encoder {
+            Encoder::Etcpak(mut s) => {
+                s.dither = args.dither;
+                s.use_heuristics = args.heuristics;
+                Ok(Encoder::Etcpak(s))
+            }
+            _ => Err(Error::UnsupportedFormat(
+                "--dither/--heuristics only apply when using the etcpak encoder \
+                 (e.g. --format etcpak_etc2)"
+                    .into(),
+            )),
+        }
+    } else {
+        Ok(encoder)
     }
-    None
 }
 
 fn map_color_space(cs: ColorSpaceArg) -> ColorSpace {
