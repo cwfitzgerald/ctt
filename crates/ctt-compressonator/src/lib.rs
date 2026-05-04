@@ -140,7 +140,7 @@ where
 pub enum SimdExtension {
     None = 0,
     Sse4 = 1,
-    Avx2 = 2,
+    Avx = 2,
     Avx512 = 3,
 }
 
@@ -158,7 +158,9 @@ pub unsafe fn enable_sse4() -> Result<(), Error> {
 /// Must not be called concurrently with any compression/decompression
 /// operation or other SIMD control function. The underlying C library
 /// modifies global function pointers without synchronization.
-pub unsafe fn enable_avx2() -> Result<(), Error> {
+pub unsafe fn enable_avx() -> Result<(), Error> {
+    // Upstream C names this codepath AVX2 but its intrinsics are AVX1-only,
+    // so the Rust API gates and labels it as AVX.
     check(unsafe { bindings::EnableAVX2() })
 }
 
@@ -183,7 +185,8 @@ pub unsafe fn disable_simd() -> Result<(), Error> {
 pub fn enabled_simd_extension() -> SimdExtension {
     match unsafe { bindings::GetEnabledSIMDExtension() } {
         1 => SimdExtension::Sse4,
-        2 => SimdExtension::Avx2,
+        // Upstream returns 2 for what it calls AVX2; but the codepath is AVX1-only.
+        2 => SimdExtension::Avx,
         3 => SimdExtension::Avx512,
         _ => SimdExtension::None,
     }
@@ -198,7 +201,8 @@ fn ensure_init() {
         unsafe {
             if std::arch::is_x86_feature_detected!("avx512f") {
                 let _ = bindings::EnableAVX512();
-            } else if std::arch::is_x86_feature_detected!("avx2") {
+            } else if std::arch::is_x86_feature_detected!("avx") {
+                // Upstream's `EnableAVX2` codepath uses AVX1-only intrinsics.
                 let _ = bindings::EnableAVX2();
             } else if std::arch::is_x86_feature_detected!("sse4.1") {
                 let _ = bindings::EnableSSE4();

@@ -44,18 +44,14 @@ fn main() {
             "sse",
             "cmp_core_sse",
             "cpp/source/core_simd_sse.cpp",
-            if is_msvc { &[] } else { &["-march=nehalem"] },
+            if is_msvc { &[] } else { &["-msse4.1"] },
             &out_dir,
         );
         build_simd(
-            "avx2",
-            "cmp_core_avx2",
+            "avx",
+            "cmp_core_avx",
             "cpp/source/core_simd_avx.cpp",
-            if is_msvc {
-                &["/arch:AVX2"]
-            } else {
-                &["-march=haswell"]
-            },
+            if is_msvc { &["/arch:AVX"] } else { &["-mavx"] },
             &out_dir,
         );
         build_simd(
@@ -65,7 +61,7 @@ fn main() {
             if is_msvc {
                 &["/arch:AVX512"]
             } else {
-                &["-march=knl"]
+                &["-mavx512f"]
             },
             &out_dir,
         );
