@@ -314,11 +314,11 @@ typedef struct ctt_image ctt_image;
  *   the pointer is borrowed and becomes invalid once the output is freed.
  *
  * - `CTT_PIPELINE_OUTPUT_KIND_RAW` (only when `Container::Raw` was requested):
- *   the result is a processed [`ctt_image_t`]. Call
+ *   the result is a processed `ctt_image_t`. Call
  *   [`ctt_pipeline_output_take_image`] to transfer ownership to the caller;
  *   from then on, walk the image with `ctt_image_layer_count` /
  *   `ctt_image_mip_count` and the `ctt_image_surface_*` accessors. The taken
- *   image must be freed with [`ctt_image_destroy`].
+ *   image must be freed with `ctt_image_destroy`.
  *
  * Always destroy the output with [`ctt_pipeline_output_destroy`] when done,
  * even after taking the image out of a `Raw` output.
@@ -814,8 +814,8 @@ extern "C" {
  *
  * **Consumes** `image` on both success and failure — the handle must not be
  * destroyed by the caller after this call. On success, writes a freshly
- * allocated [`ctt_pipeline_output_t`] handle into `*out` (caller frees with
- * [`ctt_pipeline_output_destroy`]).
+ * allocated `ctt_pipeline_output_t` handle into `*out` (caller frees with
+ * `ctt_pipeline_output_destroy`).
  */
 
 ctt_status ctt_convert(ctt_image *image,
@@ -854,7 +854,7 @@ ctt_status ctt_convert(ctt_image *image,
  * new surface handles into `out_faces[0..6]`, in `+X, -X, +Y, -Y, +Z, -Z`
  * order. On failure leaves `out_faces` untouched.
  *
- * `out_faces` must point to space for six [`ctt_surface_t`] pointers.
+ * `out_faces` must point to space for six `ctt_surface_t` pointers.
  */
  ctt_status ctt_split_cubemap(ctt_cubemap_input *input, ctt_surface **out_faces);
 
@@ -893,7 +893,7 @@ ctt_status ctt_convert(ctt_image *image,
 /**
  * Push a mip level onto an existing layer. **Consumes** the surface — on
  * both success and failure the surface handle is destroyed; the caller
- * must not call [`ctt_surface_destroy`] on it.
+ * must not call `ctt_surface_destroy` on it.
  */
  ctt_status ctt_image_push_mip(ctt_image *img, size_t layer, ctt_surface *surface);
 
@@ -915,9 +915,9 @@ ctt_status ctt_convert(ctt_image *image,
  ctt_texture_kind ctt_image_kind(const ctt_image *img);
 
 /**
- * Allocate a freshly cloned [`ctt_surface_t`] for the surface at the given
+ * Allocate a freshly cloned `ctt_surface_t` for the surface at the given
  * `(layer, mip)` coordinates. The returned handle is independent of the
- * image and must be destroyed via [`ctt_surface_destroy`].
+ * image and must be destroyed via `ctt_surface_destroy`.
  *
  * Returns NULL if `img` is null or the indices are out of range. Cloning
  * copies pixel/block data, which can be expensive for large surfaces; use
@@ -1003,7 +1003,7 @@ ctt_status ctt_convert(ctt_image *image,
 /**
  * Decode a container, auto-detecting format from magic bytes.
  *
- * On success writes a freshly allocated [`ctt_image_t`] into `*out_image`.
+ * On success writes a freshly allocated `ctt_image_t` into `*out_image`.
  * `*out_recognized` (if non-null) is set to `true` when the data was a
  * recognized container; when it is `false`, `*out_image` is set to NULL
  * and the status code is `CTT_STATUS_OK` (not an error).
@@ -1053,7 +1053,7 @@ ctt_status ctt_decode_container_as(const uint8_t *data,
  size_t ctt_pipeline_output_encoded_len(const ctt_pipeline_output *out);
 
 /**
- * Take the [`ctt_image_t`] out of a `Raw` output, transferring ownership
+ * Take the `ctt_image_t` out of a `Raw` output, transferring ownership
  * to the caller. The output handle remains live for tag queries and must
  * still be destroyed via [`ctt_pipeline_output_destroy`], but a second
  * call to this function returns NULL.
