@@ -9,7 +9,7 @@ The crate produces both a static and a dynamic library and a hand-curated header
 Each archive contains `include/ctt.h`, the static and dynamic libraries under `lib/`, the runtime DLL under `bin/` (Windows only), and the project licenses.
 
 - **Tagged releases** — every `v*` tag publishes signed, attested archives named `ctt-c-api-<target>-<tag>.{zip,tar.gz}` on the [Releases page](https://github.com/cwfitzgerald/ctt/releases).
-- **Any commit on `trunk` or a PR branch** — the [CI workflow](https://github.com/cwfitzgerald/ctt/actions/workflows/ci.yml) uploads the same archives as per-target workflow artifacts named `release-<target>`. Open a run and download from the Artifacts section.
+- **Any commit on `trunk` or a PR branch** — the [CI workflow](https://github.com/cwfitzgerald/ctt/actions/workflows/ci.yml?query=branch%3Atrunk) uploads the same archives as per-target workflow artifacts named `release-<target>`. Open a run and download from the Artifacts section.
 
 Targets: `x86_64-pc-windows-msvc`, `aarch64-pc-windows-msvc`, `x86_64-apple-darwin`, `aarch64-apple-darwin`, `x86_64-unknown-linux-gnu`, `aarch64-unknown-linux-gnu`.
 
