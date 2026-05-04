@@ -223,6 +223,9 @@ jobs:
     # build-artifacts.yml with attestation enabled. Skip here to avoid a
     # duplicate matrix.
     if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+    permissions:
+      id-token: write
+      attestations: write
     uses: ./.github/workflows/build-artifacts.yml
     with:
       attest: false
