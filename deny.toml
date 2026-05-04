@@ -6,6 +6,7 @@ allow = [
   "CC0-1.0",
   "ISC",
   "MIT",
+  "MPL-2.0",
   "NCSA",
   "Unicode-3.0",
   "Unlicense",
@@ -15,6 +16,7 @@ allow = [
 [bans]
 multiple-versions = "deny"
 skip = [
+  { crate = "winnow@0.7.15", reason = "cbindgen uses toml; toml uses toml_parser. toml uses 0.7.15, toml_parser uses 1.1.2" },
   { crate = "itertools@0.13", reason = "bindgen uses 0.13, rav1e uses 0.14" },
   { crate = "nom@7", reason = "bindgen (via cexpr) uses 7, av1-grain uses 8" },
 ]

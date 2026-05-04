@@ -32,6 +32,19 @@ jobs:
           pattern: release-*
           merge-multiple: true
 
+      - name: Archive staged trees for release
+        shell: bash
+        run: |
+          shopt -s nullglob
+          for dir in ctt-cli-* ctt-c-api-*; do
+            [[ -d "$dir" ]] || continue
+            if [[ "$dir" == *windows* ]]; then
+              zip -r "${dir}.zip" "$dir"
+            else
+              tar czf "${dir}.tar.gz" "$dir"
+            fi
+          done
+
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:

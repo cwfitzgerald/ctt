@@ -357,8 +357,8 @@ pub extern "C" fn ctt_convert_settings_default() -> ConvertSettings {
 ///
 /// **Consumes** `image` on both success and failure — the handle must not be
 /// destroyed by the caller after this call. On success, writes a freshly
-/// allocated [`ctt_pipeline_output_t`] handle into `*out` (caller frees with
-/// [`ctt_pipeline_output_destroy`]).
+/// allocated `ctt_pipeline_output_t` handle into `*out` (caller frees with
+/// `ctt_pipeline_output_destroy`).
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn ctt_convert(
     image: *mut Image,

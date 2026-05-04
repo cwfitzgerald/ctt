@@ -85,7 +85,7 @@ pub unsafe extern "C" fn ctt_cubemap_input_destroy(input: *mut CubemapInput) {
 /// new surface handles into `out_faces[0..6]`, in `+X, -X, +Y, -Y, +Z, -Z`
 /// order. On failure leaves `out_faces` untouched.
 ///
-/// `out_faces` must point to space for six [`ctt_surface_t`] pointers.
+/// `out_faces` must point to space for six `ctt_surface_t` pointers.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn ctt_split_cubemap(
     input: *mut CubemapInput,

@@ -21,11 +21,11 @@ pub enum PipelineOutputKind {
 ///   the pointer is borrowed and becomes invalid once the output is freed.
 ///
 /// - `CTT_PIPELINE_OUTPUT_KIND_RAW` (only when `Container::Raw` was requested):
-///   the result is a processed [`ctt_image_t`]. Call
+///   the result is a processed `ctt_image_t`. Call
 ///   [`ctt_pipeline_output_take_image`] to transfer ownership to the caller;
 ///   from then on, walk the image with `ctt_image_layer_count` /
 ///   `ctt_image_mip_count` and the `ctt_image_surface_*` accessors. The taken
-///   image must be freed with [`ctt_image_destroy`].
+///   image must be freed with `ctt_image_destroy`.
 ///
 /// Always destroy the output with [`ctt_pipeline_output_destroy`] when done,
 /// even after taking the image out of a `Raw` output.
@@ -79,7 +79,7 @@ pub unsafe extern "C" fn ctt_pipeline_output_encoded_len(out: *const PipelineOut
     }
 }
 
-/// Take the [`ctt_image_t`] out of a `Raw` output, transferring ownership
+/// Take the `ctt_image_t` out of a `Raw` output, transferring ownership
 /// to the caller. The output handle remains live for tag queries and must
 /// still be destroyed via [`ctt_pipeline_output_destroy`], but a second
 /// call to this function returns NULL.

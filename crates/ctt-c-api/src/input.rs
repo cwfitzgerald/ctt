@@ -93,7 +93,7 @@ pub unsafe extern "C" fn ctt_detect_container(
 
 /// Decode a container, auto-detecting format from magic bytes.
 ///
-/// On success writes a freshly allocated [`ctt_image_t`] into `*out_image`.
+/// On success writes a freshly allocated `ctt_image_t` into `*out_image`.
 /// `*out_recognized` (if non-null) is set to `true` when the data was a
 /// recognized container; when it is `false`, `*out_image` is set to NULL
 /// and the status code is `CTT_STATUS_OK` (not an error).

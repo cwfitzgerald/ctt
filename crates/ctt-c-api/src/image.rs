@@ -48,7 +48,7 @@ pub unsafe extern "C" fn ctt_image_add_layer(img: *mut Image, out_layer: *mut us
 
 /// Push a mip level onto an existing layer. **Consumes** the surface — on
 /// both success and failure the surface handle is destroyed; the caller
-/// must not call [`ctt_surface_destroy`] on it.
+/// must not call `ctt_surface_destroy` on it.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn ctt_image_push_mip(
     img: *mut Image,
@@ -100,9 +100,9 @@ fn surface_at(img: &Image, layer: usize, mip: usize) -> Option<&ctt::Surface> {
     img.0.surfaces.get(layer)?.get(mip)
 }
 
-/// Allocate a freshly cloned [`ctt_surface_t`] for the surface at the given
+/// Allocate a freshly cloned `ctt_surface_t` for the surface at the given
 /// `(layer, mip)` coordinates. The returned handle is independent of the
-/// image and must be destroyed via [`ctt_surface_destroy`].
+/// image and must be destroyed via `ctt_surface_destroy`.
 ///
 /// Returns NULL if `img` is null or the indices are out of range. Cloning
 /// copies pixel/block data, which can be expensive for large surfaces; use

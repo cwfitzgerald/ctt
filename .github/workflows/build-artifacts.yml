@@ -87,30 +87,27 @@ jobs:
         # crate's [lib] section, i.e. both the cdylib and the staticlib.
         run: cargo build --release --target ${{ matrix.target }} -p ctt-c-api
 
-      - name: Package CLI
+      - name: Stage CLI
         shell: bash
         env:
           VERSION: ${{ inputs.version }}
         run: |
-          ARCHIVE_NAME="ctt-cli-${{ matrix.target }}-${VERSION}"
-          mkdir -p "${ARCHIVE_NAME}"
+          STAGE="ctt-cli-${{ matrix.target }}-${VERSION}"
+          mkdir -p "${STAGE}"
           if [[ "${{ matrix.target }}" == *windows* ]]; then
-            cp "target/${{ matrix.target }}/release/ctt.exe" "${ARCHIVE_NAME}/"
-            7z a "${ARCHIVE_NAME}.zip" "${ARCHIVE_NAME}"
+            cp "target/${{ matrix.target }}/release/ctt.exe" "${STAGE}/"
           else
-            cp "target/${{ matrix.target }}/release/ctt" "${ARCHIVE_NAME}/"
-            tar czf "${ARCHIVE_NAME}.tar.gz" "${ARCHIVE_NAME}"
+            cp "target/${{ matrix.target }}/release/ctt" "${STAGE}/"
           fi
 
-      - name: Package C API
+      - name: Stage C API
         shell: bash
         env:
           VERSION: ${{ inputs.version }}
         run: |
           TARGET="${{ matrix.target }}"
-          ARCHIVE_NAME="ctt-c-api-${TARGET}-${VERSION}"
+          STAGE="ctt-c-api-${TARGET}-${VERSION}"
           OUT_DIR="target/${TARGET}/release"
-          STAGE="${ARCHIVE_NAME}"
           mkdir -p "${STAGE}/include" "${STAGE}/lib" "${STAGE}/bin"
           cp crates/ctt-c-api/include/ctt.h "${STAGE}/include/"
           cp LICENSE-APACHE LICENSE-MIT LICENSE-ZLIB README.md "${STAGE}/"
@@ -118,15 +115,12 @@ jobs:
             cp "${OUT_DIR}/ctt_capi.dll" "${STAGE}/bin/"
             cp "${OUT_DIR}/ctt_capi.dll.lib" "${STAGE}/lib/"
             cp "${OUT_DIR}/ctt_capi.lib" "${STAGE}/lib/"
-            7z a "${ARCHIVE_NAME}.zip" "${STAGE}"
           elif [[ "${TARGET}" == *darwin* ]]; then
             cp "${OUT_DIR}/libctt_capi.dylib" "${STAGE}/lib/"
             cp "${OUT_DIR}/libctt_capi.a" "${STAGE}/lib/"
-            tar czf "${ARCHIVE_NAME}.tar.gz" "${STAGE}"
           else
             cp "${OUT_DIR}/libctt_capi.so" "${STAGE}/lib/"
             cp "${OUT_DIR}/libctt_capi.a" "${STAGE}/lib/"
-            tar czf "${ARCHIVE_NAME}.tar.gz" "${STAGE}"
           fi
 
       - name: Attest build provenance — CLI
@@ -164,5 +158,5 @@ jobs:
         with:
           name: release-${{ matrix.target }}
           path: |
-            ctt-cli-*
-            ctt-c-api-*
+            ctt-cli-${{ matrix.target }}-*
+            ctt-c-api-${{ matrix.target }}-*
