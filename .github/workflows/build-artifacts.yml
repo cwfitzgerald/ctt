@@ -1,0 +1,168 @@
+name: Build Artifacts
+
+on:
+  workflow_call:
+    inputs:
+      attest:
+        description: "Emit signed build provenance attestations for the produced artifacts."
+        type: boolean
+        default: false
+      version:
+        description: "Version string embedded in archive names (e.g. tag name on releases, short SHA on CI)."
+        type: string
+        required: true
+
+jobs:
+  build:
+    name: Build ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    permissions:
+      id-token: write
+      attestations: write
+    env:
+      CI_RUST_VERSION: "1.94"
+      ISPC_VERSION: "1.30.0"
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Linux x86_64
+            os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            ispc_asset_suffix: linux
+            ispc_ext: tar.gz
+          - name: Linux aarch64
+            os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            ispc_asset_suffix: linux.aarch64
+            ispc_ext: tar.gz
+          - name: macOS aarch64
+            os: macos-latest
+            target: aarch64-apple-darwin
+            ispc_asset_suffix: macOS.arm64
+            ispc_ext: tar.gz
+          - name: macOS x86_64
+            os: macos-latest
+            target: x86_64-apple-darwin
+            ispc_asset_suffix: macOS.arm64
+            ispc_ext: tar.gz
+          - name: Windows x86_64
+            os: windows-latest
+            target: x86_64-pc-windows-msvc
+            ispc_asset_suffix: windows
+            ispc_ext: zip
+          - name: Windows aarch64
+            os: windows-latest
+            target: aarch64-pc-windows-msvc
+            ispc_asset_suffix: windows
+            ispc_ext: zip
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+
+      - name: Install Rust
+        uses: cwfitzgerald/repo-common/.github/actions/install-rust@trunk
+        with:
+          version: ${{ env.CI_RUST_VERSION }}
+          targets: ${{ matrix.target }}
+
+      - name: Download ISPC
+        shell: bash
+        run: |
+          ISPC_ASSET="ispc-v${ISPC_VERSION}-${{ matrix.ispc_asset_suffix }}"
+          URL="https://github.com/ispc/ispc/releases/download/v${ISPC_VERSION}/${ISPC_ASSET}.${{ matrix.ispc_ext }}"
+          curl -L "$URL" -o "ispc_archive.${{ matrix.ispc_ext }}"
+          if [[ "${{ matrix.ispc_ext }}" == "zip" ]]; then
+            7z x "ispc_archive.zip" -oispc_extracted
+          else
+            mkdir -p ispc_extracted
+            tar xzf ispc_archive.tar.gz -C ispc_extracted
+          fi
+          echo "$GITHUB_WORKSPACE/ispc_extracted/${ISPC_ASSET}/bin" >> "$GITHUB_PATH"
+
+      - name: Build CLI
+        run: cargo build --release --target ${{ matrix.target }} -p ctt-cli
+
+      - name: Build C API (shared + static)
+        # `cargo build -p ctt-c-api` produces every crate-type listed in the
+        # crate's [lib] section, i.e. both the cdylib and the staticlib.
+        run: cargo build --release --target ${{ matrix.target }} -p ctt-c-api
+
+      - name: Package CLI
+        shell: bash
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          ARCHIVE_NAME="ctt-cli-${{ matrix.target }}-${VERSION}"
+          mkdir -p "${ARCHIVE_NAME}"
+          if [[ "${{ matrix.target }}" == *windows* ]]; then
+            cp "target/${{ matrix.target }}/release/ctt.exe" "${ARCHIVE_NAME}/"
+            7z a "${ARCHIVE_NAME}.zip" "${ARCHIVE_NAME}"
+          else
+            cp "target/${{ matrix.target }}/release/ctt" "${ARCHIVE_NAME}/"
+            tar czf "${ARCHIVE_NAME}.tar.gz" "${ARCHIVE_NAME}"
+          fi
+
+      - name: Package C API
+        shell: bash
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          TARGET="${{ matrix.target }}"
+          ARCHIVE_NAME="ctt-c-api-${TARGET}-${VERSION}"
+          OUT_DIR="target/${TARGET}/release"
+          STAGE="${ARCHIVE_NAME}"
+          mkdir -p "${STAGE}/include" "${STAGE}/lib" "${STAGE}/bin"
+          cp crates/ctt-c-api/include/ctt.h "${STAGE}/include/"
+          cp LICENSE-APACHE LICENSE-MIT LICENSE-ZLIB README.md "${STAGE}/"
+          if [[ "${TARGET}" == *windows* ]]; then
+            cp "${OUT_DIR}/ctt_capi.dll" "${STAGE}/bin/"
+            cp "${OUT_DIR}/ctt_capi.dll.lib" "${STAGE}/lib/"
+            cp "${OUT_DIR}/ctt_capi.lib" "${STAGE}/lib/"
+            7z a "${ARCHIVE_NAME}.zip" "${STAGE}"
+          elif [[ "${TARGET}" == *darwin* ]]; then
+            cp "${OUT_DIR}/libctt_capi.dylib" "${STAGE}/lib/"
+            cp "${OUT_DIR}/libctt_capi.a" "${STAGE}/lib/"
+            tar czf "${ARCHIVE_NAME}.tar.gz" "${STAGE}"
+          else
+            cp "${OUT_DIR}/libctt_capi.so" "${STAGE}/lib/"
+            cp "${OUT_DIR}/libctt_capi.a" "${STAGE}/lib/"
+            tar czf "${ARCHIVE_NAME}.tar.gz" "${STAGE}"
+          fi
+
+      - name: Attest build provenance — CLI
+        if: ${{ inputs.attest }}
+        uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # v4
+        with:
+          subject-path: target/${{ matrix.target }}/release/ctt${{ contains(matrix.target, 'windows') && '.exe' || '' }}
+
+      - name: Attest build provenance — C API (Windows)
+        if: ${{ inputs.attest && contains(matrix.target, 'windows') }}
+        uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # v4
+        with:
+          subject-path: |
+            target/${{ matrix.target }}/release/ctt_capi.dll
+            target/${{ matrix.target }}/release/ctt_capi.lib
+
+      - name: Attest build provenance — C API (macOS)
+        if: ${{ inputs.attest && contains(matrix.target, 'darwin') }}
+        uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # v4
+        with:
+          subject-path: |
+            target/${{ matrix.target }}/release/libctt_capi.dylib
+            target/${{ matrix.target }}/release/libctt_capi.a
+
+      - name: Attest build provenance — C API (Linux)
+        if: ${{ inputs.attest && contains(matrix.target, 'linux') }}
+        uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # v4
+        with:
+          subject-path: |
+            target/${{ matrix.target }}/release/libctt_capi.so
+            target/${{ matrix.target }}/release/libctt_capi.a
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-${{ matrix.target }}
+          path: |
+            ctt-cli-*
+            ctt-c-api-*

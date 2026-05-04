@@ -193,6 +193,41 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: cargo xtask verify-binaries
 
+  c-header-up-to-date:
+    name: C header up-to-date
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+
+      - name: Install Rust
+        uses: cwfitzgerald/repo-common/.github/actions/install-rust@trunk
+        with:
+          version: ${{ env.CI_RUST_VERSION }}
+
+      - name: Regenerate C header
+        run: cargo xtask generate-c-header
+
+      - name: Check for changes
+        shell: bash
+        run: |
+          if ! git diff --exit-code -- crates/ctt-c-api/include/ctt.h; then
+            echo ""
+            echo "ERROR: crates/ctt-c-api/include/ctt.h is out of date."
+            echo "Run 'cargo xtask generate-c-header' locally and commit the result."
+            exit 1
+          fi
+
+  build-artifacts:
+    name: Build artifacts
+    # Tag pushes invoke ci.yml via the publish workflow, which already runs
+    # build-artifacts.yml with attestation enabled. Skip here to avoid a
+    # duplicate matrix.
+    if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+    uses: ./.github/workflows/build-artifacts.yml
+    with:
+      attest: false
+      version: ci-${{ github.sha }}
+
   msrv:
     name: MSRV
     runs-on: ubuntu-latest
