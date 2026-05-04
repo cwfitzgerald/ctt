@@ -22,6 +22,42 @@ impl Linkage {
     }
 }
 
+/// System libs the Rust staticlib pulls in on Windows (MSVC). `msvcrt` is
+/// already linked via `/defaultlib` and pulls the C++ runtime with it.
+const MSVC_STATIC_SYS_LIBS: &[&str] = &[
+    "kernel32.lib",
+    "ntdll.lib",
+    "userenv.lib",
+    "ws2_32.lib",
+    "dbghelp.lib",
+    "advapi32.lib",
+];
+
+/// System libs the Rust staticlib pulls in on Linux. `-lstdc++` resolves the
+/// C++ symbols introduced by the astcenc / compressonator bundled C++ sources;
+/// the C compiler driver does not link it on its own.
+const LINUX_STATIC_SYS_LIBS: &[&str] = &[
+    "-lpthread",
+    "-ldl",
+    "-lm",
+    "-lrt",
+    "-lutil",
+    "-lgcc_s",
+    "-lstdc++",
+];
+
+/// System libs and frameworks the Rust staticlib pulls in on macOS. `-lc++`
+/// covers the same C++ object files described in [`LINUX_STATIC_SYS_LIBS`].
+const MACOS_STATIC_SYS_LIBS: &[&str] = &[
+    "-framework",
+    "Security",
+    "-framework",
+    "CoreFoundation",
+    "-liconv",
+    "-lresolv",
+    "-lc++",
+];
+
 fn artifacts_dir() -> PathBuf {
     let mut p = std::env::current_exe().expect("current_exe");
     p.pop();
@@ -58,6 +94,77 @@ fn collect_examples(dir: &Path) -> Vec<PathBuf> {
         .collect();
     out.sort();
     out
+}
+
+/// Pick the static-link system libs for the current host OS, or `&[]` for
+/// Windows (the MSVC path uses [`MSVC_STATIC_SYS_LIBS`] separately).
+fn unix_static_sys_libs() -> &'static [&'static str] {
+    if cfg!(target_os = "linux") {
+        LINUX_STATIC_SYS_LIBS
+    } else if cfg!(target_os = "macos") {
+        MACOS_STATIC_SYS_LIBS
+    } else {
+        &[]
+    }
+}
+
+/// Append `cl.exe`-style arguments to compile `c_file` and link it against
+/// `lib` with the appropriate system libs for `linkage`.
+fn add_msvc_args(
+    cmd: &mut Command,
+    c_file: &Path,
+    include_dir: &Path,
+    exe_path: &Path,
+    obj_dir: &Path,
+    lib: &Path,
+    linkage: Linkage,
+) {
+    let mut fo: OsString = "/Fo:".into();
+    fo.push(obj_dir.as_os_str());
+    fo.push("\\");
+    let mut fe: OsString = "/Fe:".into();
+    fe.push(exe_path.as_os_str());
+    let mut inc: OsString = "/I".into();
+    inc.push(include_dir.as_os_str());
+
+    cmd.arg(c_file)
+        .arg("/nologo")
+        .arg(inc)
+        .arg(fo)
+        .arg(fe)
+        .arg("/link")
+        .arg(lib);
+    if linkage == Linkage::Static {
+        cmd.args(MSVC_STATIC_SYS_LIBS);
+    }
+}
+
+/// Append gcc/clang-style arguments. Static linkage pulls in the platform's
+/// system libs; dynamic linkage embeds an rpath so the binary finds the
+/// shared object at runtime.
+fn add_unix_args(
+    cmd: &mut Command,
+    c_file: &Path,
+    include_dir: &Path,
+    exe_path: &Path,
+    lib: &Path,
+    lib_dir: &Path,
+    linkage: Linkage,
+) {
+    cmd.arg(c_file)
+        .arg("-I")
+        .arg(include_dir)
+        .arg("-o")
+        .arg(exe_path)
+        .arg(lib);
+    match linkage {
+        Linkage::Dynamic => {
+            cmd.arg(format!("-Wl,-rpath,{}", lib_dir.display()));
+        }
+        Linkage::Static => {
+            cmd.args(unix_static_sys_libs());
+        }
+    }
 }
 
 #[test]
@@ -105,59 +212,25 @@ fn c_examples_link_and_run() {
             if is_msvc {
                 let obj_dir = tmp_dir.join(format!("{stem}_{}", linkage.label()));
                 std::fs::create_dir_all(&obj_dir).expect("create obj dir");
-                let mut fo: OsString = "/Fo:".into();
-                fo.push(obj_dir.as_os_str());
-                fo.push("\\");
-                let mut fe: OsString = "/Fe:".into();
-                fe.push(exe_path.as_os_str());
-                cmd.arg(c_file)
-                    .arg("/nologo")
-                    .arg({
-                        let mut a: OsString = "/I".into();
-                        a.push(include_dir.as_os_str());
-                        a
-                    })
-                    .arg(fo)
-                    .arg(fe)
-                    .arg("/link")
-                    .arg(&lib);
-                if linkage == Linkage::Static {
-                    // System libs the Rust staticlib brings in. msvcrt is
-                    // already pulled in as /defaultlib.
-                    for sys in [
-                        "kernel32.lib",
-                        "ntdll.lib",
-                        "userenv.lib",
-                        "ws2_32.lib",
-                        "dbghelp.lib",
-                        "advapi32.lib",
-                    ] {
-                        cmd.arg(sys);
-                    }
-                }
+                add_msvc_args(
+                    &mut cmd,
+                    c_file,
+                    &include_dir,
+                    &exe_path,
+                    &obj_dir,
+                    &lib,
+                    linkage,
+                );
             } else {
-                cmd.arg(c_file)
-                    .arg("-I")
-                    .arg(&include_dir)
-                    .arg("-o")
-                    .arg(&exe_path)
-                    .arg(&lib);
-                if linkage == Linkage::Dynamic {
-                    cmd.arg(format!("-Wl,-rpath,{}", lib_dir.display()));
-                } else if cfg!(target_os = "linux") {
-                    for s in ["-lpthread", "-ldl", "-lm", "-lrt", "-lutil", "-lgcc_s"] {
-                        cmd.arg(s);
-                    }
-                } else if cfg!(target_os = "macos") {
-                    cmd.args([
-                        "-framework",
-                        "Security",
-                        "-framework",
-                        "CoreFoundation",
-                        "-liconv",
-                        "-lresolv",
-                    ]);
-                }
+                add_unix_args(
+                    &mut cmd,
+                    c_file,
+                    &include_dir,
+                    &exe_path,
+                    &lib,
+                    &lib_dir,
+                    linkage,
+                );
             }
 
             let output = cmd

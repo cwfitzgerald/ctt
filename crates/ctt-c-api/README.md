@@ -41,9 +41,11 @@ Add `crates/ctt-c-api/include` to the include path and `#include <ctt.h>`:
 
 Link the static archive plus the system libraries the Rust runtime pulls in.
 
-- Linux: `-lpthread -ldl -lm -lrt -lutil -lgcc_s`
-- macOS: `-framework Security -framework CoreFoundation -liconv -lresolv`
+- Linux: `-lpthread -ldl -lm -lrt -lutil -lgcc_s -lstdc++`
+- macOS: `-framework Security -framework CoreFoundation -liconv -lresolv -lc++`
 - Windows (MSVC): `kernel32.lib ntdll.lib userenv.lib ws2_32.lib dbghelp.lib advapi32.lib`
+
+The `astcenc` and `compressonator` encoders bundle C++ sources, so the C++ standard library must be linked. On Windows MSVC it is pulled in automatically by the default CRT; on Linux/macOS, link with `-lstdc++` / `-lc++` (or invoke the linker via the C++ driver, e.g. `g++` / `clang++`).
 
 ### Dynamic linking
 
