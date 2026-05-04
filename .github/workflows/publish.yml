@@ -10,98 +10,14 @@ jobs:
 
   build-release:
     needs: ci
-    name: Build ${{ matrix.name }}
-    runs-on: ${{ matrix.os }}
     permissions:
       id-token: write
       attestations: write
-    env:
-      CI_RUST_VERSION: "1.94"
-      ISPC_VERSION: "1.30.0"
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - name: Linux x86_64
-            os: ubuntu-latest
-            target: x86_64-unknown-linux-gnu
-            ispc_asset_suffix: linux
-            ispc_ext: tar.gz
-          - name: Linux aarch64
-            os: ubuntu-24.04-arm
-            target: aarch64-unknown-linux-gnu
-            ispc_asset_suffix: linux.aarch64
-            ispc_ext: tar.gz
-          - name: macOS aarch64
-            os: macos-latest
-            target: aarch64-apple-darwin
-            ispc_asset_suffix: macOS.arm64
-            ispc_ext: tar.gz
-          - name: macOS x86_64
-            os: macos-latest
-            target: x86_64-apple-darwin
-            ispc_asset_suffix: macOS.arm64
-            ispc_ext: tar.gz
-          - name: Windows x86_64
-            os: windows-latest
-            target: x86_64-pc-windows-msvc
-            ispc_asset_suffix: windows
-            ispc_ext: zip
-          - name: Windows aarch64
-            os: windows-latest
-            target: aarch64-pc-windows-msvc
-            ispc_asset_suffix: windows
-            ispc_ext: zip
-    steps:
-      - uses: actions/checkout@v6
-
-      - name: Install Rust
-        uses: cwfitzgerald/repo-common/.github/actions/install-rust@trunk
-        with:
-          version: ${{ env.CI_RUST_VERSION }}
-          targets: ${{ matrix.target }}
-
-      - name: Download ISPC
-        shell: bash
-        run: |
-          ISPC_ASSET="ispc-v${ISPC_VERSION}-${{ matrix.ispc_asset_suffix }}"
-          URL="https://github.com/ispc/ispc/releases/download/v${ISPC_VERSION}/${ISPC_ASSET}.${{ matrix.ispc_ext }}"
-          curl -L "$URL" -o "ispc_archive.${{ matrix.ispc_ext }}"
-          if [[ "${{ matrix.ispc_ext }}" == "zip" ]]; then
-            7z x "ispc_archive.zip" -oispc_extracted
-          else
-            mkdir -p ispc_extracted
-            tar xzf ispc_archive.tar.gz -C ispc_extracted
-          fi
-          echo "$GITHUB_WORKSPACE/ispc_extracted/${ISPC_ASSET}/bin" >> "$GITHUB_PATH"
-
-      - name: Build
-        run: cargo build --release --target ${{ matrix.target }} -p ctt-cli
-
-      - name: Package
-        shell: bash
-        run: |
-          VERSION="${GITHUB_REF_NAME}"
-          ARCHIVE_NAME="ctt-cli-${{ matrix.target }}-${VERSION}"
-          mkdir -p "${ARCHIVE_NAME}"
-          if [[ "${{ matrix.target }}" == *windows* ]]; then
-            cp "target/${{ matrix.target }}/release/ctt.exe" "${ARCHIVE_NAME}/"
-            7z a "${ARCHIVE_NAME}.zip" "${ARCHIVE_NAME}"
-          else
-            cp "target/${{ matrix.target }}/release/ctt" "${ARCHIVE_NAME}/"
-            tar czf "${ARCHIVE_NAME}.tar.gz" "${ARCHIVE_NAME}"
-          fi
-
-      - name: Attest build provenance
-        uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # v4
-        with:
-          subject-path: target/${{ matrix.target }}/release/ctt${{ contains(matrix.target, 'windows') && '.exe' || '' }}
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v7
-        with:
-          name: release-${{ matrix.target }}
-          path: ctt-cli-*
+      contents: read
+    uses: ./.github/workflows/build-artifacts.yml
+    with:
+      attest: true
+      version: ${{ github.ref_name }}
 
   publish:
     needs: build-release
@@ -116,10 +32,25 @@ jobs:
           pattern: release-*
           merge-multiple: true
 
+      - name: Archive staged trees for release
+        shell: bash
+        run: |
+          shopt -s nullglob
+          for dir in ctt-cli-* ctt-c-api-*; do
+            [[ -d "$dir" ]] || continue
+            if [[ "$dir" == *windows* ]]; then
+              zip -r "${dir}.zip" "$dir"
+            else
+              tar czf "${dir}.tar.gz" "$dir"
+            fi
+          done
+
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
           files: |
             ctt-cli-*.tar.gz
             ctt-cli-*.zip
+            ctt-c-api-*.tar.gz
+            ctt-c-api-*.zip
           generate_release_notes: true

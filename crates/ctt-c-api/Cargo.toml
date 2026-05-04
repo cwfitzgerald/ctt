@@ -1,0 +1,44 @@
+[package]
+name = "ctt-c-api"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+readme = "README.md"
+description = "C bindings for the ctt texture compression library"
+keywords = ["texture", "compression", "gpu", "ffi", "c-api"]
+categories = ["graphics", "compression", "external-ffi-bindings"]
+
+[lib]
+# Distinct from ctt-cli's `ctt` binary so the workspace target dir doesn't
+# collide on .pdb / .d files; consumers link against `libctt_capi`.
+name = "ctt_capi"
+crate-type = ["cdylib", "staticlib", "rlib"]
+
+[features]
+default = [
+  "encoder-amd",
+  "encoder-astcenc",
+  "encoder-bc7enc",
+  "encoder-etcpak",
+  "encoder-intel",
+  "ispc-prebuilt",
+]
+encoder-amd = ["ctt/encoder-amd"]
+encoder-astcenc = ["ctt/encoder-astcenc"]
+encoder-bc7enc = ["ctt/encoder-bc7enc"]
+encoder-etcpak = ["ctt/encoder-etcpak"]
+encoder-intel = ["ctt/encoder-intel"]
+ispc-prebuilt = ["ctt/ispc-prebuilt"]
+ispc-build-from-source = ["ctt/ispc-build-from-source"]
+
+[dependencies]
+ctt = { workspace = true }
+
+[dev-dependencies]
+cc = { workspace = true }
+
+[lints]
+workspace = true
