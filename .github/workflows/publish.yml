@@ -75,10 +75,15 @@ jobs:
           fi
           echo "$GITHUB_WORKSPACE/ispc_extracted/${ISPC_ASSET}/bin" >> "$GITHUB_PATH"
 
-      - name: Build
+      - name: Build CLI
         run: cargo build --release --target ${{ matrix.target }} -p ctt-cli
 
-      - name: Package
+      - name: Build C API (shared + static)
+        # `cargo build -p ctt-c-api` produces every crate-type listed in the
+        # crate's [lib] section, i.e. both the cdylib and the staticlib.
+        run: cargo build --release --target ${{ matrix.target }} -p ctt-c-api
+
+      - name: Package CLI
         shell: bash
         run: |
           VERSION="${GITHUB_REF_NAME}"
@@ -92,16 +97,68 @@ jobs:
             tar czf "${ARCHIVE_NAME}.tar.gz" "${ARCHIVE_NAME}"
           fi
 
-      - name: Attest build provenance
+      - name: Package C API
+        shell: bash
+        run: |
+          VERSION="${GITHUB_REF_NAME}"
+          TARGET="${{ matrix.target }}"
+          ARCHIVE_NAME="ctt-c-api-${TARGET}-${VERSION}"
+          OUT_DIR="target/${TARGET}/release"
+          STAGE="${ARCHIVE_NAME}"
+          mkdir -p "${STAGE}/include" "${STAGE}/lib" "${STAGE}/bin"
+          cp crates/ctt-c-api/include/ctt.h "${STAGE}/include/"
+          cp LICENSE-APACHE LICENSE-MIT LICENSE-ZLIB README.md "${STAGE}/"
+          if [[ "${TARGET}" == *windows* ]]; then
+            cp "${OUT_DIR}/ctt_capi.dll" "${STAGE}/bin/"
+            cp "${OUT_DIR}/ctt_capi.dll.lib" "${STAGE}/lib/"
+            cp "${OUT_DIR}/ctt_capi.lib" "${STAGE}/lib/"
+            7z a "${ARCHIVE_NAME}.zip" "${STAGE}"
+          elif [[ "${TARGET}" == *darwin* ]]; then
+            cp "${OUT_DIR}/libctt_capi.dylib" "${STAGE}/lib/"
+            cp "${OUT_DIR}/libctt_capi.a" "${STAGE}/lib/"
+            tar czf "${ARCHIVE_NAME}.tar.gz" "${STAGE}"
+          else
+            cp "${OUT_DIR}/libctt_capi.so" "${STAGE}/lib/"
+            cp "${OUT_DIR}/libctt_capi.a" "${STAGE}/lib/"
+            tar czf "${ARCHIVE_NAME}.tar.gz" "${STAGE}"
+          fi
+
+      - name: Attest build provenance — CLI
         uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # v4
         with:
           subject-path: target/${{ matrix.target }}/release/ctt${{ contains(matrix.target, 'windows') && '.exe' || '' }}
+
+      - name: Attest build provenance — C API (Windows)
+        if: contains(matrix.target, 'windows')
+        uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # v4
+        with:
+          subject-path: |
+            target/${{ matrix.target }}/release/ctt_capi.dll
+            target/${{ matrix.target }}/release/ctt_capi.lib
+
+      - name: Attest build provenance — C API (macOS)
+        if: contains(matrix.target, 'darwin')
+        uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # v4
+        with:
+          subject-path: |
+            target/${{ matrix.target }}/release/libctt_capi.dylib
+            target/${{ matrix.target }}/release/libctt_capi.a
+
+      - name: Attest build provenance — C API (Linux)
+        if: contains(matrix.target, 'linux')
+        uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # v4
+        with:
+          subject-path: |
+            target/${{ matrix.target }}/release/libctt_capi.so
+            target/${{ matrix.target }}/release/libctt_capi.a
 
       - name: Upload artifact
         uses: actions/upload-artifact@v7
         with:
           name: release-${{ matrix.target }}
-          path: ctt-cli-*
+          path: |
+            ctt-cli-*
+            ctt-c-api-*
 
   publish:
     needs: build-release
@@ -122,4 +179,6 @@ jobs:
           files: |
             ctt-cli-*.tar.gz
             ctt-cli-*.zip
+            ctt-c-api-*.tar.gz
+            ctt-c-api-*.zip
           generate_release_notes: true

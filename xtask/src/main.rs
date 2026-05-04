@@ -4,6 +4,7 @@ use clap::{Parser, Subcommand};
 
 mod build_ispc;
 mod generate_bindings;
+mod generate_c_header;
 mod util;
 mod vendor;
 mod verify_binaries;
@@ -25,6 +26,9 @@ enum Cmd {
     ///
     /// Requires ISPC to be installed (for bc7e bindings).
     GenerateBindings,
+    /// Regenerate the C header (`crates/ctt-c-api/include/ctt.h`) from the
+    /// `ctt-c-api` Rust crate using cbindgen.
+    GenerateCHeader,
     /// Vendor third-party source code into crate directories.
     ///
     /// With no subcommand, vendors all targets.
@@ -38,6 +42,7 @@ fn main() -> ExitCode {
         Cmd::VerifyBinaries => verify_binaries::verify_binaries(),
         Cmd::BuildIspc(args) => build_ispc::build_ispc(args),
         Cmd::GenerateBindings => generate_bindings::generate_bindings(),
+        Cmd::GenerateCHeader => generate_c_header::generate_c_header(),
         Cmd::Vendor(args) => vendor::vendor(args),
     };
 

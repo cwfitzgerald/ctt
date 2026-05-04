@@ -1,0 +1,203 @@
+//! Compile every C file under `examples/` with the platform compiler (via
+//! the `cc` crate's toolchain detection), link it once against the static
+//! `libctt_capi` and once against the dynamic library, and run the resulting
+//! binary. Failure to compile, link, or run is a test failure.
+
+use std::ffi::OsString;
+use std::path::{Path, PathBuf};
+use std::process::Command;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Linkage {
+    Static,
+    Dynamic,
+}
+
+impl Linkage {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Static => "static",
+            Self::Dynamic => "dynamic",
+        }
+    }
+}
+
+fn artifacts_dir() -> PathBuf {
+    let mut p = std::env::current_exe().expect("current_exe");
+    p.pop();
+    if p.file_name().and_then(|n| n.to_str()) == Some("deps") {
+        p.pop();
+    }
+    p
+}
+
+fn lib_path(dir: &Path, linkage: Linkage) -> PathBuf {
+    if cfg!(target_os = "windows") && cfg!(target_env = "msvc") {
+        match linkage {
+            Linkage::Static => dir.join("ctt_capi.lib"),
+            Linkage::Dynamic => dir.join("ctt_capi.dll.lib"),
+        }
+    } else if cfg!(target_os = "windows") {
+        match linkage {
+            Linkage::Static => dir.join("libctt_capi.a"),
+            Linkage::Dynamic => dir.join("libctt_capi.dll.a"),
+        }
+    } else if cfg!(target_os = "macos") {
+        match linkage {
+            Linkage::Static => dir.join("libctt_capi.a"),
+            Linkage::Dynamic => dir.join("libctt_capi.dylib"),
+        }
+    } else {
+        match linkage {
+            Linkage::Static => dir.join("libctt_capi.a"),
+            Linkage::Dynamic => dir.join("libctt_capi.so"),
+        }
+    }
+}
+
+fn collect_examples(dir: &Path) -> Vec<PathBuf> {
+    let mut out: Vec<PathBuf> = std::fs::read_dir(dir)
+        .unwrap_or_else(|e| panic!("read_dir({}): {e}", dir.display()))
+        .filter_map(|e| e.ok().map(|e| e.path()))
+        .filter(|p| p.extension().is_some_and(|e| e == "c"))
+        .collect();
+    out.sort();
+    out
+}
+
+#[test]
+fn c_examples_link_and_run() {
+    let crate_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let tmp_dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR"));
+    let target = env!("CTT_C_API_TARGET");
+    let host = env!("CTT_C_API_HOST");
+    let lib_dir = artifacts_dir();
+    let include_dir = crate_dir.join("include");
+    let example_dir = crate_dir.join("examples");
+    let examples = collect_examples(&example_dir);
+    assert!(
+        !examples.is_empty(),
+        "no .c examples in {}",
+        example_dir.display()
+    );
+
+    let tool = cc::Build::new()
+        .target(target)
+        .host(host)
+        .opt_level(0)
+        .cargo_metadata(false)
+        .cargo_warnings(false)
+        .get_compiler();
+    let is_msvc = tool.is_like_msvc();
+    let exe_suffix = if cfg!(windows) { ".exe" } else { "" };
+
+    for c_file in &examples {
+        let stem = c_file
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .expect("example file_stem");
+        for &linkage in &[Linkage::Static, Linkage::Dynamic] {
+            let exe_name = format!("{stem}_{}{exe_suffix}", linkage.label());
+            let exe_path = tmp_dir.join(&exe_name);
+            let lib = lib_path(&lib_dir, linkage);
+            assert!(
+                lib.exists(),
+                "expected {linkage:?} library at `{}` — run `cargo build -p ctt-c-api` first",
+                lib.display()
+            );
+
+            let mut cmd = tool.to_command();
+            if is_msvc {
+                let obj_dir = tmp_dir.join(format!("{stem}_{}", linkage.label()));
+                std::fs::create_dir_all(&obj_dir).expect("create obj dir");
+                let mut fo: OsString = "/Fo:".into();
+                fo.push(obj_dir.as_os_str());
+                fo.push("\\");
+                let mut fe: OsString = "/Fe:".into();
+                fe.push(exe_path.as_os_str());
+                cmd.arg(c_file)
+                    .arg("/nologo")
+                    .arg({
+                        let mut a: OsString = "/I".into();
+                        a.push(include_dir.as_os_str());
+                        a
+                    })
+                    .arg(fo)
+                    .arg(fe)
+                    .arg("/link")
+                    .arg(&lib);
+                if linkage == Linkage::Static {
+                    // System libs the Rust staticlib brings in. msvcrt is
+                    // already pulled in as /defaultlib.
+                    for sys in [
+                        "kernel32.lib",
+                        "ntdll.lib",
+                        "userenv.lib",
+                        "ws2_32.lib",
+                        "dbghelp.lib",
+                        "advapi32.lib",
+                    ] {
+                        cmd.arg(sys);
+                    }
+                }
+            } else {
+                cmd.arg(c_file)
+                    .arg("-I")
+                    .arg(&include_dir)
+                    .arg("-o")
+                    .arg(&exe_path)
+                    .arg(&lib);
+                if linkage == Linkage::Dynamic {
+                    cmd.arg(format!("-Wl,-rpath,{}", lib_dir.display()));
+                } else if cfg!(target_os = "linux") {
+                    for s in ["-lpthread", "-ldl", "-lm", "-lrt", "-lutil", "-lgcc_s"] {
+                        cmd.arg(s);
+                    }
+                } else if cfg!(target_os = "macos") {
+                    cmd.args([
+                        "-framework",
+                        "Security",
+                        "-framework",
+                        "CoreFoundation",
+                        "-liconv",
+                        "-lresolv",
+                    ]);
+                }
+            }
+
+            let output = cmd
+                .output()
+                .unwrap_or_else(|e| panic!("spawn {cmd:?}: {e}"));
+            assert!(
+                output.status.success(),
+                "compile failed for `{}` ({:?})\ncommand: {:?}\n--stdout--\n{}\n--stderr--\n{}",
+                c_file.display(),
+                linkage,
+                cmd,
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr),
+            );
+
+            let mut run = Command::new(&exe_path);
+            run.current_dir(&tmp_dir);
+            if linkage == Linkage::Dynamic && cfg!(windows) {
+                let mut new_path = OsString::from(lib_dir.as_os_str());
+                new_path.push(";");
+                new_path.push(std::env::var_os("PATH").unwrap_or_default());
+                run.env("PATH", new_path);
+            }
+            let output = run
+                .output()
+                .unwrap_or_else(|e| panic!("spawn {exe_path:?}: {e}"));
+            assert!(
+                output.status.success(),
+                "binary `{}` ({:?}) exited with status {:?}\n--stdout--\n{}\n--stderr--\n{}",
+                exe_path.display(),
+                linkage,
+                output.status,
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr),
+            );
+        }
+    }
+}
