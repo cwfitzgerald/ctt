@@ -2,7 +2,7 @@
 
 [![docs.rs](https://img.shields.io/docsrs/ctt)](https://docs.rs/ctt)
 
-A Rust library and CLI for GPU texture compression. ctt provides a unified interface over multiple encoder backends.
+A Rust library with [C bindings](#c-api), and CLI for GPU texture compression. ctt provides a unified interface over multiple encoder backends.
 
 ## Encoders
 
@@ -109,6 +109,10 @@ let ktx2_bytes = convert(image, ConvertSettings {
 ```
 
 See the [API documentation](https://docs.rs/ctt) for the full `ConvertSettings` options and the lower-level pipeline API.
+
+## C API
+
+C bindings are available as a separate crate. See [`crates/ctt-c-api/README.md`](crates/ctt-c-api/README.md) for build, link, and usage instructions; the full API reference lives in the generated header at `crates/ctt-c-api/include/ctt.h`.
 
 ## CLI usage
 

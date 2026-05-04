@@ -32,15 +32,10 @@ fn artifacts_dir() -> PathBuf {
 }
 
 fn lib_path(dir: &Path, linkage: Linkage) -> PathBuf {
-    if cfg!(target_os = "windows") && cfg!(target_env = "msvc") {
+    if cfg!(target_os = "windows") {
         match linkage {
             Linkage::Static => dir.join("ctt_capi.lib"),
             Linkage::Dynamic => dir.join("ctt_capi.dll.lib"),
-        }
-    } else if cfg!(target_os = "windows") {
-        match linkage {
-            Linkage::Static => dir.join("libctt_capi.a"),
-            Linkage::Dynamic => dir.join("libctt_capi.dll.a"),
         }
     } else if cfg!(target_os = "macos") {
         match linkage {

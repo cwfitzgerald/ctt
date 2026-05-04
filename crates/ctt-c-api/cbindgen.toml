@@ -115,7 +115,16 @@ usize_is_size_t = true
 parse_deps = false
 
 [export]
-item_types = ["constants", "globals", "enums", "structs", "unions", "typedefs", "opaque", "functions"]
+item_types = [
+  "constants",
+  "globals",
+  "enums",
+  "structs",
+  "unions",
+  "typedefs",
+  "opaque",
+  "functions",
+]
 
 [export.rename]
 "Surface" = "ctt_surface"
