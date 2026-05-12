@@ -19,7 +19,13 @@ pub(crate) trait Encoder {
 
     fn name() -> &'static str;
     fn supported_formats() -> &'static [ktx2::Format];
-    fn required_input_format(format: ktx2::Format) -> ktx2::Format;
+    /// Pixel format the encoder expects to receive in `compress`.
+    ///
+    /// Most encoders only depend on the target format, but some (notably
+    /// astcenc, whose input type varies between LDR and HDR) also need the
+    /// caller's settings to decide. Implementations that don't care can
+    /// ignore `settings`.
+    fn required_input_format(format: ktx2::Format, settings: &Self::Settings) -> ktx2::Format;
     fn compress(
         surface: &Surface,
         format: ktx2::Format,

@@ -113,6 +113,35 @@
 #include <stddef.h>
 
 /**
+ * Layout of a normal map's X and Y across the four input channels.
+ *
+ * **Only meaningful when the enclosing `ctt_astcenc_usage` has tag
+ * `CTT_ASTCENC_USAGE_NORMAL_MAP`.** For every other usage, the swizzle is
+ * determined by the data shape (single-channel, two-channel, color, ...)
+ * and this field is ignored.
+ *
+ * astcenc encodes only X and Y; the shader reconstructs Z as
+ * `sqrt(1 - x*x - y*y)`. Pick the variant that matches your shader's
+ * sample swizzle:
+ *
+ *   - `ASTC_DEFAULT` (`rrrg`) — the astcenc default. X is replicated into
+ *     RGB and Y is in alpha.
+ *   - `BC5_COMPAT` (`gggr`) — matches BC5n's layout so existing BC5n
+ *     shader code keeps working after the swap to ASTC.
+ */
+enum ctt_astcenc_normal_swizzle
+#ifdef __cplusplus
+  : uint8_t
+#endif // __cplusplus
+ {
+    CTT_ASTCENC_NORMAL_SWIZZLE_ASTC_DEFAULT = 0,
+    CTT_ASTCENC_NORMAL_SWIZZLE_BC5_COMPAT = 1,
+};
+#ifndef __cplusplus
+typedef uint8_t ctt_astcenc_normal_swizzle;
+#endif // __cplusplus
+
+/**
  * Universal quality preset all encoders understand.
  */
 enum ctt_quality
@@ -378,10 +407,206 @@ typedef struct {
 } ctt_amd_settings;
 
 /**
- * Settings for the `astcenc` encoder. Currently no fields are exposed.
+ * What the texture data represents. Drives profile, flag bits, and swizzle.
+ *
+ * Picking the right usage is the most important quality lever — it avoids
+ * wasting encoding bits on components the asset doesn't actually need.
+ */
+enum ctt_astcenc_usage_Tag
+#ifdef __cplusplus
+  : uint8_t
+#endif // __cplusplus
+ {
+    /**
+     * Generic color (LDR or LDR sRGB based on the surface's color space).
+     */
+    CTT_ASTCENC_USAGE_COLOR,
+    /**
+     * 2-channel tangent-space normal map. Sets `MAP_NORMAL`.
+     */
+    CTT_ASTCENC_USAGE_NORMAL_MAP,
+    /**
+     * Single-channel mask (roughness, AO, height); only red is encoded.
+     */
+    CTT_ASTCENC_USAGE_SINGLE_CHANNEL,
+    /**
+     * Two-channel mask (e.g. metallic+roughness); only red and green are encoded.
+     */
+    CTT_ASTCENC_USAGE_TWO_CHANNEL,
+    /**
+     * HDR RGB + LDR alpha. Requires fp16 input.
+     */
+    CTT_ASTCENC_USAGE_HDR_RGB,
+    /**
+     * All-HDR RGBA. Requires fp16 input.
+     */
+    CTT_ASTCENC_USAGE_HDR_RGBA,
+    /**
+     * HDR data preprocessed into LDR RGBM form. Sets `MAP_RGBM`.
+     *
+     * RGBM is a "fake HDR" packing: HDR color is stored in a 4-channel
+     * LDR texture where RGB holds a normalized color and the M (alpha)
+     * channel holds a per-pixel shared multiplier. The shader
+     * reconstructs the HDR value as `rgb * m * rgbm_m_scale`. Use this to
+     * ship HDR-ish content through formats and platforms that only
+     * support LDR sampling (lightmaps, reflection probes, low-end mobile,
+     * any pipeline where true fp16/HDR textures aren't an option).
+     * Trade-offs: banding in highlights, a fixed dynamic range capped at
+     * `rgbm_m_scale`, and a hard floor on `m` (values that quantize to
+     * zero produce black or NaN pixels).
+     *
+     * **The caller must do the RGBM packing before passing the surface
+     * in** — this tag only flips on codec heuristics. Tune the scale via
+     * `ctt_astcenc_settings.rgbm_m_scale` and follow the upstream
+     * guidance to floor `m` at ~16/255 or 32/255 before encoding.
+     */
+    CTT_ASTCENC_USAGE_RGBM,
+};
+#ifndef __cplusplus
+typedef uint8_t ctt_astcenc_usage_Tag;
+#endif // __cplusplus
+
+typedef struct {
+    ctt_astcenc_usage_Tag tag;
+    union {
+        struct {
+            ctt_astcenc_normal_swizzle normal_map;
+        };
+    };
+} ctt_astcenc_usage;
+
+/**
+ * astcenc effort preset. `CUSTOM` carries any value in `[0.0, 100.0]`.
+ */
+enum ctt_astcenc_preset_Tag
+#ifdef __cplusplus
+  : uint8_t
+#endif // __cplusplus
+ {
+    /**
+     * 0.0 — fastest, lowest quality.
+     */
+    CTT_ASTCENC_PRESET_FASTEST,
+    /**
+     * 10.0 — fast.
+     */
+    CTT_ASTCENC_PRESET_FAST,
+    /**
+     * 60.0 — medium.
+     */
+    CTT_ASTCENC_PRESET_MEDIUM,
+    /**
+     * 98.0 — thorough.
+     */
+    CTT_ASTCENC_PRESET_THOROUGH,
+    /**
+     * 99.0 — very thorough.
+     */
+    CTT_ASTCENC_PRESET_VERY_THOROUGH,
+    /**
+     * 100.0 — exhaustive, highest quality.
+     */
+    CTT_ASTCENC_PRESET_EXHAUSTIVE,
+    /**
+     * Any value in `[0.0, 100.0]`; clamped on use.
+     */
+    CTT_ASTCENC_PRESET_CUSTOM,
+};
+#ifndef __cplusplus
+typedef uint8_t ctt_astcenc_preset_Tag;
+#endif // __cplusplus
+
+typedef struct {
+    ctt_astcenc_preset_Tag tag;
+    union {
+        struct {
+            float custom;
+        };
+    };
+} ctt_astcenc_preset;
+
+/**
+ * Optional [`AstcencPreset`] (matches Rust's `Option<AstcencPreset>`).
  */
 typedef struct {
-    uint8_t _reserved;
+    bool present;
+    ctt_astcenc_preset value;
+} ctt_optional_astcenc_preset;
+
+/**
+ * Optional per-channel error weights `[r, g, b, a]`.
+ */
+typedef struct {
+    bool present;
+    float value[4];
+} ctt_optional_channel_weights;
+
+/**
+ * Optional 32-bit float (matches Rust's `Option<f32>`).
+ */
+typedef struct {
+    bool present;
+    float value;
+} ctt_optional_f32;
+
+/**
+ * Settings for the `astcenc` encoder.
+ *
+ * `usage` is the single most important field — it picks the profile, flags,
+ * and input swizzle automatically. The bool fields toggle orthogonal codec
+ * features; the optional fields override codec defaults only when present.
+ */
+typedef struct {
+    /**
+     * What the texture represents. See [`AstcencUsage`].
+     */
+    ctt_astcenc_usage usage;
+    /**
+     * Override the quality preset that would otherwise be derived from
+     * `ctt_convert_settings.quality`.
+     */
+    ctt_optional_astcenc_preset preset;
+    /**
+     * Weight RGB error by alpha — improves alpha precision in transparent
+     * regions at the cost of RGB fidelity there.
+     */
+    bool use_alpha_weight;
+    /**
+     * Optimize for perceptual error rather than PSNR. Only meaningful for
+     * color and normal-map usages.
+     */
+    bool perceptual;
+    /**
+     * Tune for the `decode_unorm8` ASTC decode mode instead of `decode_fp16`.
+     *
+     * ASTC blocks can be expanded by the GPU two ways: as fp16 (the
+     * historical default, exact intermediate values) or as unorm8
+     * (rounded to 8-bit during decode). The two paths round differently
+     * in the last bit, so the encoder picks slightly different bit
+     * patterns to land on whichever the runtime will use. Mismatched
+     * flag + decode mode costs a small amount of quality; matched gains
+     * it back.
+     *
+     * Set this when the texture will be sampled as a unorm8 texel format
+     * at runtime — the common case for color textures on mobile and most
+     * modern desktop pipelines. Leave it off for HDR content sampled as
+     * fp16. LDR sRGB always decodes via unorm8 regardless, so this flag
+     * is a no-op for sRGB color usages.
+     */
+    bool decode_unorm8;
+    /**
+     * Custom per-channel error weights. Higher values spend more bits on
+     * that channel; leave absent to keep codec defaults.
+     */
+    ctt_optional_channel_weights channel_weights;
+    /**
+     * Override the RGBM shared-multiplier scale (default 5.0). Ignored
+     * unless `usage.tag == CTT_ASTCENC_USAGE_RGBM`. See
+     * [`AstcencUsage::Rgbm`] for what RGBM is and why you'd use it. When
+     * raising this, also bump `channel_weights.value[3]` to roughly
+     * `2 * scale` so the M channel stays accurate.
+     */
+    ctt_optional_f32 rgbm_m_scale;
 } ctt_astcenc_settings;
 
 /**
@@ -799,6 +1024,9 @@ extern "C" {
 
  ctt_amd_settings ctt_amd_settings_default(void);
 
+/**
+ * Default settings: `Color` usage, codec defaults for everything else.
+ */
  ctt_astcenc_settings ctt_astcenc_settings_default(void);
 
  ctt_encoder ctt_encoder_auto(void);

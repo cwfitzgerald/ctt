@@ -148,29 +148,29 @@ fn required_input_for(encoder: &Encoder, target: ktx2::Format) -> Result<ktx2::F
             required_input_for(&resolved, target)
         }
         #[cfg(feature = "encoder-bc7enc")]
-        Encoder::Bc7enc(_) => {
+        Encoder::Bc7enc(s) => {
             require_supports(Bc7encEncoder::supported_formats(), target, "bc7e")?;
-            Ok(Bc7encEncoder::required_input_format(target))
+            Ok(Bc7encEncoder::required_input_format(target, s))
         }
         #[cfg(feature = "encoder-intel")]
-        Encoder::Intel(_) => {
+        Encoder::Intel(s) => {
             require_supports(IspcEncoder::supported_formats(), target, "intel")?;
-            Ok(IspcEncoder::required_input_format(target))
+            Ok(IspcEncoder::required_input_format(target, s))
         }
         #[cfg(feature = "encoder-etcpak")]
-        Encoder::Etcpak(_) => {
+        Encoder::Etcpak(s) => {
             require_supports(EtcpakEncoder::supported_formats(), target, "etcpak")?;
-            Ok(EtcpakEncoder::required_input_format(target))
+            Ok(EtcpakEncoder::required_input_format(target, s))
         }
         #[cfg(feature = "encoder-amd")]
-        Encoder::Amd(_) => {
+        Encoder::Amd(s) => {
             require_supports(CompressonatorEncoder::supported_formats(), target, "amd")?;
-            Ok(CompressonatorEncoder::required_input_format(target))
+            Ok(CompressonatorEncoder::required_input_format(target, s))
         }
         #[cfg(feature = "encoder-astcenc")]
-        Encoder::Astcenc(_) => {
+        Encoder::Astcenc(s) => {
             require_supports(AstcencEncoder::supported_formats(), target, "astcenc")?;
-            Ok(AstcencEncoder::required_input_format(target))
+            Ok(AstcencEncoder::required_input_format(target, s))
         }
     }
 }
