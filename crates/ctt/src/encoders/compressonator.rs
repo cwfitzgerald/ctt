@@ -33,7 +33,7 @@ impl Encoder for CompressonatorEncoder {
         ]
     }
 
-    fn required_input_format(format: ktx2::Format) -> ktx2::Format {
+    fn required_input_format(format: ktx2::Format, _settings: &AmdSettings) -> ktx2::Format {
         use ktx2::Format as F;
         match format {
             F::BC4_UNORM_BLOCK | F::BC4_SNORM_BLOCK => F::R8_UNORM,

@@ -516,6 +516,7 @@ dependencies = [
 name = "ctt-astcenc"
 version = "0.3.0"
 dependencies = [
+ "bitflags",
  "cc",
  "paste",
 ]

@@ -85,16 +85,211 @@ pub extern "C" fn ctt_amd_settings_default() -> AmdSettings {
 // astcenc settings
 // ---------------------------------------------------------------------------
 
-/// Settings for the `astcenc` encoder. Currently no fields are exposed.
+/// Layout of a normal map's X and Y across the four input channels.
+///
+/// **Only meaningful when the enclosing `ctt_astcenc_usage` has tag
+/// `CTT_ASTCENC_USAGE_NORMAL_MAP`.** For every other usage, the swizzle is
+/// determined by the data shape (single-channel, two-channel, color, ...)
+/// and this field is ignored.
+///
+/// astcenc encodes only X and Y; the shader reconstructs Z as
+/// `sqrt(1 - x*x - y*y)`. Pick the variant that matches your shader's
+/// sample swizzle:
+///
+///   - `ASTC_DEFAULT` (`rrrg`) — the astcenc default. X is replicated into
+///     RGB and Y is in alpha.
+///   - `BC5_COMPAT` (`gggr`) — matches BC5n's layout so existing BC5n
+///     shader code keeps working after the swap to ASTC.
+#[repr(u8)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AstcencNormalSwizzle {
+    AstcDefault = 0,
+    Bc5Compat = 1,
+}
+
+/// What the texture data represents. Drives profile, flag bits, and swizzle.
+///
+/// Picking the right usage is the most important quality lever — it avoids
+/// wasting encoding bits on components the asset doesn't actually need.
+#[repr(C, u8)]
+#[derive(Debug, Clone, Copy)]
+pub enum AstcencUsage {
+    /// Generic color (LDR or LDR sRGB based on the surface's color space).
+    Color,
+    /// 2-channel tangent-space normal map. Sets `MAP_NORMAL`.
+    NormalMap(AstcencNormalSwizzle),
+    /// Single-channel mask (roughness, AO, height); only red is encoded.
+    SingleChannel,
+    /// Two-channel mask (e.g. metallic+roughness); only red and green are encoded.
+    TwoChannel,
+    /// HDR RGB + LDR alpha. Requires fp16 input.
+    HdrRgb,
+    /// All-HDR RGBA. Requires fp16 input.
+    HdrRgba,
+    /// HDR data preprocessed into LDR RGBM form. Sets `MAP_RGBM`.
+    ///
+    /// RGBM is a "fake HDR" packing: HDR color is stored in a 4-channel
+    /// LDR texture where RGB holds a normalized color and the M (alpha)
+    /// channel holds a per-pixel shared multiplier. The shader
+    /// reconstructs the HDR value as `rgb * m * rgbm_m_scale`. Use this to
+    /// ship HDR-ish content through formats and platforms that only
+    /// support LDR sampling (lightmaps, reflection probes, low-end mobile,
+    /// any pipeline where true fp16/HDR textures aren't an option).
+    /// Trade-offs: banding in highlights, a fixed dynamic range capped at
+    /// `rgbm_m_scale`, and a hard floor on `m` (values that quantize to
+    /// zero produce black or NaN pixels).
+    ///
+    /// **The caller must do the RGBM packing before passing the surface
+    /// in** — this tag only flips on codec heuristics. Tune the scale via
+    /// `ctt_astcenc_settings.rgbm_m_scale` and follow the upstream
+    /// guidance to floor `m` at ~16/255 or 32/255 before encoding.
+    Rgbm,
+}
+
+/// astcenc effort preset. `CUSTOM` carries any value in `[0.0, 100.0]`.
+#[repr(C, u8)]
+#[derive(Debug, Clone, Copy)]
+pub enum AstcencPreset {
+    /// 0.0 — fastest, lowest quality.
+    Fastest,
+    /// 10.0 — fast.
+    Fast,
+    /// 60.0 — medium.
+    Medium,
+    /// 98.0 — thorough.
+    Thorough,
+    /// 99.0 — very thorough.
+    VeryThorough,
+    /// 100.0 — exhaustive, highest quality.
+    Exhaustive,
+    /// Any value in `[0.0, 100.0]`; clamped on use.
+    Custom(f32),
+}
+
+/// Optional [`AstcencPreset`] (matches Rust's `Option<AstcencPreset>`).
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct OptionalAstcencPreset {
+    pub present: bool,
+    pub value: AstcencPreset,
+}
+
+/// Optional per-channel error weights `[r, g, b, a]`.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct OptionalChannelWeights {
+    pub present: bool,
+    pub value: [f32; 4],
+}
+
+/// Optional 32-bit float (matches Rust's `Option<f32>`).
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct OptionalF32 {
+    pub present: bool,
+    pub value: f32,
+}
+
+/// Settings for the `astcenc` encoder.
+///
+/// `usage` is the single most important field — it picks the profile, flags,
+/// and input swizzle automatically. The bool fields toggle orthogonal codec
+/// features; the optional fields override codec defaults only when present.
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct AstcencSettings {
-    pub _reserved: u8,
+    /// What the texture represents. See [`AstcencUsage`].
+    pub usage: AstcencUsage,
+    /// Override the quality preset that would otherwise be derived from
+    /// `ctt_convert_settings.quality`.
+    pub preset: OptionalAstcencPreset,
+    /// Weight RGB error by alpha — improves alpha precision in transparent
+    /// regions at the cost of RGB fidelity there.
+    pub use_alpha_weight: bool,
+    /// Optimize for perceptual error rather than PSNR. Only meaningful for
+    /// color and normal-map usages.
+    pub perceptual: bool,
+    /// Tune for the `decode_unorm8` ASTC decode mode instead of `decode_fp16`.
+    ///
+    /// ASTC blocks can be expanded by the GPU two ways: as fp16 (the
+    /// historical default, exact intermediate values) or as unorm8
+    /// (rounded to 8-bit during decode). The two paths round differently
+    /// in the last bit, so the encoder picks slightly different bit
+    /// patterns to land on whichever the runtime will use. Mismatched
+    /// flag + decode mode costs a small amount of quality; matched gains
+    /// it back.
+    ///
+    /// Set this when the texture will be sampled as a unorm8 texel format
+    /// at runtime — the common case for color textures on mobile and most
+    /// modern desktop pipelines. Leave it off for HDR content sampled as
+    /// fp16. LDR sRGB always decodes via unorm8 regardless, so this flag
+    /// is a no-op for sRGB color usages.
+    pub decode_unorm8: bool,
+    /// Custom per-channel error weights. Higher values spend more bits on
+    /// that channel; leave absent to keep codec defaults.
+    pub channel_weights: OptionalChannelWeights,
+    /// Override the RGBM shared-multiplier scale (default 5.0). Ignored
+    /// unless `usage.tag == CTT_ASTCENC_USAGE_RGBM`. See
+    /// [`AstcencUsage::Rgbm`] for what RGBM is and why you'd use it. When
+    /// raising this, also bump `channel_weights.value[3]` to roughly
+    /// `2 * scale` so the M channel stays accurate.
+    pub rgbm_m_scale: OptionalF32,
 }
 
+/// Default settings: `Color` usage, codec defaults for everything else.
 #[unsafe(no_mangle)]
 pub extern "C" fn ctt_astcenc_settings_default() -> AstcencSettings {
-    AstcencSettings { _reserved: 0 }
+    AstcencSettings {
+        usage: AstcencUsage::Color,
+        preset: OptionalAstcencPreset {
+            present: false,
+            value: AstcencPreset::Medium,
+        },
+        use_alpha_weight: false,
+        perceptual: false,
+        decode_unorm8: false,
+        channel_weights: OptionalChannelWeights {
+            present: false,
+            value: [1.0, 1.0, 1.0, 1.0],
+        },
+        rgbm_m_scale: OptionalF32 {
+            present: false,
+            value: 5.0,
+        },
+    }
+}
+
+#[cfg(feature = "encoder-astcenc")]
+fn astcenc_preset_into(p: AstcencPreset) -> ctt::encoders::astcenc::astc::Preset {
+    use ctt::encoders::astcenc::astc::Preset;
+    match p {
+        AstcencPreset::Fastest => Preset::Fastest,
+        AstcencPreset::Fast => Preset::Fast,
+        AstcencPreset::Medium => Preset::Medium,
+        AstcencPreset::Thorough => Preset::Thorough,
+        AstcencPreset::VeryThorough => Preset::VeryThorough,
+        AstcencPreset::Exhaustive => Preset::Exhaustive,
+        AstcencPreset::Custom(v) => Preset::Custom(v),
+    }
+}
+
+#[cfg(feature = "encoder-astcenc")]
+fn astcenc_usage_into(u: AstcencUsage) -> ctt::encoders::astcenc::AstcencUsage {
+    use ctt::encoders::astcenc::{AstcencUsage as U, NormalSwizzle};
+    match u {
+        AstcencUsage::Color => U::Color,
+        AstcencUsage::NormalMap(s) => U::NormalMap {
+            swizzle: match s {
+                AstcencNormalSwizzle::AstcDefault => NormalSwizzle::AstcDefault,
+                AstcencNormalSwizzle::Bc5Compat => NormalSwizzle::Bc5Compat,
+            },
+        },
+        AstcencUsage::SingleChannel => U::SingleChannel,
+        AstcencUsage::TwoChannel => U::TwoChannel,
+        AstcencUsage::HdrRgb => U::HdrRgb,
+        AstcencUsage::HdrRgba => U::HdrRgba,
+        AstcencUsage::Rgbm => U::Rgbm,
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -184,11 +379,28 @@ impl Encoder {
                     Err(Status::EncoderNotCompiledIn)
                 }
             }
-            Encoder::Astcenc(_) => {
+            Encoder::Astcenc(_settings) => {
                 #[cfg(feature = "encoder-astcenc")]
                 {
                     Ok(ctt::Encoder::Astcenc(
-                        ctt::encoders::astcenc::AstcencSettings,
+                        ctt::encoders::astcenc::AstcencSettings {
+                            usage: astcenc_usage_into(_settings.usage),
+                            preset: _settings
+                                .preset
+                                .present
+                                .then(|| astcenc_preset_into(_settings.preset.value)),
+                            use_alpha_weight: _settings.use_alpha_weight,
+                            perceptual: _settings.perceptual,
+                            decode_unorm8: _settings.decode_unorm8,
+                            channel_weights: _settings
+                                .channel_weights
+                                .present
+                                .then_some(_settings.channel_weights.value),
+                            rgbm_m_scale: _settings
+                                .rgbm_m_scale
+                                .present
+                                .then_some(_settings.rgbm_m_scale.value),
+                        },
                     ))
                 }
                 #[cfg(not(feature = "encoder-astcenc"))]

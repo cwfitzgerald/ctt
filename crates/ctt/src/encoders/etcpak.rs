@@ -38,7 +38,7 @@ impl Encoder for EtcpakEncoder {
         ]
     }
 
-    fn required_input_format(format: ktx2::Format) -> ktx2::Format {
+    fn required_input_format(format: ktx2::Format, _settings: &EtcpakSettings) -> ktx2::Format {
         use ktx2::Format as F;
         match format {
             // ETC/EAC codecs expect BGRA pixel layout.

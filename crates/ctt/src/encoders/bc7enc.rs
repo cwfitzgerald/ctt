@@ -30,7 +30,7 @@ impl Encoder for Bc7encEncoder {
         &[ktx2::Format::BC7_UNORM_BLOCK]
     }
 
-    fn required_input_format(_format: ktx2::Format) -> ktx2::Format {
+    fn required_input_format(_format: ktx2::Format, _settings: &Bc7encSettings) -> ktx2::Format {
         ktx2::Format::R8G8B8A8_UNORM
     }
 

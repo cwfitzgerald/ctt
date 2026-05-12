@@ -35,7 +35,7 @@ impl Encoder for IspcEncoder {
         ]
     }
 
-    fn required_input_format(format: ktx2::Format) -> ktx2::Format {
+    fn required_input_format(format: ktx2::Format, _settings: &IspcSettings) -> ktx2::Format {
         use ktx2::Format as F;
         match format {
             F::BC4_UNORM_BLOCK => F::R8_UNORM,

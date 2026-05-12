@@ -29,6 +29,7 @@ ctt-etcpak = { path = "crates/ctt-etcpak", version = "0.3", default-features = f
 ispc-build-utils = { path = "crates/ispc-build-utils", version = "0.3", default-features = false }
 
 anyhow = "1"
+bitflags = "2"
 bytemuck = "1"
 cc = "1"
 clap = { version = "4", features = ["derive"] }
