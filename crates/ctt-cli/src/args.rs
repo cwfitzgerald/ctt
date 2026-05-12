@@ -7,11 +7,11 @@ use clap::Parser;
 #[command(name = "ctt", version, about, max_term_width = 100)]
 pub struct Args {
     /// Input image file(s). For cubemaps with separate faces, provide 6 files.
-    #[arg(required_unless_present = "list_encoders")]
+    #[arg(required_unless_present_any = ["list_encoders", "help_encoder"])]
     pub input: Vec<PathBuf>,
 
     /// Output file path.
-    #[arg(short, long, required_unless_present = "list_encoders")]
+    #[arg(short, long, required_unless_present_any = ["list_encoders", "help_encoder"])]
     pub output: Option<PathBuf>,
 
     /// Target format. Bare (bc1, bc7) or prefixed with encoder (intel_bc7, bc7e_bc7).
@@ -73,21 +73,34 @@ pub struct Args {
     #[arg(long, default_value = "basic")]
     pub quality: QualityArg,
 
-    /// Encode alpha channel (for BC7).
-    #[arg(long)]
-    pub alpha: bool,
-
-    /// Enable dithering (for ETC1/BC1 via etcpak).
-    #[arg(long)]
-    pub dither: bool,
-
-    /// Enable heuristic-based fast mode selection (for ETC2 via etcpak).
-    #[arg(long)]
-    pub heuristics: bool,
-
     /// List available encoder backends and their supported formats.
     #[arg(long)]
     pub list_encoders: bool,
+
+    /// Show the available `--<encoder>-opts` keys for an encoder, with
+    /// types and doc strings, then exit.
+    #[arg(long, value_name = "NAME")]
+    pub help_encoder: Option<String>,
+
+    /// astcenc-specific options. Format: `key=val[;key=val...]`.
+    /// Run `--help-encoder astcenc` to see the available keys.
+    #[arg(long, value_name = "OPTS")]
+    pub astcenc_opts: Option<String>,
+
+    /// bc7enc-rdo-specific options. Format: `key=val[;key=val...]`.
+    /// Run `--help-encoder bc7e` to see the available keys.
+    #[arg(long, value_name = "OPTS")]
+    pub bc7e_opts: Option<String>,
+
+    /// intel/ispc-encoder-specific options. Format: `key=val[;key=val...]`.
+    /// Run `--help-encoder intel` to see the available keys.
+    #[arg(long, value_name = "OPTS")]
+    pub intel_opts: Option<String>,
+
+    /// etcpak-encoder-specific options. Format: `key=val[;key=val...]`.
+    /// Run `--help-encoder etcpak` to see the available keys.
+    #[arg(long, value_name = "OPTS")]
+    pub etcpak_opts: Option<String>,
 
     /// Generate mipmaps.
     #[arg(long)]

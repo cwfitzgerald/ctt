@@ -4,6 +4,7 @@
 //! [`run`] directly without spawning a subprocess.
 
 pub mod args;
+pub mod encoder_opts;
 
 use std::fs;
 use std::sync::OnceLock;
@@ -48,6 +49,10 @@ pub fn run(args: Args) -> Result<(), Box<dyn std::error::Error>> {
     if args.list_encoders {
         print_encoder_table();
         return Ok(());
+    }
+
+    if let Some(name) = args.help_encoder.as_deref() {
+        return print_encoder_help(name);
     }
 
     let output_path = args
@@ -114,7 +119,7 @@ pub fn run(args: Args) -> Result<(), Box<dyn std::error::Error>> {
         .as_deref()
         .map(parse_format)
         .transpose()?
-        .map(|tf| merge_encoder_flags(tf, &args))
+        .map(|tf| merge_encoder_opts(tf, &args))
         .transpose()?;
 
     let settings = ConvertSettings {
@@ -731,61 +736,136 @@ fn map_quality(q: QualityArg) -> Quality {
     }
 }
 
-/// Merge encoder-flavor flags (`--alpha`, `--dither`, `--heuristics`) into
-/// the [`Encoder`] already chosen by [`parse_format`]. Mismatched
-/// combinations error out instead of silently overriding the encoder choice.
-fn merge_encoder_flags(tf: TargetFormat, args: &Args) -> Result<TargetFormat, Error> {
-    let TargetFormat::Compressed { format, encoder } = tf else {
-        if args.alpha || args.dither || args.heuristics {
-            return Err(Error::UnsupportedFormat(
-                "--alpha/--dither/--heuristics require a compressed --format".into(),
-            ));
+/// Merge `--<encoder>-opts` strings into the [`Encoder`] chosen by
+/// [`parse_format`]. Opts targeting a different encoder than the one selected
+/// are warned about and ignored — they aren't a hard error so scripts that
+/// toggle `--format` between encoders can leave the opts flag in place.
+fn merge_encoder_opts(tf: TargetFormat, args: &Args) -> Result<TargetFormat, Error> {
+    let TargetFormat::Compressed {
+        format,
+        mut encoder,
+    } = tf
+    else {
+        for (name, raw) in opts_strings(args) {
+            if raw.is_some() {
+                log::warn!("--{name}-opts ignored: --format is uncompressed");
+            }
         }
         return Ok(tf);
     };
 
-    let encoder = apply_flags(encoder, args)?;
+    if let Some(raw) = args.astcenc_opts.as_deref() {
+        encoder = apply_astcenc_opts(encoder, raw)?;
+    }
+    if let Some(raw) = args.bc7e_opts.as_deref() {
+        encoder = apply_bc7enc_opts(encoder, raw)?;
+    }
+    if let Some(raw) = args.intel_opts.as_deref() {
+        encoder = apply_intel_opts(encoder, raw)?;
+    }
+    if let Some(raw) = args.etcpak_opts.as_deref() {
+        encoder = apply_etcpak_opts(encoder, raw)?;
+    }
+
     Ok(TargetFormat::Compressed { format, encoder })
 }
 
-fn apply_flags(encoder: Encoder, args: &Args) -> Result<Encoder, Error> {
-    // Each flag belongs to exactly one backend. Reject when used with the
-    // wrong (or auto) encoder so the user is told explicitly which encoder
-    // a flag applies to instead of having it silently ignored.
-    let encoder = if args.alpha {
-        match encoder {
-            Encoder::Intel(mut s) => {
-                s.alpha = true;
-                Encoder::Intel(s)
-            }
-            _ => {
-                return Err(Error::UnsupportedFormat(
-                    "--alpha only applies when using the intel encoder \
-                     (e.g. --format intel_bc7)"
-                        .into(),
-                ));
-            }
-        }
-    } else {
-        encoder
-    };
+fn opts_strings(args: &Args) -> [(&'static str, &Option<String>); 4] {
+    [
+        ("astcenc", &args.astcenc_opts),
+        ("bc7e", &args.bc7e_opts),
+        ("intel", &args.intel_opts),
+        ("etcpak", &args.etcpak_opts),
+    ]
+}
 
-    if args.dither || args.heuristics {
-        match encoder {
-            Encoder::Etcpak(mut s) => {
-                s.dither = args.dither;
-                s.use_heuristics = args.heuristics;
-                Ok(Encoder::Etcpak(s))
+fn apply_astcenc_opts(encoder: Encoder, raw: &str) -> Result<Encoder, Error> {
+    match encoder {
+        Encoder::Astcenc(_seed) => {
+            let parsed = encoder_opts::parse_opts::<encoder_opts::astcenc::Opts>(raw)
+                .map_err(|e| Error::UnsupportedFormat(format!("--astcenc-opts: {e}")))?;
+            for w in parsed.value.warnings() {
+                log::warn!("--astcenc-opts: {w}");
             }
-            _ => Err(Error::UnsupportedFormat(
-                "--dither/--heuristics only apply when using the etcpak encoder \
-                 (e.g. --format etcpak_etc2)"
-                    .into(),
-            )),
+            // astcenc has no legacy flags, so the seed is always defaults —
+            // wholesale replacement is correct.
+            Ok(Encoder::Astcenc(parsed.value.into_settings()))
         }
-    } else {
-        Ok(encoder)
+        other => {
+            log::warn!("--astcenc-opts ignored: --format selected a non-astcenc encoder");
+            Ok(other)
+        }
     }
+}
+
+fn apply_bc7enc_opts(encoder: Encoder, raw: &str) -> Result<Encoder, Error> {
+    match encoder {
+        Encoder::Bc7enc(_seed) => {
+            let parsed = encoder_opts::parse_opts::<encoder_opts::bc7enc::Opts>(raw)
+                .map_err(|e| Error::UnsupportedFormat(format!("--bc7e-opts: {e}")))?;
+            Ok(Encoder::Bc7enc(parsed.value.into_settings()))
+        }
+        other => {
+            log::warn!("--bc7e-opts ignored: --format selected a non-bc7e encoder");
+            Ok(other)
+        }
+    }
+}
+
+fn apply_intel_opts(encoder: Encoder, raw: &str) -> Result<Encoder, Error> {
+    match encoder {
+        Encoder::Intel(_seed) => {
+            let parsed = encoder_opts::parse_opts::<encoder_opts::intel::Opts>(raw)
+                .map_err(|e| Error::UnsupportedFormat(format!("--intel-opts: {e}")))?;
+            Ok(Encoder::Intel(parsed.value.into_settings()))
+        }
+        other => {
+            log::warn!("--intel-opts ignored: --format selected a non-intel encoder");
+            Ok(other)
+        }
+    }
+}
+
+fn apply_etcpak_opts(encoder: Encoder, raw: &str) -> Result<Encoder, Error> {
+    match encoder {
+        Encoder::Etcpak(_seed) => {
+            let parsed = encoder_opts::parse_opts::<encoder_opts::etcpak::Opts>(raw)
+                .map_err(|e| Error::UnsupportedFormat(format!("--etcpak-opts: {e}")))?;
+            Ok(Encoder::Etcpak(parsed.value.into_settings()))
+        }
+        other => {
+            log::warn!("--etcpak-opts ignored: --format selected a non-etcpak encoder");
+            Ok(other)
+        }
+    }
+}
+
+/// Render `--help-encoder NAME` for one of the compiled-in backends.
+fn print_encoder_help(name: &str) -> Result<(), Box<dyn std::error::Error>> {
+    match name {
+        "astcenc" => {
+            encoder_opts::print_help_encoder::<encoder_opts::astcenc::Opts>("astcenc");
+        }
+        "bc7e" => {
+            encoder_opts::print_help_encoder::<encoder_opts::bc7enc::Opts>("bc7e");
+        }
+        "intel" => {
+            encoder_opts::print_help_encoder::<encoder_opts::intel::Opts>("intel");
+        }
+        "etcpak" => {
+            encoder_opts::print_help_encoder::<encoder_opts::etcpak::Opts>("etcpak");
+        }
+        "amd" => {
+            println!("amd: no configurable options");
+        }
+        other => {
+            return Err(Error::UnsupportedFormat(format!(
+                "unknown encoder `{other}`; run --list-encoders for the compiled-in set"
+            ))
+            .into());
+        }
+    }
+    Ok(())
 }
 
 fn map_color_space(cs: ColorSpaceArg) -> ColorSpace {
