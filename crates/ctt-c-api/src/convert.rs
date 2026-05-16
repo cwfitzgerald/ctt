@@ -319,13 +319,13 @@ pub extern "C" fn ctt_encoder_auto() -> Encoder {
 }
 
 impl Encoder {
-    fn into_inner(self) -> Result<ctt::Encoder, Status> {
+    fn into_inner(self) -> Result<ctt::encoders::Encoder, Status> {
         match self {
-            Encoder::Auto => Ok(ctt::Encoder::Auto),
+            Encoder::Auto => Ok(ctt::encoders::Encoder::Auto),
             Encoder::Bc7enc(_settings) => {
                 #[cfg(feature = "encoder-bc7enc")]
                 {
-                    Ok(ctt::Encoder::Bc7enc(
+                    Ok(ctt::encoders::Encoder::Bc7enc(
                         ctt::encoders::bc7enc::Bc7encSettings {
                             perceptual: _settings.perceptual,
                         },
@@ -340,7 +340,7 @@ impl Encoder {
             Encoder::Intel(_settings) => {
                 #[cfg(feature = "encoder-intel")]
                 {
-                    Ok(ctt::Encoder::Intel(ctt::encoders::ispc::IspcSettings {
+                    Ok(ctt::encoders::Encoder::Intel(ctt::encoders::ispc::IspcSettings {
                         alpha: _settings.alpha,
                     }))
                 }
@@ -353,7 +353,7 @@ impl Encoder {
             Encoder::Etcpak(_settings) => {
                 #[cfg(feature = "encoder-etcpak")]
                 {
-                    Ok(ctt::Encoder::Etcpak(
+                    Ok(ctt::encoders::Encoder::Etcpak(
                         ctt::encoders::etcpak::EtcpakSettings {
                             dither: _settings.dither,
                             use_heuristics: _settings.use_heuristics,
@@ -369,7 +369,7 @@ impl Encoder {
             Encoder::Amd(_) => {
                 #[cfg(feature = "encoder-amd")]
                 {
-                    Ok(ctt::Encoder::Amd(
+                    Ok(ctt::encoders::Encoder::Amd(
                         ctt::encoders::compressonator::AmdSettings,
                     ))
                 }
@@ -382,7 +382,7 @@ impl Encoder {
             Encoder::Astcenc(_settings) => {
                 #[cfg(feature = "encoder-astcenc")]
                 {
-                    Ok(ctt::Encoder::Astcenc(
+                    Ok(ctt::encoders::Encoder::Astcenc(
                         ctt::encoders::astcenc::AstcencSettings {
                             usage: astcenc_usage_into(_settings.usage),
                             preset: _settings

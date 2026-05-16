@@ -4,6 +4,7 @@
 //!
 //! ```ignore
 //! use ctt::{convert, ConvertSettings, Container, TargetFormat, Format, Image, Surface, ColorSpace, AlphaMode, TextureKind};
+//! use ctt::encoders::Encoder;
 //!
 //! let surface = Surface {
 //!     data: pixel_bytes,
@@ -41,7 +42,6 @@ pub use ktx2::Format;
 pub use alpha::AlphaMode;
 pub use convert::{Container, ConvertSettings, Ktx2Supercompression, convert};
 pub use cubemap::{CubemapInput, split_cubemap};
-pub use encoders::{Encoder, EncoderInfo, compiled_in_encoders};
 pub use error::{Error, Result};
 pub use format::{TargetFormat, format_short_name, parse_format};
 pub use processing::{MipmapFilter, PipelineOutput, Swizzle, SwizzleChannel};

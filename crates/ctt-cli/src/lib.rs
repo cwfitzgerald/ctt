@@ -9,12 +9,12 @@ pub mod encoder_opts;
 use std::fs;
 use std::sync::OnceLock;
 
+use ctt::encoders::{Encoder, EncoderInfo, compiled_in_encoders};
 use ctt::input::{InputOverrides, decode_container};
 use ctt::{
-    AlphaMode, ColorSpace, Container, ConvertSettings, CubemapInput, Encoder, EncoderInfo, Error,
-    Format, FormatExt, Image, Ktx2Supercompression, MipmapFilter, PipelineOutput, Quality, Surface,
-    Swizzle, SwizzleChannel, TargetFormat, TextureKind, compiled_in_encoders, format_short_name,
-    parse_format, split_cubemap,
+    AlphaMode, ColorSpace, Container, ConvertSettings, CubemapInput, Error, Format, FormatExt,
+    Image, Ktx2Supercompression, MipmapFilter, PipelineOutput, Quality, Surface, Swizzle,
+    SwizzleChannel, TargetFormat, TextureKind, format_short_name, parse_format, split_cubemap,
 };
 
 pub use args::{

@@ -9,9 +9,10 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::Result;
+use ctt::encoders::Encoder;
 use ctt::{
-    AlphaMode, ColorSpace, Container, ConvertSettings, Encoder, Format, FormatExt, Image,
-    PipelineOutput, Quality, Surface, TargetFormat, TextureKind,
+    AlphaMode, ColorSpace, Container, ConvertSettings, Format, FormatExt, Image, PipelineOutput,
+    Quality, Surface, TargetFormat, TextureKind,
 };
 
 const FACE_COLORS: [[u8; 4]; 6] = [
