@@ -16,10 +16,39 @@ Per Keep a Changelog there are 6 main categories of changes:
 #### Table of Contents
 
 - [Unreleased](#unreleased)
+- [v0.4.0](#v040)
 - [v0.3.0](#v030)
 - [v0.2.0](#v020)
 
 ## Unreleased
+
+## v0.4.0
+
+Released 2026-05-16
+
+### Added
+
+- C API: new `ctt-c-api` crate produces static/dynamic libraries plus a hand-curated `ctt.h` header. Signed, attested prebuilt archives are published for Windows, macOS, and Linux on x86_64 and aarch64.
+- 3D (volume) texture support end-to-end: load/encode/store 3D textures via DDS and KTX2. New CLI `--volume` flag stacks input files as Z slices.
+- AVX-512 sRGB load/store kernels (x86_64) and NEON sRGB load/store kernels (aarch64), selected at runtime.
+- Bulk f16 ↔ f32 processing kernels.
+- Per-encoder option flags: `--astcenc-opts`, `--bc7e-opts`, `--intel-opts`, `--etcpak-opts`, `--amd-opts` accept `key=val[;key=val...]` strings. `--help-encoder <name>` lists available keys with types and docs.
+- Substantially expanded `astcenc` settings: usage modes (`Color`, `NormalMap` with `Bc5Compat`/`AstcDefault` swizzle, `SingleChannel`, `TwoChannel`, `HdrRgb`, `HdrRgba`, `Rgbm`), perceptual mode, alpha-weighted error, `decode_unorm8` tuning, RGBM scale, custom preset override.
+- CLI integration test suite covering color/alpha conversion, containers, cubemaps, cubemap arrays, mipmaps, volumes, swizzle, supercompression, passthrough, and error paths.
+
+### Changed
+
+- **API:** `TargetFormat::Compressed` now carries a typed `encoder: Encoder` enum (with per-backend settings) instead of `encoder_name: Option<String>`. Use `Encoder::Auto` for "any encoder that supports this format".
+- **API:** `parse_format` signature is now `parse_format(&str) -> Result<TargetFormat>` — the `EncoderRegistry` parameter is gone; compiled-in encoders are discovered statically.
+- **API:** `Image::is_cubemap: bool` replaced with `Image::kind: TextureKind` (`Texture2D` / `Cubemap` / `Texture3D`).
+- **API:** `Surface` gains `depth` and `slice_stride` fields for 3D surfaces (set `depth = 1`, `slice_stride = 0` for 2D).
+- CLI `--help` output wraps to the terminal width.
+- ASTC encoder defaults tuned for better quality out of the box.
+- Passthrough path widened — more input/output combinations skip re-encoding.
+
+### Fixed
+
+- `ctt-compressonator` now builds on older GCC versions.
 
 ## v0.3.0
 
@@ -68,6 +97,7 @@ Released 2026-03-31
 
 ## Diffs
 
-- [Unreleased](https://github.com/cwfitzgerald/ctt/compare/v0.3.0...HEAD)
+- [Unreleased](https://github.com/cwfitzgerald/ctt/compare/v0.4.0...HEAD)
+- [v0.4.0](https://github.com/cwfitzgerald/ctt/compare/v0.3.0...v0.4.0)
 - [v0.3.0](https://github.com/cwfitzgerald/ctt/compare/v0.2.0...v0.3.0)
 - [v0.2.0](https://github.com/cwfitzgerald/ctt/compare/v0.1.0...v0.2.0)
