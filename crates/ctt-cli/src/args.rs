@@ -102,6 +102,11 @@ pub struct Args {
     #[arg(long, value_name = "OPTS")]
     pub etcpak_opts: Option<String>,
 
+    /// AMD-compressonator-specific options. Format: `key=val[;key=val...]`.
+    /// Run `--help-encoder amd` to see the available keys.
+    #[arg(long, value_name = "OPTS")]
+    pub amd_opts: Option<String>,
+
     /// Generate mipmaps.
     #[arg(long)]
     pub mipmap: bool,

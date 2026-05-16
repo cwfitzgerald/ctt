@@ -11,35 +11,120 @@ use crate::types::{
 // bc7enc settings
 // ---------------------------------------------------------------------------
 
+/// Optional `bool` (matches Rust's `Option<bool>`).
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct OptionalBool {
+    pub present: bool,
+    pub value: bool,
+}
+
+/// Optional 32-bit unsigned int (matches Rust's `Option<u32>`).
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct OptionalU32 {
+    pub present: bool,
+    pub value: u32,
+}
+
+/// Optional 8-bit unsigned int (matches Rust's `Option<u8>`).
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct OptionalU8 {
+    pub present: bool,
+    pub value: u8,
+}
+
+/// Optional per-channel error weights `[r, g, b, a]` as integers
+/// (matches Rust's `Option<[u32; 4]>`).
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct OptionalChannelWeightsU32 {
+    pub present: bool,
+    pub value: [u32; 4],
+}
+
+/// Optional RGB error weights `[r, g, b]` as floats
+/// (matches Rust's `Option<[f32; 3]>`).
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct OptionalRgbWeights {
+    pub present: bool,
+    pub value: [f32; 3],
+}
+
 /// Settings for the `bc7enc-rdo` encoder.
+///
+/// `perceptual` and `mode6_only` are plain toggles. The optional fields
+/// override the values baked into the quality-derived preset only when
+/// `present == true`.
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct Bc7encSettings {
     /// Use perceptual error metrics (default `true`).
     pub perceptual: bool,
+    /// Restrict to BC7 mode 6 (RGBA, no partitions). Fastest mode,
+    /// lower quality on high-contrast blocks.
+    pub mode6_only: bool,
+    /// Override the preset's parity-bit search choice.
+    pub pbit_search: OptionalBool,
+    /// Override the preset's "uber" refinement level (0..=4).
+    pub uber_level: OptionalU32,
+    /// Override the preset's per-channel error weights `[r, g, b, a]`.
+    pub channel_weights: OptionalChannelWeightsU32,
 }
 
 /// Default settings for the `bc7enc-rdo` encoder.
 #[unsafe(no_mangle)]
 pub extern "C" fn ctt_bc7enc_settings_default() -> Bc7encSettings {
-    Bc7encSettings { perceptual: true }
+    Bc7encSettings {
+        perceptual: true,
+        mode6_only: false,
+        pbit_search: OptionalBool {
+            present: false,
+            value: false,
+        },
+        uber_level: OptionalU32 {
+            present: false,
+            value: 0,
+        },
+        channel_weights: OptionalChannelWeightsU32 {
+            present: false,
+            value: [1, 1, 1, 1],
+        },
+    }
 }
 
 // ---------------------------------------------------------------------------
 // Intel ISPC settings
 // ---------------------------------------------------------------------------
 
+/// How the Intel ISPC BC7 encoder should treat the alpha channel.
+#[repr(u8)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IntelBc7Alpha {
+    /// Derive from the surface's [`AlphaMode`]: opaque → opaque presets,
+    /// anything else → alpha-aware presets.
+    Auto,
+    /// Force opaque presets — RGB-only modes 0–3.
+    Opaque,
+    /// Force alpha-aware presets — modes 4–7 are searched.
+    Alpha,
+}
+
 /// Settings for the Intel ISPC texture compressor.
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct IntelSettings {
-    /// Encode the alpha channel for BC7. No effect on other formats.
-    pub alpha: bool,
+    /// How BC7 should handle the alpha channel. Ignored for other formats.
+    pub bc7_alpha: IntelBc7Alpha,
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn ctt_intel_settings_default() -> IntelSettings {
-    IntelSettings { alpha: false }
+    IntelSettings {
+        bc7_alpha: IntelBc7Alpha::Auto,
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -68,17 +153,79 @@ pub extern "C" fn ctt_etcpak_settings_default() -> EtcpakSettings {
 // AMD Compressonator settings
 // ---------------------------------------------------------------------------
 
-/// Settings for the AMD Compressonator encoder. Currently no fields are
-/// exposed; this struct exists for ABI uniformity with the other encoders.
+/// What the texture data represents — drives default BC1/BC2/BC3 channel
+/// weighting and the `auto` branch of [`AmdBc7Alpha`].
+#[repr(u8)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AmdUsage {
+    /// Generic color texture. BC1/2/3 use BT.601 luminance weights
+    /// `[0.3086, 0.6094, 0.0820]`.
+    Color,
+    /// Tangent-space normals packed into BC1/2/3. Uses uniform RGB
+    /// weights so X/Y aren't sacrificed to a luminance prior.
+    NormalMap,
+    /// Mask / data channels (metallic+roughness+AO, etc.) packed into
+    /// BC1/2/3. Uses uniform RGB weights — perceptual luminance bias is
+    /// the wrong model when the channels aren't color.
+    Data,
+}
+
+/// How the BC7 encoder should treat the alpha channel.
+#[repr(u8)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AmdBc7Alpha {
+    /// Derive from the surface's [`AlphaMode`]: opaque → behaves like
+    /// `Opaque`, anything else → `Full`.
+    Auto,
+    /// No meaningful alpha — concentrate on RGB modes.
+    Opaque,
+    /// Alpha is meaningful; full mode search, no palette restrictions
+    /// (highest alpha quality, slowest encode).
+    Full,
+    /// Alpha is meaningful but with restricted color + alpha palettes
+    /// (faster, marginally lower alpha quality).
+    Restricted,
+}
+
+/// Settings for the AMD Compressonator encoder.
+///
+/// Most fields apply only to a subset of formats; the docs name which.
+/// Picking the right [`AmdUsage`] is the cheapest quality lever for
+/// BC1/BC2/BC3 — it controls per-channel error weighting.
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct AmdSettings {
-    pub _reserved: u8,
+    /// What the texture represents.
+    pub usage: AmdUsage,
+    /// Explicit RGB error weights for BC1/BC2/BC3. Ignored otherwise.
+    pub channel_weights: OptionalRgbWeights,
+    /// BC7 alpha handling. Ignored for non-BC7 formats.
+    pub bc7_alpha: AmdBc7Alpha,
+    /// BC7 mode mask — bit `n` enables mode `n` (0..=7).
+    /// Ignored for non-BC7 formats.
+    pub bc7_mode_mask: OptionalU8,
+    /// BC6H mode mask — 14-bit bitfield. Ignored for non-BC6H formats.
+    pub bc6h_mode_mask: OptionalU32,
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn ctt_amd_settings_default() -> AmdSettings {
-    AmdSettings { _reserved: 0 }
+    AmdSettings {
+        usage: AmdUsage::Color,
+        channel_weights: OptionalRgbWeights {
+            present: false,
+            value: [1.0, 1.0, 1.0],
+        },
+        bc7_alpha: AmdBc7Alpha::Auto,
+        bc7_mode_mask: OptionalU8 {
+            present: false,
+            value: 0xFF,
+        },
+        bc6h_mode_mask: OptionalU32 {
+            present: false,
+            value: 0,
+        },
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -273,6 +420,37 @@ fn astcenc_preset_into(p: AstcencPreset) -> ctt::encoders::astcenc::astc::Preset
     }
 }
 
+#[cfg(feature = "encoder-amd")]
+fn amd_usage_into(u: AmdUsage) -> ctt::encoders::compressonator::AmdUsage {
+    use ctt::encoders::compressonator::AmdUsage as U;
+    match u {
+        AmdUsage::Color => U::Color,
+        AmdUsage::NormalMap => U::NormalMap,
+        AmdUsage::Data => U::Data,
+    }
+}
+
+#[cfg(feature = "encoder-amd")]
+fn amd_bc7_alpha_into(a: AmdBc7Alpha) -> ctt::encoders::compressonator::AmdBc7Alpha {
+    use ctt::encoders::compressonator::AmdBc7Alpha as A;
+    match a {
+        AmdBc7Alpha::Auto => A::Auto,
+        AmdBc7Alpha::Opaque => A::Opaque,
+        AmdBc7Alpha::Full => A::Full,
+        AmdBc7Alpha::Restricted => A::Restricted,
+    }
+}
+
+#[cfg(feature = "encoder-intel")]
+fn intel_bc7_alpha_into(a: IntelBc7Alpha) -> ctt::encoders::ispc::IspcBc7Alpha {
+    use ctt::encoders::ispc::IspcBc7Alpha as A;
+    match a {
+        IntelBc7Alpha::Auto => A::Auto,
+        IntelBc7Alpha::Opaque => A::Opaque,
+        IntelBc7Alpha::Alpha => A::Alpha,
+    }
+}
+
 #[cfg(feature = "encoder-astcenc")]
 fn astcenc_usage_into(u: AstcencUsage) -> ctt::encoders::astcenc::AstcencUsage {
     use ctt::encoders::astcenc::{AstcencUsage as U, NormalSwizzle};
@@ -328,6 +506,19 @@ impl Encoder {
                     Ok(ctt::encoders::Encoder::Bc7enc(
                         ctt::encoders::bc7enc::Bc7encSettings {
                             perceptual: _settings.perceptual,
+                            mode6_only: _settings.mode6_only,
+                            pbit_search: _settings
+                                .pbit_search
+                                .present
+                                .then_some(_settings.pbit_search.value),
+                            uber_level: _settings
+                                .uber_level
+                                .present
+                                .then_some(_settings.uber_level.value),
+                            channel_weights: _settings
+                                .channel_weights
+                                .present
+                                .then_some(_settings.channel_weights.value),
                         },
                     ))
                 }
@@ -340,9 +531,11 @@ impl Encoder {
             Encoder::Intel(_settings) => {
                 #[cfg(feature = "encoder-intel")]
                 {
-                    Ok(ctt::encoders::Encoder::Intel(ctt::encoders::ispc::IspcSettings {
-                        alpha: _settings.alpha,
-                    }))
+                    Ok(ctt::encoders::Encoder::Intel(
+                        ctt::encoders::ispc::IspcSettings {
+                            bc7_alpha: intel_bc7_alpha_into(_settings.bc7_alpha),
+                        },
+                    ))
                 }
                 #[cfg(not(feature = "encoder-intel"))]
                 {
@@ -366,11 +559,26 @@ impl Encoder {
                     Err(Status::EncoderNotCompiledIn)
                 }
             }
-            Encoder::Amd(_) => {
+            Encoder::Amd(_settings) => {
                 #[cfg(feature = "encoder-amd")]
                 {
                     Ok(ctt::encoders::Encoder::Amd(
-                        ctt::encoders::compressonator::AmdSettings,
+                        ctt::encoders::compressonator::AmdSettings {
+                            usage: amd_usage_into(_settings.usage),
+                            channel_weights: _settings
+                                .channel_weights
+                                .present
+                                .then_some(_settings.channel_weights.value),
+                            bc7_alpha: amd_bc7_alpha_into(_settings.bc7_alpha),
+                            bc7_mode_mask: _settings
+                                .bc7_mode_mask
+                                .present
+                                .then_some(_settings.bc7_mode_mask.value),
+                            bc6h_mode_mask: _settings
+                                .bc6h_mode_mask
+                                .present
+                                .then_some(_settings.bc6h_mode_mask.value),
+                        },
                     ))
                 }
                 #[cfg(not(feature = "encoder-amd"))]

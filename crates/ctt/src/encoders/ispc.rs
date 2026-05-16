@@ -1,5 +1,6 @@
 use ctt_intel_texture_compressor as itc;
 
+use crate::alpha::AlphaMode;
 use crate::encoders::Quality;
 use crate::encoders::backend::Encoder;
 use crate::encoders::edge;
@@ -7,11 +8,43 @@ use crate::error::{Error, Result};
 use crate::surface::Surface;
 use crate::vk_format::FormatExt as _;
 
-/// ISPC-specific encoder settings.
+/// How the BC7 encoder should treat the alpha channel.
+///
+/// The ISPC BC7 kernel has two preset families: opaque (modes 0–3 only,
+/// RGB partitions) and alpha-aware (modes 4–7 plus 6, with slightly
+/// different refinement counts). Picking the wrong family wastes mode
+/// budget — either on alpha bits that decode to a constant, or by
+/// dropping alpha precision the asset actually needed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum IspcBc7Alpha {
+    /// Derive from the surface's [`AlphaMode`]: `Opaque` → opaque
+    /// presets, anything else → alpha-aware presets.
+    #[default]
+    Auto,
+    /// Force the opaque presets — alpha is ignored regardless of what
+    /// the surface carries. Concentrates the mode budget on RGB.
+    Opaque,
+    /// Force the alpha-aware presets — modes 4–7 are searched even if
+    /// the surface is flagged opaque.
+    Alpha,
+}
+
+/// Intel ISPC texture compressor settings.
+///
+/// The ISPC backend is fundamentally preset-driven — every per-format
+/// kernel takes a baked `EncodeSettings` struct whose fields (mode
+/// selection bits, per-mode refinement iteration counts, fast-skip
+/// thresholds) only make sense as a coherent tuple. The pipeline's
+/// [`Quality`] picks one of those presets per format; the field below is
+/// the one orthogonal choice the upstream API lets you make.
+///
+/// Supported targets: BC1, BC3, BC4, BC5 (no settings), BC6H_UFLOAT,
+/// BC7, ETC2_R8G8B8. BC6H_SFLOAT is not exposed by the upstream kernel.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct IspcSettings {
-    /// Whether to encode alpha channel (for BC7).
-    pub alpha: bool,
+    /// How BC7 should treat the alpha channel. See [`IspcBc7Alpha`].
+    /// Ignored for non-BC7 targets.
+    pub bc7_alpha: IspcBc7Alpha,
 }
 
 pub struct IspcEncoder;
@@ -129,7 +162,10 @@ impl Encoder for IspcEncoder {
                 ))
             }
             F::BC7_UNORM_BLOCK => {
-                let bc7_settings = bc7_settings(quality, settings.alpha);
+                let bc7_settings = bc7_settings(
+                    quality,
+                    resolve_bc7_alpha(settings.bc7_alpha, surface.alpha),
+                );
                 Ok(encode_unaligned(
                     data,
                     width,
@@ -286,6 +322,16 @@ fn bc6h_settings(quality: Quality) -> itc::bc6h::EncodeSettings {
     }
 }
 
+/// Collapse the user's choice plus the surface alpha mode into the
+/// `alpha` boolean the preset selector expects.
+fn resolve_bc7_alpha(choice: IspcBc7Alpha, surface_alpha: AlphaMode) -> bool {
+    match choice {
+        IspcBc7Alpha::Auto => surface_alpha != AlphaMode::Opaque,
+        IspcBc7Alpha::Opaque => false,
+        IspcBc7Alpha::Alpha => true,
+    }
+}
+
 fn bc7_settings(quality: Quality, alpha: bool) -> itc::bc7::EncodeSettings {
     match (alpha, quality) {
         (false, Quality::UltraFast) => itc::bc7::opaque_ultra_fast_settings(),
@@ -377,6 +423,27 @@ mod tests {
                 assert!(pixel[0] > 200, "edge-block decodes R={}", pixel[0]);
             }
         }
+    }
+
+    #[test]
+    fn bc7_alpha_auto_follows_surface() {
+        assert!(!resolve_bc7_alpha(IspcBc7Alpha::Auto, AlphaMode::Opaque));
+        assert!(resolve_bc7_alpha(IspcBc7Alpha::Auto, AlphaMode::Straight));
+        assert!(resolve_bc7_alpha(
+            IspcBc7Alpha::Auto,
+            AlphaMode::Premultiplied
+        ));
+    }
+
+    #[test]
+    fn bc7_alpha_explicit_overrides_surface() {
+        // Opaque forces false even on alpha-bearing surfaces.
+        assert!(!resolve_bc7_alpha(
+            IspcBc7Alpha::Opaque,
+            AlphaMode::Straight
+        ));
+        // Alpha forces true even on opaque surfaces.
+        assert!(resolve_bc7_alpha(IspcBc7Alpha::Alpha, AlphaMode::Opaque));
     }
 
     #[test]

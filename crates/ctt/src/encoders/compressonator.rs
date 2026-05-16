@@ -1,13 +1,98 @@
 use ctt_compressonator as cmp;
 
+use crate::alpha::AlphaMode;
 use crate::encoders::Quality;
 use crate::encoders::backend::Encoder;
 use crate::error::{Error, Result};
-use crate::surface::Surface;
+use crate::surface::{ColorSpace, Surface};
 use crate::vk_format::FormatExt as _;
 
+/// What the texture data represents. Drives default channel weighting for
+/// BC1/BC2/BC3 and the auto branch of [`AmdSettings::bc7_alpha`].
+///
+/// Format selection (BC4 vs BC5 vs BC7 vs ...) is independent — usage only
+/// tunes how the codec weighs error inside the format you've already chosen.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum AmdUsage {
+    /// Generic color texture (default). BC1/BC2/BC3 use ITU-R BT.601
+    /// luminance weights `[0.3086, 0.6094, 0.0820]` — the codec spends
+    /// most of its bits on green, where the eye is most sensitive.
+    #[default]
+    Color,
+    /// Tangent-space normal data packed into an RGB-shaped format
+    /// (BC1/BC2/BC3 normals — uncommon, BC5 is normally preferred).
+    /// Channel weights default to uniform `[1.0, 1.0, 1.0]` so X/Y aren't
+    /// sacrificed to a luminance prior. No effect on BC4/BC5/BC6H/BC7.
+    NormalMap,
+    /// Mask / data channels packed into RGB (e.g. metallic+roughness+AO).
+    /// Same uniform weighting as `NormalMap` — perceptual luminance bias
+    /// is the wrong model when the channels aren't color.
+    Data,
+}
+
+/// How the BC7 encoder should treat the alpha channel.
+///
+/// BC7 mode 6 carries RGBA. Modes 4–5 add per-block index rotations for
+/// alpha quality. Modes 0–3 are RGB-only. Disabling alpha modes when the
+/// asset is fully opaque gives the encoder more RGB-mode partitions to
+/// pick from and can measurably improve color fidelity.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum AmdBc7Alpha {
+    /// Derive from the surface's [`AlphaMode`]: `Opaque` → behaves like
+    /// `Opaque` below; anything else → `Full`.
+    #[default]
+    Auto,
+    /// Tell the encoder there is no meaningful alpha. Compressonator
+    /// concentrates on RGB modes and skips the alpha-aware palette
+    /// restrictions.
+    Opaque,
+    /// Alpha is meaningful; let the encoder search the full mode set
+    /// without palette restrictions. Highest alpha quality, slowest
+    /// encode.
+    Full,
+    /// Alpha is meaningful but encoding speed matters more — restrict
+    /// the color and alpha palettes when both are present. Faster than
+    /// `Full`, marginally lower alpha quality.
+    Restricted,
+}
+
+/// AMD Compressonator encoder settings.
+///
+/// Compressonator spans BC1 through BC7 with one quality knob per format
+/// plus a handful of format-specific options. Most fields below only apply
+/// to the format named in the doc comment — the rest are no-ops.
+///
+/// `usage` is the broadest-impact knob: it picks BT.601 luminance weights
+/// for color textures and uniform weights for data/normal textures encoded
+/// to BC1/BC2/BC3. Each format-specific Option override beats the
+/// usage-derived default when present.
 #[derive(Debug, Clone, Copy, Default)]
-pub struct AmdSettings;
+pub struct AmdSettings {
+    /// What the texture represents. Drives default BC1/2/3 channel weights
+    /// and the `Auto` branch of [`Self::bc7_alpha`]. See [`AmdUsage`].
+    pub usage: AmdUsage,
+
+    /// Explicit RGB error weights for BC1, BC2, and BC3. `None` derives
+    /// the weights from `usage`. Values aren't required to sum to 1 — the
+    /// codec normalizes them internally; their ratios are what matters.
+    /// Ignored for BC4/BC5/BC6H/BC7.
+    pub channel_weights: Option<[f32; 3]>,
+
+    /// How BC7 should handle the alpha channel. See [`AmdBc7Alpha`].
+    /// Ignored for non-BC7 formats.
+    pub bc7_alpha: AmdBc7Alpha,
+
+    /// Restrict which BC7 modes the encoder considers (bit `n` enables
+    /// mode `n`, modes 0–7). `None` keeps the codec default (all modes).
+    /// Restricting to a single mode is useful for benchmarking but rarely
+    /// improves quality. Ignored for non-BC7 formats.
+    pub bc7_mode_mask: Option<u8>,
+
+    /// Restrict which BC6H modes the encoder considers (14-mode bitfield,
+    /// bit `n` enables mode `n`). `None` keeps the codec default.
+    /// Ignored for non-BC6H formats.
+    pub bc6h_mode_mask: Option<u32>,
+}
 
 pub struct CompressonatorEncoder;
 
@@ -47,27 +132,40 @@ impl Encoder for CompressonatorEncoder {
         surface: &Surface,
         format: ktx2::Format,
         quality: Quality,
-        _settings: &AmdSettings,
+        settings: &AmdSettings,
     ) -> Result<Vec<u8>> {
         let q = quality_to_float(quality);
         let (base, _) = format.normalize();
         let (data, width, height) = (&*surface.data, surface.width, surface.height);
+        let is_srgb = surface.color_space == ColorSpace::Srgb;
+        let weights = settings
+            .channel_weights
+            .unwrap_or_else(|| default_rgb_weights(settings.usage));
 
         use ktx2::Format as F;
         match base {
             F::BC1_RGBA_UNORM_BLOCK => {
                 let mut opts = cmp::bc1::Options::new().map_err(cmp_err)?;
                 opts.set_quality(q).map_err(cmp_err)?;
+                opts.set_channel_weights(weights[0], weights[1], weights[2])
+                    .map_err(cmp_err)?;
+                opts.set_srgb(is_srgb).map_err(cmp_err)?;
                 cmp::bc1::compress_blocks(data, width, height, &opts).map_err(cmp_err)
             }
             F::BC2_UNORM_BLOCK => {
                 let mut opts = cmp::bc2::Options::new().map_err(cmp_err)?;
                 opts.set_quality(q).map_err(cmp_err)?;
+                opts.set_channel_weights(weights[0], weights[1], weights[2])
+                    .map_err(cmp_err)?;
+                opts.set_srgb(is_srgb).map_err(cmp_err)?;
                 cmp::bc2::compress_blocks(data, width, height, &opts).map_err(cmp_err)
             }
             F::BC3_UNORM_BLOCK => {
                 let mut opts = cmp::bc3::Options::new().map_err(cmp_err)?;
                 opts.set_quality(q).map_err(cmp_err)?;
+                opts.set_channel_weights(weights[0], weights[1], weights[2])
+                    .map_err(cmp_err)?;
+                opts.set_srgb(is_srgb).map_err(cmp_err)?;
                 cmp::bc3::compress_blocks(data, width, height, &opts).map_err(cmp_err)
             }
             F::BC4_UNORM_BLOCK => {
@@ -95,6 +193,9 @@ impl Encoder for CompressonatorEncoder {
             F::BC6H_UFLOAT_BLOCK => {
                 let mut opts = cmp::bc6h::Options::new().map_err(cmp_err)?;
                 opts.set_quality(q).map_err(cmp_err)?;
+                if let Some(mask) = settings.bc6h_mode_mask {
+                    opts.set_mask(mask).map_err(cmp_err)?;
+                }
                 let src: &[u16] = bytemuck::cast_slice(data);
                 cmp::bc6h::compress_blocks(src, width, height, &opts).map_err(cmp_err)
             }
@@ -102,16 +203,53 @@ impl Encoder for CompressonatorEncoder {
                 let mut opts = cmp::bc6h::Options::new().map_err(cmp_err)?;
                 opts.set_quality(q).map_err(cmp_err)?;
                 opts.set_signed(true).map_err(cmp_err)?;
+                if let Some(mask) = settings.bc6h_mode_mask {
+                    opts.set_mask(mask).map_err(cmp_err)?;
+                }
                 let src: &[u16] = bytemuck::cast_slice(data);
                 cmp::bc6h::compress_blocks(src, width, height, &opts).map_err(cmp_err)
             }
             F::BC7_UNORM_BLOCK => {
                 let mut opts = cmp::bc7::Options::new().map_err(cmp_err)?;
                 opts.set_quality(q).map_err(cmp_err)?;
+                let (image_needs_alpha, colour_restrict, alpha_restrict) =
+                    resolve_bc7_alpha(settings.bc7_alpha, surface.alpha);
+                opts.set_alpha_options(image_needs_alpha, colour_restrict, alpha_restrict)
+                    .map_err(cmp_err)?;
+                if let Some(mask) = settings.bc7_mode_mask {
+                    opts.set_mask(mask).map_err(cmp_err)?;
+                }
                 cmp::bc7::compress_blocks(data, width, height, &opts).map_err(cmp_err)
             }
             _ => unreachable!("format not in supported_formats()"),
         }
+    }
+}
+
+/// BT.601 luminance weights for color content; uniform for data/normals.
+fn default_rgb_weights(usage: AmdUsage) -> [f32; 3] {
+    match usage {
+        AmdUsage::Color => [0.3086, 0.6094, 0.0820],
+        AmdUsage::NormalMap | AmdUsage::Data => [1.0, 1.0, 1.0],
+    }
+}
+
+/// Resolve the `(image_needs_alpha, colour_restrict, alpha_restrict)` tuple
+/// passed to Compressonator's BC7 `set_alpha_options`.
+fn resolve_bc7_alpha(choice: AmdBc7Alpha, surface_alpha: AlphaMode) -> (bool, bool, bool) {
+    let resolved = match choice {
+        AmdBc7Alpha::Auto => match surface_alpha {
+            AlphaMode::Opaque => AmdBc7Alpha::Opaque,
+            _ => AmdBc7Alpha::Full,
+        },
+        other => other,
+    };
+    match resolved {
+        AmdBc7Alpha::Opaque => (false, false, false),
+        AmdBc7Alpha::Full => (true, false, false),
+        AmdBc7Alpha::Restricted => (true, true, true),
+        // Auto was already resolved above.
+        AmdBc7Alpha::Auto => unreachable!(),
     }
 }
 
@@ -164,7 +302,7 @@ mod tests {
             &surface,
             ktx2::Format::BC7_UNORM_BLOCK,
             Quality::Slow,
-            &AmdSettings,
+            &AmdSettings::default(),
         )
         .unwrap();
         // 5x5 → 8×8 → 4 blocks × 16 bytes.
@@ -185,7 +323,7 @@ mod tests {
             &surface,
             ktx2::Format::BC1_RGBA_UNORM_BLOCK,
             Quality::UltraFast,
-            &AmdSettings,
+            &AmdSettings::default(),
         )
         .unwrap();
         // 7×3 → 8×4 → 2 blocks × 8 bytes.
@@ -197,5 +335,36 @@ mod tests {
                 assert!(pixel[0] > 200, "compressonator BC1 edge R={}", pixel[0]);
             }
         }
+    }
+
+    #[test]
+    fn bc7_alpha_auto_follows_surface() {
+        // Opaque surface → Opaque-equivalent tuple.
+        assert_eq!(
+            resolve_bc7_alpha(AmdBc7Alpha::Auto, AlphaMode::Opaque),
+            (false, false, false),
+        );
+        // Anything else → Full-equivalent tuple.
+        assert_eq!(
+            resolve_bc7_alpha(AmdBc7Alpha::Auto, AlphaMode::Straight),
+            (true, false, false),
+        );
+        assert_eq!(
+            resolve_bc7_alpha(AmdBc7Alpha::Auto, AlphaMode::Premultiplied),
+            (true, false, false),
+        );
+    }
+
+    #[test]
+    fn bc7_alpha_explicit_overrides_surface() {
+        // Explicit choice ignores the surface alpha mode.
+        assert_eq!(
+            resolve_bc7_alpha(AmdBc7Alpha::Opaque, AlphaMode::Straight),
+            (false, false, false),
+        );
+        assert_eq!(
+            resolve_bc7_alpha(AmdBc7Alpha::Restricted, AlphaMode::Opaque),
+            (true, true, true),
+        );
     }
 }

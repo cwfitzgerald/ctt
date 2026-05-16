@@ -766,16 +766,20 @@ fn merge_encoder_opts(tf: TargetFormat, args: &Args) -> Result<TargetFormat, Err
     if let Some(raw) = args.etcpak_opts.as_deref() {
         encoder = apply_etcpak_opts(encoder, raw)?;
     }
+    if let Some(raw) = args.amd_opts.as_deref() {
+        encoder = apply_amd_opts(encoder, raw)?;
+    }
 
     Ok(TargetFormat::Compressed { format, encoder })
 }
 
-fn opts_strings(args: &Args) -> [(&'static str, &Option<String>); 4] {
+fn opts_strings(args: &Args) -> [(&'static str, &Option<String>); 5] {
     [
         ("astcenc", &args.astcenc_opts),
         ("bc7e", &args.bc7e_opts),
         ("intel", &args.intel_opts),
         ("etcpak", &args.etcpak_opts),
+        ("amd", &args.amd_opts),
     ]
 }
 
@@ -840,6 +844,20 @@ fn apply_etcpak_opts(encoder: Encoder, raw: &str) -> Result<Encoder, Error> {
     }
 }
 
+fn apply_amd_opts(encoder: Encoder, raw: &str) -> Result<Encoder, Error> {
+    match encoder {
+        Encoder::Amd(_seed) => {
+            let parsed = encoder_opts::parse_opts::<encoder_opts::amd::Opts>(raw)
+                .map_err(|e| Error::UnsupportedFormat(format!("--amd-opts: {e}")))?;
+            Ok(Encoder::Amd(parsed.value.into_settings()))
+        }
+        other => {
+            log::warn!("--amd-opts ignored: --format selected a non-amd encoder");
+            Ok(other)
+        }
+    }
+}
+
 /// Render `--help-encoder NAME` for one of the compiled-in backends.
 fn print_encoder_help(name: &str) -> Result<(), Box<dyn std::error::Error>> {
     match name {
@@ -856,7 +874,7 @@ fn print_encoder_help(name: &str) -> Result<(), Box<dyn std::error::Error>> {
             encoder_opts::print_help_encoder::<encoder_opts::etcpak::Opts>("etcpak");
         }
         "amd" => {
-            println!("amd: no configurable options");
+            encoder_opts::print_help_encoder::<encoder_opts::amd::Opts>("amd");
         }
         other => {
             return Err(Error::UnsupportedFormat(format!(

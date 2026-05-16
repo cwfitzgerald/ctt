@@ -113,6 +113,94 @@
 #include <stddef.h>
 
 /**
+ * How the Intel ISPC BC7 encoder should treat the alpha channel.
+ */
+enum ctt_intel_bc7_alpha
+#ifdef __cplusplus
+  : uint8_t
+#endif // __cplusplus
+ {
+    /**
+     * Derive from the surface's [`AlphaMode`]: opaque → opaque presets,
+     * anything else → alpha-aware presets.
+     */
+    CTT_INTEL_BC7_ALPHA_AUTO,
+    /**
+     * Force opaque presets — RGB-only modes 0–3.
+     */
+    CTT_INTEL_BC7_ALPHA_OPAQUE,
+    /**
+     * Force alpha-aware presets — modes 4–7 are searched.
+     */
+    CTT_INTEL_BC7_ALPHA_ALPHA,
+};
+#ifndef __cplusplus
+typedef uint8_t ctt_intel_bc7_alpha;
+#endif // __cplusplus
+
+/**
+ * What the texture data represents — drives default BC1/BC2/BC3 channel
+ * weighting and the `auto` branch of [`AmdBc7Alpha`].
+ */
+enum ctt_amd_usage
+#ifdef __cplusplus
+  : uint8_t
+#endif // __cplusplus
+ {
+    /**
+     * Generic color texture. BC1/2/3 use BT.601 luminance weights
+     * `[0.3086, 0.6094, 0.0820]`.
+     */
+    CTT_AMD_USAGE_COLOR,
+    /**
+     * Tangent-space normals packed into BC1/2/3. Uses uniform RGB
+     * weights so X/Y aren't sacrificed to a luminance prior.
+     */
+    CTT_AMD_USAGE_NORMAL_MAP,
+    /**
+     * Mask / data channels (metallic+roughness+AO, etc.) packed into
+     * BC1/2/3. Uses uniform RGB weights — perceptual luminance bias is
+     * the wrong model when the channels aren't color.
+     */
+    CTT_AMD_USAGE_DATA,
+};
+#ifndef __cplusplus
+typedef uint8_t ctt_amd_usage;
+#endif // __cplusplus
+
+/**
+ * How the BC7 encoder should treat the alpha channel.
+ */
+enum ctt_amd_bc7_alpha
+#ifdef __cplusplus
+  : uint8_t
+#endif // __cplusplus
+ {
+    /**
+     * Derive from the surface's [`AlphaMode`]: opaque → behaves like
+     * `Opaque`, anything else → `Full`.
+     */
+    CTT_AMD_BC7_ALPHA_AUTO,
+    /**
+     * No meaningful alpha — concentrate on RGB modes.
+     */
+    CTT_AMD_BC7_ALPHA_OPAQUE,
+    /**
+     * Alpha is meaningful; full mode search, no palette restrictions
+     * (highest alpha quality, slowest encode).
+     */
+    CTT_AMD_BC7_ALPHA_FULL,
+    /**
+     * Alpha is meaningful but with restricted color + alpha palettes
+     * (faster, marginally lower alpha quality).
+     */
+    CTT_AMD_BC7_ALPHA_RESTRICTED,
+};
+#ifndef __cplusplus
+typedef uint8_t ctt_amd_bc7_alpha;
+#endif // __cplusplus
+
+/**
  * Layout of a normal map's X and Y across the four input channels.
  *
  * **Only meaningful when the enclosing `ctt_astcenc_usage` has tag
@@ -365,13 +453,59 @@ typedef struct ctt_pipeline_output ctt_pipeline_output;
 typedef struct ctt_surface ctt_surface;
 
 /**
+ * Optional `bool` (matches Rust's `Option<bool>`).
+ */
+typedef struct {
+    bool present;
+    bool value;
+} ctt_optional_bool;
+
+/**
+ * Optional 32-bit unsigned int (matches Rust's `Option<u32>`).
+ */
+typedef struct {
+    bool present;
+    uint32_t value;
+} ctt_optional_u32;
+
+/**
+ * Optional per-channel error weights `[r, g, b, a]` as integers
+ * (matches Rust's `Option<[u32; 4]>`).
+ */
+typedef struct {
+    bool present;
+    uint32_t value[4];
+} ctt_optional_channel_weights_u32;
+
+/**
  * Settings for the `bc7enc-rdo` encoder.
+ *
+ * `perceptual` and `mode6_only` are plain toggles. The optional fields
+ * override the values baked into the quality-derived preset only when
+ * `present == true`.
  */
 typedef struct {
     /**
      * Use perceptual error metrics (default `true`).
      */
     bool perceptual;
+    /**
+     * Restrict to BC7 mode 6 (RGBA, no partitions). Fastest mode,
+     * lower quality on high-contrast blocks.
+     */
+    bool mode6_only;
+    /**
+     * Override the preset's parity-bit search choice.
+     */
+    ctt_optional_bool pbit_search;
+    /**
+     * Override the preset's "uber" refinement level (0..=4).
+     */
+    ctt_optional_u32 uber_level;
+    /**
+     * Override the preset's per-channel error weights `[r, g, b, a]`.
+     */
+    ctt_optional_channel_weights_u32 channel_weights;
 } ctt_bc7enc_settings;
 
 /**
@@ -379,9 +513,9 @@ typedef struct {
  */
 typedef struct {
     /**
-     * Encode the alpha channel for BC7. No effect on other formats.
+     * How BC7 should handle the alpha channel. Ignored for other formats.
      */
-    bool alpha;
+    ctt_intel_bc7_alpha bc7_alpha;
 } ctt_intel_settings;
 
 /**
@@ -399,11 +533,51 @@ typedef struct {
 } ctt_etcpak_settings;
 
 /**
- * Settings for the AMD Compressonator encoder. Currently no fields are
- * exposed; this struct exists for ABI uniformity with the other encoders.
+ * Optional RGB error weights `[r, g, b]` as floats
+ * (matches Rust's `Option<[f32; 3]>`).
  */
 typedef struct {
-    uint8_t _reserved;
+    bool present;
+    float value[3];
+} ctt_optional_rgb_weights;
+
+/**
+ * Optional 8-bit unsigned int (matches Rust's `Option<u8>`).
+ */
+typedef struct {
+    bool present;
+    uint8_t value;
+} ctt_optional_u8;
+
+/**
+ * Settings for the AMD Compressonator encoder.
+ *
+ * Most fields apply only to a subset of formats; the docs name which.
+ * Picking the right [`AmdUsage`] is the cheapest quality lever for
+ * BC1/BC2/BC3 — it controls per-channel error weighting.
+ */
+typedef struct {
+    /**
+     * What the texture represents.
+     */
+    ctt_amd_usage usage;
+    /**
+     * Explicit RGB error weights for BC1/BC2/BC3. Ignored otherwise.
+     */
+    ctt_optional_rgb_weights channel_weights;
+    /**
+     * BC7 alpha handling. Ignored for non-BC7 formats.
+     */
+    ctt_amd_bc7_alpha bc7_alpha;
+    /**
+     * BC7 mode mask — bit `n` enables mode `n` (0..=7).
+     * Ignored for non-BC7 formats.
+     */
+    ctt_optional_u8 bc7_mode_mask;
+    /**
+     * BC6H mode mask — 14-bit bitfield. Ignored for non-BC6H formats.
+     */
+    ctt_optional_u32 bc6h_mode_mask;
 } ctt_amd_settings;
 
 /**

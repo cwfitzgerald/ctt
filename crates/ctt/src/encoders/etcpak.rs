@@ -7,12 +7,45 @@ use crate::error::Result;
 use crate::surface::Surface;
 use crate::vk_format::FormatExt as _;
 
-/// etcpak-specific encoder settings.
+/// etcpak encoder settings.
+///
+/// etcpak is a fixed-effort encoder — it doesn't expose quality presets, so
+/// the pipeline's [`Quality`] only chooses between ETC1 (lower) and ETC2
+/// (higher) for the `ETC2_R8G8B8` target. Everything else is preset-less:
+/// the two booleans below are the entire tuning surface upstream exposes.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct EtcpakSettings {
-    /// Enable dithering for ETC1 and BC1 compression.
+    /// Apply 8×8 ordered dithering before encoding to ETC1 or BC1.
+    ///
+    /// ETC1 and BC1 quantize RGB into a 16-color per-block palette. On
+    /// smooth gradients (skies, soft lighting) that quantization shows up
+    /// as visible banding. Ordered dither breaks the bands into a fixed
+    /// crosshatch noise pattern that the eye merges into a smooth tone
+    /// from typical viewing distance. The fixed pattern is texture-aliased
+    /// rather than random, so it doesn't shimmer across frames the way a
+    /// random dither would.
+    ///
+    /// Defaults to `false`. No effect on ETC2, EAC, BC3/4/5 (the codecs
+    /// have enough headroom to not need it).
     pub dither: bool,
-    /// Enable heuristic-based fast compression mode selection for ETC2 RGB/RGBA.
+
+    /// Enable etcpak's luminance-range heuristic for ETC2 RGB/RGBA mode
+    /// selection.
+    ///
+    /// ETC2 has four block modes (T, H, planar, ETC1-style differential).
+    /// Picking the right one per block is the expensive part of ETC2
+    /// encoding. With this flag on, etcpak short-circuits the search using
+    /// the block's luminance range as a heuristic:
+    ///
+    ///   - range ≤ 0.03 (near-flat) → planar mode immediately;
+    ///   - 0.03 < range ≤ 0.09 with min/max luma in the corners → planar;
+    ///   - range ≥ 0.38 (high contrast) → only T/H modes considered;
+    ///   - otherwise → standard ETC1-style differential mode.
+    ///
+    /// This is a quality-for-speed trade: roughly 2× faster on typical
+    /// content, with measurable but small SSIM/PSNR loss on adversarial
+    /// blocks that fall on the wrong side of a threshold. Defaults to
+    /// `false`. Ignored for ETC1, EAC, and the BC targets.
     pub use_heuristics: bool,
 }
 

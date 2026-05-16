@@ -3,16 +3,73 @@ use crate::encoders::backend::Encoder;
 use crate::error::{Error, Result};
 use crate::surface::Surface;
 
-/// bc7enc-rdo-specific encoder settings.
+/// bc7enc-rdo encoder settings.
+///
+/// The wrapper picks a `params_init_*` preset from the pipeline's [`Quality`]
+/// (UltraFast → mode-6 only, VerySlow → full search). Every field here
+/// either toggles an orthogonal codec feature or overrides one field of the
+/// preset; everything not overridden inherits whatever the preset set.
 #[derive(Debug, Clone, Copy)]
 pub struct Bc7encSettings {
-    /// Use perceptual quality metrics.
+    /// Use perceptual error metrics (BT.601-style luminance weighting)
+    /// instead of uniform RGB error. Reduces banding in mid-tones at the
+    /// cost of small color shifts — leave on for photographic / albedo
+    /// content, turn off for normal maps, mask data, or anywhere the
+    /// channels carry non-color signals.
+    ///
+    /// Defaults to `true`. Drives the preset's default channel weighting:
+    /// perceptual → `[128, 64, 16, 256]`, non-perceptual → `[1, 1, 1, 1]`.
     pub perceptual: bool,
+
+    /// Restrict the encoder to BC7 mode 6 only — RGBA, no partitions,
+    /// single-subset. Mode 6 is the cheapest mode to encode, so this gives
+    /// the fastest possible BC7. Quality drops noticeably on content with
+    /// strong gradients or sharp two-color regions (where partitioned
+    /// modes 1–3 / 7 excel).
+    ///
+    /// Defaults to `false`. The UltraFast quality preset already enables
+    /// mode-6-only mode, so toggling this on Basic/Slow is the way to ask
+    /// for that speed without dropping the rest of the quality dial.
+    pub mode6_only: bool,
+
+    /// Override the preset's parity-bit (pbit) search.
+    ///
+    /// BC7 endpoints carry 1–2 pbits to extend their precision. Searching
+    /// them costs a small constant per block and recovers a fraction of a
+    /// dB at the high end. The presets enable it from Slow upward; set
+    /// `Some(true)` to force it on for faster presets, `Some(false)` to
+    /// suppress it on slow presets, or `None` to keep the preset's choice.
+    pub pbit_search: Option<bool>,
+
+    /// Override the preset's "uber" refinement level (`0..=4`).
+    ///
+    /// Higher values run extra refinement passes on blocks whose initial
+    /// fit exceeded the codec's internal error threshold, trading encode
+    /// time for a small quality lift. Preset defaults: `0` for Default
+    /// through Fast, `1` for Basic, `2` for VerySlow, `4` for the
+    /// internal "slowest" preset (not currently used here). `None` keeps
+    /// the preset's choice. Values above 4 are clamped on the codec side.
+    pub uber_level: Option<u32>,
+
+    /// Custom per-channel error weights `[r, g, b, a]`.
+    ///
+    /// Higher values make the encoder spend more bits on that channel. The
+    /// presets pre-load these from `perceptual` (see field docs) — set
+    /// this only when you need a non-standard prior, e.g. `[1, 1, 1, 4]`
+    /// for an alpha-critical asset, or `[2, 2, 1, 1]` to favor the red
+    /// channel on data textures. `None` keeps the preset's weights.
+    pub channel_weights: Option<[u32; 4]>,
 }
 
 impl Default for Bc7encSettings {
     fn default() -> Self {
-        Self { perceptual: true }
+        Self {
+            perceptual: true,
+            mode6_only: false,
+            pbit_search: None,
+            uber_level: None,
+            channel_weights: None,
+        }
     }
 }
 
@@ -47,7 +104,7 @@ impl Encoder for Bc7encEncoder {
 
         let perceptual = settings.perceptual;
 
-        let params = match quality {
+        let mut params = match quality {
             Quality::UltraFast => ctt_bc7enc_rdo::params_init_ultrafast(perceptual),
             Quality::VeryFast => ctt_bc7enc_rdo::params_init_veryfast(perceptual),
             Quality::Fast => ctt_bc7enc_rdo::params_init_fast(perceptual),
@@ -55,6 +112,19 @@ impl Encoder for Bc7encEncoder {
             Quality::Slow => ctt_bc7enc_rdo::params_init_slow(perceptual),
             Quality::VerySlow => ctt_bc7enc_rdo::params_init_veryslow(perceptual),
         };
+
+        if settings.mode6_only {
+            params.m_mode6_only = true;
+        }
+        if let Some(pbit) = settings.pbit_search {
+            params.m_pbit_search = pbit;
+        }
+        if let Some(level) = settings.uber_level {
+            params.m_uber_level = level;
+        }
+        if let Some(weights) = settings.channel_weights {
+            params.m_weights = weights;
+        }
 
         let pixels = surface.tile_to_blocks(4, 4);
         let pixels: &[u32] = bytemuck::cast_slice(&pixels);
@@ -111,6 +181,27 @@ mod tests {
             for pixel in decoded.chunks_exact(4) {
                 assert!(pixel[0] > 200, "bc7enc-rdo edge R={}", pixel[0]);
             }
+        }
+    }
+
+    #[test]
+    fn mode6_only_still_produces_valid_output() {
+        let surface = solid_red(4, 4);
+        let out = Bc7encEncoder::compress(
+            &surface,
+            ktx2::Format::BC7_UNORM_BLOCK,
+            Quality::Slow,
+            &Bc7encSettings {
+                mode6_only: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(out.len(), 16);
+        let block: [u8; 16] = out.as_slice().try_into().unwrap();
+        let decoded = ctt_compressonator::bc7::decompress_block(&block).unwrap();
+        for pixel in decoded.chunks_exact(4) {
+            assert!(pixel[0] > 200, "mode6-only red recovers: R={}", pixel[0]);
         }
     }
 }

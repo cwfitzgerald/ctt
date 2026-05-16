@@ -15,6 +15,7 @@ use std::fmt;
 
 use facet::{Facet, Field, Shape, Type, UserType};
 
+pub mod amd;
 pub mod astcenc;
 pub mod bc7enc;
 pub mod etcpak;
@@ -208,6 +209,42 @@ pub(crate) mod parse_helpers {
         let mut out = [0.0; N];
         for (i, p) in parts.iter().enumerate() {
             out[i] = f32(key, p)?;
+        }
+        Ok(out)
+    }
+
+    pub fn u32(key: &str, value: &str) -> Result<u32, ParseError> {
+        value
+            .parse()
+            .map_err(|e: std::num::ParseIntError| ParseError::BadValue {
+                key: key.into(),
+                message: e.to_string(),
+            })
+    }
+
+    pub fn u8(key: &str, value: &str) -> Result<u8, ParseError> {
+        value
+            .parse()
+            .map_err(|e: std::num::ParseIntError| ParseError::BadValue {
+                key: key.into(),
+                message: e.to_string(),
+            })
+    }
+
+    pub fn u32_array<const N: usize>(key: &str, value: &str) -> Result<[u32; N], ParseError> {
+        let parts: Vec<&str> = value.split(',').map(str::trim).collect();
+        if parts.len() != N {
+            return Err(ParseError::BadValue {
+                key: key.into(),
+                message: format!(
+                    "expected {N} comma-separated unsigned ints, got {}",
+                    parts.len()
+                ),
+            });
+        }
+        let mut out = [0u32; N];
+        for (i, p) in parts.iter().enumerate() {
+            out[i] = u32(key, p)?;
         }
         Ok(out)
     }
