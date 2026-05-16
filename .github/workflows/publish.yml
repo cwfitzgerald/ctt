@@ -6,6 +6,10 @@ on:
 
 jobs:
   ci:
+    permissions:
+      id-token: write
+      attestations: write
+      contents: read
     uses: ./.github/workflows/ci.yml
 
   build-release:
