@@ -90,9 +90,48 @@ pub fn compress_blocks_alloc(
     pixels: &[u32],
     params: &ffi::bc7e_compress_block_params,
 ) -> Vec<u64> {
-    let mut output = vec![0u64; num_blocks * 2];
-    compress_blocks(&mut output, pixels, params);
+    assert_eq!(
+        pixels.len(),
+        num_blocks * 16,
+        "pixels must contain {num_blocks} blocks * 16 u32 pixels each, got {}",
+        pixels.len()
+    );
+
+    // ISPC 1.30's source-built neon-i32x8 target can corrupt memory when a
+    // data-dependent path runs with a partial final gang on AArch64. Prebuilt
+    // libraries and other targets are unaffected. Duplicate the final block
+    // to fill the gang, then discard the extra encoded blocks.
+    #[cfg(all(feature = "build-from-source", target_arch = "aarch64"))]
+    let gang_width = 8;
+    #[cfg(not(all(feature = "build-from-source", target_arch = "aarch64")))]
+    let gang_width = 1;
+
+    let pixels = pad_pixels_to_gang(pixels, num_blocks, gang_width);
+    let ispc_num_blocks = pixels.len() / 16;
+
+    let mut output = vec![0u64; ispc_num_blocks * 2];
+    compress_blocks(&mut output, &pixels, params);
+    output.truncate(num_blocks * 2);
     output
+}
+
+fn pad_pixels_to_gang(
+    pixels: &[u32],
+    num_blocks: usize,
+    gang_width: usize,
+) -> std::borrow::Cow<'_, [u32]> {
+    let padded_blocks = num_blocks.next_multiple_of(gang_width);
+    if padded_blocks == num_blocks {
+        return std::borrow::Cow::Borrowed(pixels);
+    }
+
+    let last_block = &pixels[(num_blocks - 1) * 16..num_blocks * 16];
+    let mut padded = Vec::with_capacity(padded_blocks * 16);
+    padded.extend_from_slice(pixels);
+    for _ in num_blocks..padded_blocks {
+        padded.extend_from_slice(last_block);
+    }
+    std::borrow::Cow::Owned(padded)
 }
 
 // ---------------------------------------------------------------------------
@@ -192,5 +231,18 @@ mod tests {
             output.iter().any(|&b| b != 0),
             "expected non-zero BC7 output"
         );
+    }
+
+    #[test]
+    fn gang_padding_repeats_final_block() {
+        let pixels: Vec<u32> = (0..3 * 16).map(|value| value as u32).collect();
+        let padded = pad_pixels_to_gang(&pixels, 3, 8);
+
+        assert_eq!(padded.len(), 8 * 16);
+        assert_eq!(&padded[..3 * 16], pixels.as_slice());
+        let final_block = &pixels[2 * 16..3 * 16];
+        for block in padded[3 * 16..].chunks_exact(16) {
+            assert_eq!(block, final_block);
+        }
     }
 }

@@ -26,6 +26,12 @@ pub(crate) fn fill_clamped_block(
     dst: &mut [u8],
 ) {
     debug_assert_eq!(dst.len(), (4 * 4 * bpp) as usize);
+    // Standalone safety: a zero-width/height source has no pixel to clamp to.
+    // Real callers derive block counts from the dims and never reach here with
+    // an empty extent, but guard anyway so `width - 1` can't underflow.
+    if width == 0 || height == 0 {
+        return;
+    }
     let max_x = width - 1;
     let max_y = height - 1;
     let bpp_usize = bpp as usize;
@@ -60,6 +66,11 @@ pub(crate) fn fill_clamped_block_row(
     debug_assert!(row_w.is_multiple_of(4));
     debug_assert!(row_w >= width);
     debug_assert_eq!(dst.len(), (row_w * 4 * bpp) as usize);
+    // Standalone safety: an empty source produces an empty (or zero-filled)
+    // destination — nothing to replicate, and `width - 1` would underflow.
+    if width == 0 || height == 0 {
+        return;
+    }
     let max_x = width - 1;
     let max_y = height - 1;
     let bpp_usize = bpp as usize;
@@ -81,5 +92,33 @@ pub(crate) fn fill_clamped_block_row(
         }
         // y-clamping already handled for top/bottom via `y = min(..)`.
         let _ = max_y;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // `fill_clamped_block` is only reachable from the ISPC backend; referencing
+    // it without that feature would defeat the `expect(dead_code)` above.
+    #[cfg(feature = "encoder-intel")]
+    #[test]
+    fn fill_clamped_block_zero_dims_no_panic() {
+        let bpp = 4u32;
+        let mut dst = vec![0u8; (4 * 4 * bpp) as usize];
+        // Zero width, zero height, and each alone — none may panic or read src.
+        fill_clamped_block(&[], 0, 0, 0, bpp, 0, 0, &mut dst);
+        fill_clamped_block(&[], 0, 4, 0, bpp, 0, 0, &mut dst);
+        fill_clamped_block(&[], 4, 0, 16, bpp, 0, 0, &mut dst);
+    }
+
+    #[test]
+    fn fill_clamped_block_row_zero_dims_no_panic() {
+        let bpp = 4u32;
+        // `row_w == 0` satisfies the multiple-of-4 and `>= width` contracts and
+        // yields an empty destination.
+        let mut dst: Vec<u8> = Vec::new();
+        fill_clamped_block_row(&[], 0, 0, 0, bpp, 0, 0, &mut dst);
+        fill_clamped_block_row(&[], 0, 5, 0, bpp, 0, 0, &mut dst);
     }
 }

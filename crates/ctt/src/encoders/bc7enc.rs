@@ -1,3 +1,5 @@
+use std::borrow::Cow;
+
 use crate::encoders::Quality;
 use crate::encoders::backend::Encoder;
 use crate::error::{Error, Result};
@@ -127,13 +129,19 @@ impl Encoder for Bc7encEncoder {
         }
 
         let pixels = surface.tile_to_blocks(4, 4);
-        let pixels: &[u32] = bytemuck::cast_slice(&pixels);
+        // `tile_to_blocks` returns a fresh `Vec<u8>` with no alignment guarantee
+        // for `u32`; fall back to a realigning copy on the (rare) under-aligned
+        // allocation instead of panicking in `cast_slice`.
+        let pixels: Cow<[u32]> = match bytemuck::try_cast_slice(&pixels) {
+            Ok(slice) => Cow::Borrowed(slice),
+            Err(_) => Cow::Owned(bytemuck::pod_collect_to_vec(&pixels)),
+        };
         let num_blocks = surface
             .width
             .div_ceil(4)
             .checked_mul(surface.height.div_ceil(4))
             .expect("block count overflow") as usize;
-        let compressed = ctt_bc7enc_rdo::compress_blocks_alloc(num_blocks, pixels, &params);
+        let compressed = ctt_bc7enc_rdo::compress_blocks_alloc(num_blocks, &pixels, &params);
         Ok(bytemuck::cast_slice(&compressed).to_vec())
     }
 }

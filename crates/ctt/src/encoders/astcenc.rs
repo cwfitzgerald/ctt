@@ -168,6 +168,11 @@ impl Encoder for AstcencEncoder {
         let (block_width, block_height) =
             base.block_size().expect("ASTC format must have block size");
 
+        // astcenc's image dimensions cross the FFI boundary into signed-int
+        // arithmetic inside the C library; reject inputs that don't fit in i32
+        // rather than risking overflow there.
+        check_i32_dims(surface.width, surface.height)?;
+
         let profile = profile_for(settings.usage, color_space);
         let preset = settings.preset.unwrap_or_else(|| default_preset(quality));
         let flags = flags_for(settings);
@@ -197,7 +202,12 @@ impl Encoder for AstcencEncoder {
         let mut ctx = astc::Context::new(&config)
             .map_err(|e| crate::error::Error::Compression(e.to_string()))?;
 
-        let mut data_ptr = surface.data.as_ptr() as *mut std::ffi::c_void;
+        // astcenc_image has no row-stride field, so the C side assumes tightly
+        // packed input. Repack when the surface carries padded rows; this costs
+        // one full-image copy but only on the padded path (tight surfaces
+        // borrow their data unchanged).
+        let tight = surface.tight_data();
+        let mut data_ptr = tight.as_ptr() as *mut std::ffi::c_void;
         let mut img = astc::bindings::astcenc_image {
             dim_x: surface.width,
             dim_y: surface.height,
@@ -206,10 +216,19 @@ impl Encoder for AstcencEncoder {
             data: &mut data_ptr,
         };
 
-        let blocks_x = surface.width.div_ceil(block_width as u32);
-        let blocks_y = surface.height.div_ceil(block_height as u32);
-        let output_size = (blocks_x * blocks_y * 16) as usize;
-        let mut output = vec![0u8; output_size];
+        let output_size = astc_output_size(
+            surface.width,
+            surface.height,
+            block_width as u32,
+            block_height as u32,
+        )?;
+        let mut output = Vec::new();
+        output.try_reserve_exact(output_size).map_err(|e| {
+            crate::error::Error::Compression(format!(
+                "cannot allocate {output_size} bytes for ASTC output: {e}"
+            ))
+        })?;
+        output.resize(output_size, 0);
 
         ctx.compress(&mut img, swizzle, &mut output)
             .map_err(|e| crate::error::Error::Compression(e.to_string()))?;
@@ -280,12 +299,145 @@ fn data_type_for(usage: AstcencUsage) -> astc::bindings::astcenc_type {
 }
 
 fn default_preset(quality: Quality) -> astc::Preset {
+    // astcenc quality is a float on [0.0, 100.0]; the named presets are just
+    // points on that continuum (Fastest=0, Fast=10, Medium=60, Thorough=98,
+    // VeryThorough=99, Exhaustive=100). Keep all six tiers distinct and
+    // monotonic, but hold Basic at Medium (60.0) to preserve default
+    // performance.
     match quality {
-        Quality::UltraFast => astc::Preset::Fastest,
-        Quality::VeryFast => astc::Preset::Fast,
-        Quality::Fast => astc::Preset::Medium,
-        Quality::Basic => astc::Preset::Medium,
-        Quality::Slow => astc::Preset::Thorough,
-        Quality::VerySlow => astc::Preset::Exhaustive,
+        Quality::UltraFast => astc::Preset::Fastest, // 0.0
+        Quality::VeryFast => astc::Preset::Fast,     // 10.0
+        Quality::Fast => astc::Preset::Custom(35.0),
+        Quality::Basic => astc::Preset::Medium,        // 60.0
+        Quality::Slow => astc::Preset::Thorough,       // 98.0
+        Quality::VerySlow => astc::Preset::Exhaustive, // 100.0
+    }
+}
+
+/// Bytes of ASTC output for a `width × height` image at the given block size.
+///
+/// Every ASTC block is a fixed 16 bytes.
+fn astc_output_size(width: u32, height: u32, block_width: u32, block_height: u32) -> Result<usize> {
+    let blocks_x = width.div_ceil(block_width) as usize;
+    let blocks_y = height.div_ceil(block_height) as usize;
+    blocks_x
+        .checked_mul(blocks_y)
+        .and_then(|blocks| blocks.checked_mul(16))
+        .ok_or_else(|| {
+            crate::error::Error::InvalidDimensions(format!(
+                "ASTC output size overflows usize for {width}x{height} with \
+                 {block_width}x{block_height} blocks"
+            ))
+        })
+}
+
+/// Reject dimensions that don't fit in `i32`. astcenc holds image extents as
+/// C ints internally, so pathological inputs would overflow there; fail
+/// cleanly at the boundary instead.
+fn check_i32_dims(width: u32, height: u32) -> Result<()> {
+    if i32::try_from(width).is_err() || i32::try_from(height).is_err() {
+        return Err(crate::error::Error::InvalidDimensions(format!(
+            "astcenc encoder requires width/height to fit in i32, got {width}x{height}"
+        )));
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::alpha::AlphaMode;
+    use crate::surface::ColorSpace;
+
+    /// Build an RGBA8 surface with a non-uniform pattern and the given row
+    /// stride. Bytes between the packed row payload and `stride` are filled
+    /// with a sentinel so a stride-ignoring read would corrupt the result.
+    fn patterned(width: u32, height: u32, stride: u32) -> Surface {
+        assert!(stride >= width * 4);
+        let mut data = vec![0xABu8; (stride * height) as usize];
+        for y in 0..height {
+            for x in 0..width {
+                let off = (y * stride + x * 4) as usize;
+                let v = (x.wrapping_mul(7).wrapping_add(y.wrapping_mul(13)) & 0xff) as u8;
+                data[off..off + 4].copy_from_slice(&[
+                    v,
+                    v.wrapping_add(50),
+                    v.wrapping_add(100),
+                    255,
+                ]);
+            }
+        }
+        Surface {
+            data,
+            width,
+            height,
+            depth: 1,
+            stride,
+            slice_stride: 0,
+            format: ktx2::Format::R8G8B8A8_UNORM,
+            color_space: ColorSpace::Linear,
+            alpha: AlphaMode::Opaque,
+        }
+    }
+
+    #[cfg(target_pointer_width = "64")]
+    #[test]
+    fn output_size_does_not_wrap() {
+        // 65536×65536 at 4×4 → 16384×16384 blocks × 16 bytes. The u32 product
+        // (4_294_967_296) wraps to 0; the widened computation must not.
+        let size = astc_output_size(65536, 65536, 4, 4).unwrap();
+        assert_eq!(size, 16384usize * 16384 * 16);
+        assert!(size > u32::MAX as usize);
+    }
+
+    #[cfg(target_pointer_width = "32")]
+    #[test]
+    fn output_size_overflow_is_rejected() {
+        assert!(astc_output_size(65536, 65536, 4, 4).is_err());
+    }
+
+    #[test]
+    fn quality_presets_distinct_and_monotonic() {
+        let tiers = [
+            Quality::UltraFast,
+            Quality::VeryFast,
+            Quality::Fast,
+            Quality::Basic,
+            Quality::Slow,
+            Quality::VerySlow,
+        ];
+        let values: Vec<f32> = tiers
+            .iter()
+            .map(|&q| default_preset(q).as_float())
+            .collect();
+        for pair in values.windows(2) {
+            assert!(
+                pair[0] < pair[1],
+                "quality presets must strictly increase, got {values:?}",
+            );
+        }
+        // Basic must stay at Medium to preserve default performance.
+        assert_eq!(default_preset(Quality::Basic).as_float(), 60.0);
+    }
+
+    #[test]
+    fn padded_stride_matches_tight() {
+        let tight = patterned(8, 8, 8 * 4);
+        let padded = patterned(8, 8, 8 * 4 + 16);
+        let a = AstcencEncoder::compress(
+            &tight,
+            ktx2::Format::ASTC_4x4_UNORM_BLOCK,
+            Quality::Fast,
+            &AstcencSettings::default(),
+        )
+        .unwrap();
+        let b = AstcencEncoder::compress(
+            &padded,
+            ktx2::Format::ASTC_4x4_UNORM_BLOCK,
+            Quality::Fast,
+            &AstcencSettings::default(),
+        )
+        .unwrap();
+        assert_eq!(a, b, "padded-stride encode must match tight encode");
     }
 }

@@ -1,3 +1,5 @@
+use std::borrow::Cow;
+
 use ctt_compressonator as cmp;
 
 use crate::alpha::AlphaMode;
@@ -136,7 +138,12 @@ impl Encoder for CompressonatorEncoder {
     ) -> Result<Vec<u8>> {
         let q = quality_to_float(quality);
         let (base, _) = format.normalize();
-        let (data, width, height) = (&*surface.data, surface.width, surface.height);
+        // Compressonator's block APIs assume tightly packed input (they derive
+        // row stride from width internally). Repack when the surface carries
+        // padded rows; this copies the image once, only on the padded path
+        // (tight surfaces borrow their data unchanged).
+        let tight = surface.tight_data();
+        let (data, width, height) = (&*tight, surface.width, surface.height);
         let is_srgb = surface.color_space == ColorSpace::Srgb;
         let weights = settings
             .channel_weights
@@ -196,8 +203,8 @@ impl Encoder for CompressonatorEncoder {
                 if let Some(mask) = settings.bc6h_mode_mask {
                     opts.set_mask(mask).map_err(cmp_err)?;
                 }
-                let src: &[u16] = bytemuck::cast_slice(data);
-                cmp::bc6h::compress_blocks(src, width, height, &opts).map_err(cmp_err)
+                let src = u16_slice(data);
+                cmp::bc6h::compress_blocks(&src, width, height, &opts).map_err(cmp_err)
             }
             F::BC6H_SFLOAT_BLOCK => {
                 let mut opts = cmp::bc6h::Options::new().map_err(cmp_err)?;
@@ -206,8 +213,8 @@ impl Encoder for CompressonatorEncoder {
                 if let Some(mask) = settings.bc6h_mode_mask {
                     opts.set_mask(mask).map_err(cmp_err)?;
                 }
-                let src: &[u16] = bytemuck::cast_slice(data);
-                cmp::bc6h::compress_blocks(src, width, height, &opts).map_err(cmp_err)
+                let src = u16_slice(data);
+                cmp::bc6h::compress_blocks(&src, width, height, &opts).map_err(cmp_err)
             }
             F::BC7_UNORM_BLOCK => {
                 let mut opts = cmp::bc7::Options::new().map_err(cmp_err)?;
@@ -266,6 +273,16 @@ fn quality_to_float(quality: Quality) -> f32 {
 
 fn cmp_err(e: cmp::Error) -> Error {
     Error::Compression(e.to_string())
+}
+
+/// Reinterpret packed bytes as `u16` for the BC6H fp16 input. Borrows in the
+/// common case; copies into a fresh, correctly aligned buffer only on the rare
+/// under-aligned allocation, so `try_cast_slice` never panics.
+fn u16_slice(data: &[u8]) -> Cow<'_, [u16]> {
+    match bytemuck::try_cast_slice(data) {
+        Ok(slice) => Cow::Borrowed(slice),
+        Err(_) => Cow::Owned(bytemuck::pod_collect_to_vec(data)),
+    }
 }
 
 #[cfg(test)]
@@ -335,6 +352,57 @@ mod tests {
                 assert!(pixel[0] > 200, "compressonator BC1 edge R={}", pixel[0]);
             }
         }
+    }
+
+    /// RGBA8 surface with a non-uniform pattern at the given row stride;
+    /// inter-row padding is a sentinel so stride bugs corrupt the output.
+    fn patterned(width: u32, height: u32, stride: u32) -> Surface {
+        assert!(stride >= width * 4);
+        let mut data = vec![0xABu8; (stride * height) as usize];
+        for y in 0..height {
+            for x in 0..width {
+                let off = (y * stride + x * 4) as usize;
+                let v = (x.wrapping_mul(7).wrapping_add(y.wrapping_mul(13)) & 0xff) as u8;
+                data[off..off + 4].copy_from_slice(&[
+                    v,
+                    v.wrapping_add(50),
+                    v.wrapping_add(100),
+                    255,
+                ]);
+            }
+        }
+        Surface {
+            data,
+            width,
+            height,
+            depth: 1,
+            stride,
+            slice_stride: 0,
+            format: ktx2::Format::R8G8B8A8_UNORM,
+            color_space: ColorSpace::Linear,
+            alpha: AlphaMode::Opaque,
+        }
+    }
+
+    #[test]
+    fn padded_stride_matches_tight() {
+        let tight = patterned(8, 8, 8 * 4);
+        let padded = patterned(8, 8, 8 * 4 + 16);
+        let a = CompressonatorEncoder::compress(
+            &tight,
+            ktx2::Format::BC1_RGBA_UNORM_BLOCK,
+            Quality::Fast,
+            &AmdSettings::default(),
+        )
+        .unwrap();
+        let b = CompressonatorEncoder::compress(
+            &padded,
+            ktx2::Format::BC1_RGBA_UNORM_BLOCK,
+            Quality::Fast,
+            &AmdSettings::default(),
+        )
+        .unwrap();
+        assert_eq!(a, b, "padded-stride encode must match tight encode");
     }
 
     #[test]
