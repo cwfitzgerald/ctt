@@ -30,8 +30,12 @@ impl fmt::Display for ColorSpace {
 /// [`FormatExt::is_compressed`] to check.
 #[derive(Debug, Clone)]
 pub struct Surface {
+    /// Raw bytes: uncompressed pixels or compressed blocks, laid out row by
+    /// row (and slice by slice when `depth > 1`) at the declared strides.
     pub data: Vec<u8>,
+    /// Width in pixels.
     pub width: u32,
+    /// Height in pixels.
     pub height: u32,
     /// Number of Z slices. `1` for 2D textures, `>= 1` for 3D textures.
     pub depth: u32,
@@ -46,8 +50,11 @@ pub struct Surface {
     /// for uncompressed). Meaningful only when `depth > 1`; set to `0` for 2D
     /// surfaces.
     pub slice_stride: u32,
+    /// Pixel or block format of `data`.
     pub format: ktx2::Format,
+    /// Color space the pixel values live in (sRGB or linear).
     pub color_space: ColorSpace,
+    /// How the alpha channel relates to the color channels.
     pub alpha: AlphaMode,
 }
 
@@ -61,8 +68,12 @@ pub struct Surface {
 ///   3D arrays are not supported (KTX2 / D3D do not allow them).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum TextureKind {
+    /// Flat 2D texture (or a 2D array — one surface entry per array layer).
     Texture2D,
+    /// Cubemap (or cubemap array): six faces per cube, `surfaces.len()` a
+    /// multiple of 6.
     Cubemap,
+    /// 3D (volume) texture: a single surface entry whose `depth > 1`.
     Texture3D,
 }
 
@@ -132,6 +143,13 @@ impl Image {
                         "layer {layer_idx} mip {mip_idx}: depth must be >= 1",
                     )));
                 }
+                if s.width == 0 || s.height == 0 {
+                    return Err(Error::InvalidImage(format!(
+                        "layer {layer_idx} mip {mip_idx}: width and height must be >= 1, \
+                         got {}x{}",
+                        s.width, s.height,
+                    )));
+                }
             }
         }
 
@@ -161,7 +179,7 @@ impl Image {
                 let layer = &self.surfaces[0];
                 let base_depth = layer[0].depth;
                 for (mip_idx, s) in layer.iter().enumerate() {
-                    let expected = (base_depth >> mip_idx as u32).max(1);
+                    let expected = base_depth.checked_shr(mip_idx as u32).unwrap_or(0).max(1);
                     if s.depth != expected {
                         return Err(Error::InvalidImage(format!(
                             "3D mip {mip_idx}: depth {} does not match expected {expected} \
@@ -191,29 +209,47 @@ impl Image {
                         s.stride, s.format, s.width,
                     )));
                 }
-                if s.depth > 1 {
-                    let tight_slice = s.tight_slice_bytes().unwrap();
-                    if s.slice_stride < tight_slice {
-                        return Err(Error::InvalidImage(format!(
-                            "layer {layer_idx} mip {mip_idx}: slice_stride {} is below the \
-                             tight minimum {tight_slice}",
-                            s.slice_stride,
-                        )));
-                    }
-                }
                 let rows = if let Some((_, bh)) = s.format.block_size() {
                     s.height.div_ceil(bh as u32) as usize
                 } else {
                     s.height as usize
                 };
+                // Height zero was rejected above, so at least one physical row
+                // (or block row) is present.
+                let row_span = (rows - 1)
+                    .checked_mul(s.stride as usize)
+                    .and_then(|v| v.checked_add(tight_row as usize))
+                    .ok_or_else(|| {
+                        Error::InvalidImage(format!(
+                            "layer {layer_idx} mip {mip_idx}: row/slice span overflows"
+                        ))
+                    })?;
+                if s.depth > 1 {
+                    if row_span > u32::MAX as usize {
+                        return Err(Error::InvalidImage(format!(
+                            "layer {layer_idx} mip {mip_idx}: padded slice span {row_span} \
+                             overflows the u32 slice_stride representation"
+                        )));
+                    }
+                    if (s.slice_stride as usize) < row_span {
+                        return Err(Error::InvalidImage(format!(
+                            "layer {layer_idx} mip {mip_idx}: slice_stride {} is below the \
+                             minimum {row_span} required by the padded row layout",
+                            s.slice_stride,
+                        )));
+                    }
+                }
                 let required = if s.depth > 1 {
-                    (s.depth as usize - 1) * s.slice_stride as usize
-                        + (rows - 1) * s.stride as usize
-                        + tight_row as usize
-                } else if rows == 0 {
-                    0
+                    (s.depth as usize - 1)
+                        .checked_mul(s.slice_stride as usize)
+                        .and_then(|v| v.checked_add(row_span))
+                        .ok_or_else(|| {
+                            Error::InvalidImage(format!(
+                                "layer {layer_idx} mip {mip_idx}: total 3D data span overflows"
+                            ))
+                        })?
                 } else {
-                    (rows - 1) * s.stride as usize + tight_row as usize
+                    row_span
                 };
                 if s.data.len() < required {
                     return Err(Error::InvalidImage(format!(
@@ -258,21 +294,23 @@ impl Surface {
     }
 
     /// Bytes for one tightly-packed row (or row-of-blocks for compressed
-    /// formats). Returns `None` if the format's pixel/block size is unknown.
+    /// formats). Returns `None` if the format's pixel/block size is unknown or
+    /// the byte count overflows `u32`.
     pub fn tight_row_bytes(&self) -> Option<u32> {
         if let Some((bw, _)) = self.format.block_size() {
             let bpb = self.format.bytes_per_block()? as u32;
-            Some(self.width.div_ceil(bw as u32) * bpb)
+            self.width.div_ceil(bw as u32).checked_mul(bpb)
         } else {
             let bpp = self.format.bytes_per_pixel()? as u32;
-            Some(self.width * bpp)
+            self.width.checked_mul(bpp)
         }
     }
 
     /// Bytes for one tightly-packed Z slice. For 2D surfaces this is the
-    /// whole image; for 3D it's one entry along the depth axis.
+    /// whole image; for 3D it's one entry along the depth axis. Returns `None`
+    /// if the format size is unknown or the byte count overflows `u32`.
     pub fn tight_slice_bytes(&self) -> Option<u32> {
-        Some(self.tight_row_bytes()? * self.rows_in_image())
+        self.tight_row_bytes()?.checked_mul(self.rows_in_image())
     }
 
     /// True when `stride` and (for `depth > 1`) `slice_stride` already match
@@ -349,10 +387,15 @@ impl Surface {
         let blocks_x = self.width.div_ceil(block_w);
         let blocks_y = self.height.div_ceil(block_h);
         let block_bytes = (block_w * block_h * bpp) as usize;
-        let mut out = vec![0u8; (blocks_x * blocks_y) as usize * block_bytes];
+        // Widen to usize before multiplying: for very large surfaces the block
+        // count and per-row byte offsets overflow u32 (a >32768-wide RGBA8
+        // surface overflows `y * stride`).
+        let mut out = vec![0u8; blocks_x as usize * blocks_y as usize * block_bytes];
 
         let max_x = self.width - 1;
         let max_y = self.height - 1;
+        let stride = self.stride as usize;
+        let bpp = bpp as usize;
 
         for by in 0..blocks_y {
             for bx in 0..blocks_x {
@@ -360,13 +403,12 @@ impl Surface {
                 let block_start = block_idx * block_bytes;
 
                 for py in 0..block_h {
-                    let y = (by * block_h + py).min(max_y);
+                    let y = (by * block_h + py).min(max_y) as usize;
                     for px in 0..block_w {
-                        let x = (bx * block_w + px).min(max_x);
-                        let src = (y * self.stride + x * bpp) as usize;
-                        let dst = block_start + ((py * block_w + px) * bpp) as usize;
-                        let len = bpp as usize;
-                        out[dst..dst + len].copy_from_slice(&self.data[src..src + len]);
+                        let x = (bx * block_w + px).min(max_x) as usize;
+                        let src = y * stride + x * bpp;
+                        let dst = block_start + ((py * block_w + px) as usize) * bpp;
+                        out[dst..dst + bpp].copy_from_slice(&self.data[src..src + bpp]);
                     }
                 }
             }
@@ -516,6 +558,39 @@ mod tests {
     }
 
     #[test]
+    fn validate_zero_width_rejected() {
+        let mut s = s2d(4, 4);
+        s.width = 0;
+        s.stride = 0;
+        s.data.clear();
+        let img = Image {
+            surfaces: vec![vec![s]],
+            kind: TextureKind::Texture2D,
+        };
+        let err = img.validate().unwrap_err();
+        assert!(
+            err.to_string().contains("width and height must be >= 1"),
+            "got: {err}",
+        );
+    }
+
+    #[test]
+    fn validate_zero_height_rejected() {
+        let mut s = s2d(4, 4);
+        s.height = 0;
+        s.data.clear();
+        let img = Image {
+            surfaces: vec![vec![s]],
+            kind: TextureKind::Texture2D,
+        };
+        let err = img.validate().unwrap_err();
+        assert!(
+            err.to_string().contains("width and height must be >= 1"),
+            "got: {err}",
+        );
+    }
+
+    #[test]
     fn validate_cubemap_wrong_face_count() {
         let img = Image {
             surfaces: vec![vec![s2d(4, 4)]; 5],
@@ -544,6 +619,72 @@ mod tests {
         };
         let err = img.validate().unwrap_err();
         assert!(err.to_string().contains("depth must be 1"), "got: {err}");
+    }
+
+    /// A 3D surface whose per-slice byte count overflows `u32` must be
+    /// rejected by `validate`, not panic on the internal `tight_slice_bytes`
+    /// lookup. width*bpp fits in u32 here, but *height does not.
+    #[test]
+    fn validate_3d_slice_size_overflow_rejected() {
+        let img = Image {
+            surfaces: vec![vec![Surface {
+                data: vec![0u8; 16],
+                width: 65536,
+                height: 65536,
+                depth: 2,
+                stride: 65536 * 4,
+                slice_stride: u32::MAX,
+                format: ktx2::Format::R8G8B8A8_UNORM,
+                color_space: ColorSpace::Linear,
+                alpha: AlphaMode::Straight,
+            }]],
+            kind: TextureKind::Texture3D,
+        };
+        let err = img.validate().unwrap_err();
+        assert!(err.to_string().contains("overflows"), "got: {err}");
+    }
+
+    #[test]
+    fn validate_3d_rejects_overlapping_padded_slices() {
+        let img = Image {
+            surfaces: vec![vec![Surface {
+                data: vec![0; 7],
+                width: 1,
+                height: 2,
+                depth: 2,
+                stride: 4,
+                slice_stride: 2,
+                format: ktx2::Format::R8_UNORM,
+                color_space: ColorSpace::Linear,
+                alpha: AlphaMode::Straight,
+            }]],
+            kind: TextureKind::Texture3D,
+        };
+
+        let err = img.validate().unwrap_err();
+        assert!(err.to_string().contains("padded row layout"), "got: {err}");
+    }
+
+    #[test]
+    fn validate_3d_extreme_spans_return_error_without_panicking() {
+        let img = Image {
+            surfaces: vec![vec![Surface {
+                data: Vec::new(),
+                width: 1,
+                height: 4,
+                depth: u32::MAX,
+                stride: u32::MAX,
+                slice_stride: u32::MAX,
+                format: ktx2::Format::R8_UNORM,
+                color_space: ColorSpace::Linear,
+                alpha: AlphaMode::Straight,
+            }]],
+            kind: TextureKind::Texture3D,
+        };
+
+        let result = std::panic::catch_unwind(|| img.validate());
+        assert!(result.is_ok(), "extreme layout must not panic");
+        assert!(result.unwrap().is_err(), "extreme layout must be rejected");
     }
 
     #[test]
@@ -579,6 +720,18 @@ mod tests {
             err.to_string().contains("does not match expected"),
             "got: {err}"
         );
+    }
+
+    #[test]
+    fn validate_3d_many_mips_does_not_shift_panic() {
+        let img = Image {
+            surfaces: vec![(0..33).map(|_| s2d(1, 1)).collect()],
+            kind: TextureKind::Texture3D,
+        };
+
+        let result = std::panic::catch_unwind(|| img.validate());
+        assert!(result.is_ok(), "large mip count must not panic");
+        assert!(result.unwrap().is_ok());
     }
 
     #[test]
