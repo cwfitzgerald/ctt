@@ -39,6 +39,7 @@ facet = "0.46"
 facet-reflect = "0.46"
 fast_image_resize = "6"
 fern = "0.7"
+flate2 = "1"
 half = { version = "2", features = ["bytemuck"] }
 image = { version = "0.25", default-features = false }
 ktx2 = { version = "0.5" }
