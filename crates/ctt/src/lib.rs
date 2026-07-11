@@ -2,10 +2,12 @@
 //!
 //! # Quick start
 //!
-//! ```ignore
+//! ```no_run
 //! use ctt::{convert, ConvertSettings, Container, TargetFormat, Format, Image, Surface, ColorSpace, AlphaMode, TextureKind};
 //! use ctt::encoders::Encoder;
 //!
+//! # fn main() -> Result<(), ctt::Error> {
+//! let pixel_bytes = vec![0u8; 512 * 512 * 4];
 //! let surface = Surface {
 //!     data: pixel_bytes,
 //!     width: 512,
@@ -22,7 +24,7 @@
 //!     kind: TextureKind::Texture2D,
 //! };
 //!
-//! let ktx2_bytes = convert(image, ConvertSettings {
+//! let _ktx2_bytes = convert(image, ConvertSettings {
 //!     format: Some(TargetFormat::Compressed {
 //!         format: Format::BC7_UNORM_BLOCK,
 //!         encoder: Encoder::Auto,
@@ -30,10 +32,18 @@
 //!     container: Container::ktx2(),
 //!     ..Default::default()
 //! })?;
+//! # Ok(())
+//! # }
 //! ```
 //!
 //! Use [`parse_format`] to build a [`TargetFormat`] from a string like `"bc7"`,
 //! `"intel_bc7"`, or `"rgba8unorm"`.
+
+/// Compile-checks the Rust code blocks in `README.md` as doctests so the
+/// library example there cannot drift out of sync with the current API.
+#[cfg(doctest)]
+#[doc = include_str!("../../../README.md")]
+pub struct ReadmeDoctests;
 
 // ---- Core types ----
 

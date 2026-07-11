@@ -81,23 +81,59 @@ jj tag create vX.Y.Z
 jj git push
 ```
 
+Pushing the `vX.Y.Z` tag triggers `.github/workflows/publish.yml`. That
+workflow runs CI, builds the release binaries (CLI + C API) for every target
+with attestation, and creates the **GitHub release** with those artifacts
+attached (`generate_release_notes: true`).
+
+> **Important:** `publish.yml` does **not** publish to crates.io. Pushing the
+> tag only produces the GitHub release and binaries. Publishing the crates is
+> the separate manual step below.
+
 ### 6. Publish to crates.io
 
+This is a virtual workspace, so a bare `cargo publish` does not work — each
+crate must be published individually with `-p`, and they must go out in
+dependency order so every crate's dependencies already exist on crates.io when
+its verification build runs. Recent cargo (≥ 1.90) blocks until each freshly
+published crate is available in the index before returning, so the commands can
+be run back-to-back; on older toolchains, wait for the index to update between
+tiers.
+
+Publish in this order:
+
 ```bash
-cargo publish
+# 1. Leaf build utility (build-dependency of the prebuilt crates)
+cargo publish -p ispc-build-utils
+
+# 2. Prebuilt ISPC static-library crates
+cargo publish -p ctt-intel-texture-compressor-prebuilt
+cargo publish -p ctt-bc7enc-rdo-prebuilt
+
+# 3. Encoder binding crates
+cargo publish -p ctt-intel-texture-compressor
+cargo publish -p ctt-bc7enc-rdo
+cargo publish -p ctt-astcenc
+cargo publish -p ctt-compressonator
+cargo publish -p ctt-etcpak
+
+# 4. Core library
+cargo publish -p ctt
+
+# 5. Front-end crates
+cargo publish -p ctt-cli
+cargo publish -p ctt-c-api
 ```
 
-### 7. Create the GitHub release
+The default (`prebuilt`) verification build links the shipped static libraries,
+so `ispc` does not need to be on `PATH` to publish.
 
-Extract the release notes from `CHANGELOG.md` and create a release:
-
-```bash
-gh release create vX.Y.Z --title "vX.Y.Z" --notes "<paste release notes here>"
-```
-
-### 8. Post-release
+### 7. Post-release
 
 Verify:
 - [ ] The crates are visible at https://crates.io/crates/ctt/X.Y.Z
 - [ ] Docs are building at https://docs.rs/ctt/X.Y.Z
-- [ ] The GitHub release exists at https://github.com/cwfitzgerald/ctt/releases/tag/vX.Y.Z
+- [ ] The GitHub release created by `publish.yml` exists at
+      https://github.com/cwfitzgerald/ctt/releases/tag/vX.Y.Z with the CLI and
+      C API binaries attached. Edit its notes from `CHANGELOG.md` if the
+      auto-generated notes need refining.

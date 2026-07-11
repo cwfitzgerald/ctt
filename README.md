@@ -20,7 +20,7 @@ Encoders are listed in priority order — when multiple encoders support the sam
 
 Use `ctt --list-encoders` to see what's available in your build:
 
-```
+```text
 $ ctt --list-encoders
 Encoder    Priority     Formats
 -------    --------     -------
@@ -82,30 +82,41 @@ cargo add ctt --no-default-features --features encoder-bc7enc,encoder-intel,ispc
 
 The library API mirrors the CLI. Build a `Surface`, wrap it in an `Image`, and call `convert`:
 
-```rust
+```rust,no_run
 use ctt::{convert, ConvertSettings, Container, TargetFormat, Format};
-use ctt::{Image, Surface, ColorSpace, AlphaMode};
+use ctt::{Image, Surface, ColorSpace, AlphaMode, TextureKind};
+use ctt::encoders::Encoder;
 
-let surface = Surface {
-    data: pixel_bytes,
-    width: 512,
-    height: 512,
-    stride: 512 * 4,
-    format: Format::R8G8B8A8_UNORM,
-    color_space: ColorSpace::Srgb,
-    alpha: AlphaMode::Straight,
-};
+fn main() -> Result<(), ctt::Error> {
+    let pixel_bytes = vec![0u8; 512 * 512 * 4];
+    let surface = Surface {
+        data: pixel_bytes,
+        width: 512,
+        height: 512,
+        depth: 1,
+        stride: 512 * 4,
+        slice_stride: 0,
+        format: Format::R8G8B8A8_UNORM,
+        color_space: ColorSpace::Srgb,
+        alpha: AlphaMode::Straight,
+    };
 
-let image = Image { surfaces: vec![vec![surface]], is_cubemap: false };
+    let image = Image {
+        surfaces: vec![vec![surface]],
+        kind: TextureKind::Texture2D,
+    };
 
-let ktx2_bytes = convert(image, ConvertSettings {
-    format: Some(TargetFormat::Compressed {
-        format: Format::BC7_UNORM_BLOCK,
-        encoder: Encoder::Auto,
-    }),
-    container: Container::ktx2(),
-    ..Default::default()
-})?;
+    let _ktx2_bytes = convert(image, ConvertSettings {
+        format: Some(TargetFormat::Compressed {
+            format: Format::BC7_UNORM_BLOCK,
+            encoder: Encoder::Auto,
+        }),
+        container: Container::ktx2(),
+        ..Default::default()
+    })?;
+
+    Ok(())
+}
 ```
 
 See the [API documentation](https://docs.rs/ctt) for the full `ConvertSettings` options and the lower-level pipeline API.
@@ -116,7 +127,7 @@ C bindings are available as a separate crate. See [`crates/ctt-c-api/README.md`]
 
 ## CLI usage
 
-```
+```text
 ctt <INPUT>... --output <PATH> [--format <FORMAT>] [OPTIONS]
 ```
 
@@ -148,16 +159,45 @@ High quality:
 ctt diffuse.png -o diffuse.ktx2 -f bc7 --quality slow
 ```
 
-Cubemap from a cross layout:
+Cubemap from a cross layout. `--cubemap-layout cross` (the default) accepts
+both the horizontal 4×3 and vertical 3×4 cross arrangements; `--cubemap-layout
+strip` accepts a horizontal 6×1 strip:
 
 ```sh
 ctt skybox_cross.png -o skybox.ktx2 -f bc6h --cubemap --cubemap-layout cross
 ```
 
-Cubemap from six separate faces:
+Cubemap from six separate faces (order: +X, -X, +Y, -Y, +Z, -Z):
 
 ```sh
 ctt px.png nx.png py.png ny.png pz.png nz.png -o skybox.ktx2 -f bc7 --cubemap
+```
+
+Cubemap array from N×6 face images. Pass a multiple of six inputs with
+`--cubemap` and every group of six becomes one cube, stacked in argv order
+(you can also pass several already-assembled cubemaps):
+
+```sh
+ctt +x0.png -x0.png +y0.png -y0.png +z0.png -z0.png \
+    +x1.png -x1.png +y1.png -y1.png +z1.png -z1.png \
+    -o cube_array.ktx2 -f bc7 --cubemap
+```
+
+2D array from multiple plain inputs. Passing more than one image without
+`--cubemap` or `--volume` assembles a 2D array texture, one layer per input
+(argv order). All inputs must share dimensions, format, and mip count:
+
+```sh
+ctt layer0.png layer1.png layer2.png -o array.ktx2 -f bc7
+```
+
+3D (volume) texture. Each input is stacked as a Z slice in argv order.
+3D textures are written as-is (passthrough only): compression, swizzle, and
+mipmap generation are not supported for them, so omit `--format`. Both KTX2
+and DDS output are supported:
+
+```sh
+ctt slice0.png slice1.png slice2.png slice3.png -o volume.ktx2 --volume
 ```
 
 Generate mipmaps:
@@ -166,10 +206,13 @@ Generate mipmaps:
 ctt diffuse.png -o diffuse.ktx2 -f bc7 --mipmap
 ```
 
-With zstd supercompression:
+With supercompression (KTX2 only). Use `--zstd` or `--zlib`; each optionally
+takes a compression level (`--zstd` accepts negative through 22, default 0;
+`--zlib` accepts 1 through 10, default 6):
 
 ```sh
 ctt diffuse.png -o diffuse.ktx2 -f bc7 --zstd
+ctt diffuse.png -o diffuse.ktx2 -f bc7 --zlib=9
 ```
 
 Swizzle channels:
@@ -178,11 +221,26 @@ Swizzle channels:
 ctt input.png -o output.ktx2 -f bc7 --swizzle bgra
 ```
 
+### Per-encoder tuning
+
+Each backend exposes its own low-level knobs through a
+`--<encoder>-opts "key=val;key=val"` flag: `--bc7e-opts`, `--intel-opts`,
+`--etcpak-opts`, `--amd-opts`, and `--astcenc-opts`. The opts apply only when
+the selected format resolves to that encoder; opts for a different encoder are
+ignored with a warning. Run `ctt --help-encoder <name>` (e.g. `bc7e`, `intel`,
+`etcpak`, `amd`, `astcenc`) to list the available keys, their types, and
+descriptions for the encoders compiled into your build:
+
+```sh
+ctt --help-encoder bc7e
+ctt diffuse.png -o diffuse.ktx2 -f bc7e_bc7 --bc7e-opts "uber-level=4;perceptual=true"
+```
+
 Run `ctt --help` for a full list of options.
 
 ## Minimum Supported Rust Version (MSRV)
 
-The MSRV is **1.88** (edition 2024). MSRV bumps are considered breaking changes.
+The MSRV is **1.90** (edition 2024). MSRV bumps are considered breaking changes.
 
 ## Prebuilt binaries
 

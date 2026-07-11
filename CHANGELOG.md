@@ -22,6 +22,53 @@ Per Keep a Changelog there are 6 main categories of changes:
 
 ## Unreleased
 
+### Added
+
+- Vertical (3:4) cubemap cross layout support with automatic orientation detection. The bottom face (`-Z`) follows the standard convention of being stored rotated 180°.
+- `A4R4G4B4_UNORM_PACK16` support for DDS input/output.
+- `ctt::encoders::resolve_auto_encoder` returns the concrete encoder `Encoder::Auto` will select for a format.
+- C API: `CTT_PIPELINE_OUTPUT_KIND_INVALID`; `ctt_pipeline_output_get_kind(NULL)` now returns it instead of masquerading as `CTT_PIPELINE_OUTPUT_KIND_ENCODED`.
+- C API: new example programs covering a real BC7 encode, error paths, and zero-initialized settings; all are compiled and run in CI.
+- CI now builds a matrix of encoder feature combinations, catching feature/link breakage.
+- README documents 2D-array assembly, cubemap arrays, 3D/volume passthrough, `--zlib` supercompression, and the per-encoder `--<encoder>-opts` / `--help-encoder` flags.
+
+### Changed
+
+- **BREAKING (C ABI):** enum discriminants renumbered so a zero-initialized `ctt_convert_settings` behaves identically to `ctt_convert_settings_default()`. `CTT_QUALITY_BASIC`, `CTT_MIPMAP_FILTER_TRIANGLE`, and the `CTT_CONTAINER_KTX2` tag are now `0`; other `ctt_quality`/`ctt_mipmap_filter`/`ctt_container` values shifted. Recompile against the new header.
+- **CLI:** `--zstd`/`--zlib` now require `=` for an explicit level (`--zstd=5`); a bare `--zstd` no longer consumes the following input path. Levels are range-validated.
+- astcenc quality tiers are now all distinct and monotonic (`fast` is no longer aliased to `basic`); `basic` still maps to astcenc's medium preset, so default performance is unchanged.
+- astcenc and Compressonator encoders now honor `Surface::stride` (padded rows are repacked), matching the other backends.
+- `ctt-intel-texture-compressor` and `ctt-bc7enc-rdo` emit a clear `compile_error!` when built without an ISPC backend (`prebuilt` or `build-from-source`) instead of failing at link time.
+- The README library example and the crate-level quick start are now compile-checked doctests in CI.
+
+### Removed
+
+- Removed an unused `criterion` entry from `ctt`'s `[dependencies]` (it remains a dev-dependency), slimming downstream dependency trees.
+- The published prebuilt crates no longer package `*.sigstore.jsonl` attestation bundles.
+
+### Fixed
+
+- **CLI:** per-encoder option flags (`--bc7e-opts`, etc.) were silently ignored when a bare format name (e.g. `-f bc7`) auto-selected the encoder; they now apply to the encoder Auto resolves to.
+- f32-pipeline conversions no longer silently drop an input's existing mip chain when mipmap generation is disabled.
+- Compressed inputs with a swizzle or mipmap request now error clearly instead of silently ignoring the request.
+- Fixed R/B channel order for 16-bit packed DDS formats (`B5G6R5`, `B5G5R5A1`, `B4G4R4A4`) and their legacy D3D9 equivalents, in both read and write paths.
+- DDS cubemaps flagged only via the DX10 header (no legacy caps2 bit) are now classified as cubemaps instead of 2D arrays.
+- `split_cubemap` validates its input and returns errors instead of panicking on short data or mis-divisible cross/strip dimensions.
+- Zero-width/height images are rejected up front instead of panicking downstream.
+- f16 surfaces with odd row strides load without panicking.
+- Mipmap count is clamped to the real chain length (no panic on huge counts, no duplicate 1×1 levels); mip-chain math uses integer `ilog2`.
+- Fixed a u32 overflow in ASTC output-size allocation for very large surfaces; hardened dimension/stride math across the pipeline against integer overflow.
+- C API: fixed a memory leak in `ctt_cubemap_input_separate_faces` when aborting on a NULL face; all six faces are now consumed as documented.
+- C API: Rust panics in decode/convert/encode entry points are contained at the FFI boundary and reported as `CTT_STATUS_INTERNAL` instead of aborting the host process.
+- C API: documented the enum/bool validity contract (out-of-range values are undefined behavior) and the zero-initialization guarantee in the generated header.
+- **CLI:** I/O errors now include the file path; the CLI refuses to overwrite an input file with the output; `--cubemap-layout` errors when combined with multiple inputs instead of being silently ignored.
+- README: fixed the stale (pre-0.4) library example and corrected the documented MSRV to 1.90; RELEASE.md now describes the actual publish process.
+
+### Security
+
+- KTX2: a supercompressed file declaring a huge uncompressed size no longer triggers an unbounded allocation before validation (decompression bomb).
+- DDS/KTX2: malicious headers with absurd mip/level counts or overflowing dimensions now error cleanly instead of panicking.
+
 ## v0.4.0
 
 Released 2026-05-16
