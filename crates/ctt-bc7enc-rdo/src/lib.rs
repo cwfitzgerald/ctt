@@ -10,6 +10,17 @@
 //!
 //! Each 4x4 block produces **16 bytes** of BC7-compressed data.
 
+// Without a backend feature the `extern "C"` bindings still compile, but no ISPC
+// object code is linked, so the build fails at link time with undefined `bc7e_*`
+// symbols and no actionable diagnostic. Fail loudly here instead.
+#[cfg(not(any(feature = "prebuilt", feature = "build-from-source")))]
+compile_error!(
+    "ctt-bc7enc-rdo needs an ISPC backend but none is enabled. Enable feature \
+     `prebuilt` (via ctt's `ispc-prebuilt` feature) to link the shipped static \
+     libraries, or `build-from-source` (via ctt's `ispc-build-from-source` \
+     feature) to compile the ISPC kernels with `ispc` on PATH."
+);
+
 #[cfg(feature = "prebuilt")]
 extern crate ctt_bc7enc_rdo_prebuilt;
 

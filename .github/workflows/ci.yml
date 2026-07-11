@@ -143,6 +143,42 @@ jobs:
             exit 1
           fi
 
+  feature-combos:
+    name: Feature combinations
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+
+      - name: Install Rust
+        uses: cwfitzgerald/repo-common/.github/actions/install-rust@trunk
+        with:
+          version: ${{ env.CI_RUST_VERSION }}
+
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@eea29cff9a2b68892c0845ae3e4f45fc47ee9354 # v2
+        with:
+          tool: cargo-nextest
+
+      # ISPC is not needed: the ISPC-backed encoders use the `ispc-prebuilt`
+      # backend in these combos, which links the shipped static libraries.
+      - name: README feature set (bc7enc + intel + prebuilt)
+        run: cargo nextest run --no-run -p ctt --no-default-features --features encoder-bc7enc,encoder-intel,ispc-prebuilt
+
+      - name: encoder-etcpak only
+        run: cargo nextest run --no-run -p ctt --no-default-features --features encoder-etcpak
+
+      - name: encoder-astcenc only
+        run: cargo nextest run --no-run -p ctt --no-default-features --features encoder-astcenc
+
+      - name: encoder-amd only
+        run: cargo nextest run --no-run -p ctt --no-default-features --features encoder-amd
+
+      - name: encoder-bc7enc + prebuilt
+        run: cargo nextest run --no-run -p ctt --no-default-features --features encoder-bc7enc,ispc-prebuilt
+
+      - name: encoder-intel + prebuilt
+        run: cargo nextest run --no-run -p ctt --no-default-features --features encoder-intel,ispc-prebuilt
+
   format:
     name: Format
     runs-on: ubuntu-latest

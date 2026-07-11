@@ -83,9 +83,9 @@ impl CompileTarget {
 /// Builder for compiling ISPC source files into a static library.
 ///
 /// Designed to be used in `build.rs` scripts. Finds the ISPC compiler on
-/// `PATH`, optionally validates its SHA-256 hash, invokes it with the correct
-/// flags for the current target triple, and archives the resulting objects into
-/// a static library.
+/// `PATH` (or via the `ISPC_PATH` environment variable), invokes it with the
+/// correct flags for the current target triple, and archives the resulting
+/// objects into a static library.
 pub struct Config {
     files: Vec<PathBuf>,
     opt_level: u32,
@@ -277,7 +277,7 @@ fn find_ispc() -> PathBuf {
         return path;
     }
 
-    // Resolve the full path via `which`/`where` so we can compute its hash.
+    // Resolve the full path to the `ispc` binary via `which`/`where`.
     let output = if cfg!(target_os = "windows") {
         Command::new("where").arg("ispc").output()
     } else {

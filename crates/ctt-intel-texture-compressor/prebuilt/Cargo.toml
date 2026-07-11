@@ -16,7 +16,10 @@ keywords = ["texture", "compression", "ispc", "gpu"]
 categories = ["graphics", "compression"]
 build = "build.rs"
 links = "ispc_tex"
-include = ["src/**", "build.rs", "bins/**", "Cargo.toml"]
+# Ship only the static libraries. The `*.sigstore.jsonl` attestation bundles in
+# `bins/` are for CI provenance verification and serve no purpose inside a
+# published .crate.
+include = ["src/**", "build.rs", "bins/**/*.a", "bins/**/*.lib", "Cargo.toml"]
 
 [build-dependencies]
 ispc-build-utils = { workspace = true }
