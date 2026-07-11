@@ -7,6 +7,11 @@ use crate::image::Image;
 pub enum PipelineOutputKind {
     Encoded = 0,
     Raw = 1,
+    /// Not a real output variant: returned by
+    /// [`ctt_pipeline_output_get_kind`] only when the handle is `NULL`. A
+    /// valid output is never this value. (The `u8` representation cannot hold
+    /// `-1`, so the next free discriminant is used as the invalid sentinel.)
+    Invalid = 2,
 }
 
 /// Opaque handle to a conversion result.
@@ -41,12 +46,16 @@ pub unsafe extern "C" fn ctt_pipeline_output_destroy(out: *mut PipelineOutput) {
 }
 
 /// Return the variant tag of the output.
+///
+/// Returns `CTT_PIPELINE_OUTPUT_KIND_INVALID` if `out` is `NULL`; this is
+/// never a valid output tag and lets callers distinguish a null handle from a
+/// genuine (empty) encoded output.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn ctt_pipeline_output_get_kind(
     out: *const PipelineOutput,
 ) -> PipelineOutputKind {
     let Some(o) = (unsafe { out.as_ref() }) else {
-        return PipelineOutputKind::Encoded;
+        return PipelineOutputKind::Invalid;
     };
     match &o.0 {
         Some(ctt::PipelineOutput::Encoded(_)) => PipelineOutputKind::Encoded,

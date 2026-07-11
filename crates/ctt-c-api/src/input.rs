@@ -1,4 +1,4 @@
-use crate::error::{Status, map_error, set_last_error};
+use crate::error::{Status, catch_panic, map_error, set_last_error};
 use crate::image::Image;
 use crate::types::{AlphaMode, ColorSpace, OptionalAlphaMode, OptionalColorSpace};
 
@@ -72,23 +72,25 @@ pub unsafe extern "C" fn ctt_detect_container(
     len: usize,
     out_format: *mut InputFormat,
 ) -> bool {
-    if data.is_null() && len != 0 {
-        return false;
-    }
-    let bytes = if len == 0 {
-        &[][..]
-    } else {
-        unsafe { std::slice::from_raw_parts(data, len) }
-    };
-    match ctt::input::detect_container(bytes) {
-        Some(f) => {
-            if let Some(out) = unsafe { out_format.as_mut() } {
-                *out = f.into();
-            }
-            true
+    catch_panic(false, || {
+        if data.is_null() && len != 0 {
+            return false;
         }
-        None => false,
-    }
+        let bytes = if len == 0 {
+            &[][..]
+        } else {
+            unsafe { std::slice::from_raw_parts(data, len) }
+        };
+        match ctt::input::detect_container(bytes) {
+            Some(f) => {
+                if let Some(out) = unsafe { out_format.as_mut() } {
+                    *out = f.into();
+                }
+                true
+            }
+            None => false,
+        }
+    })
 }
 
 /// Decode a container, auto-detecting format from magic bytes.
@@ -107,45 +109,47 @@ pub unsafe extern "C" fn ctt_decode_container(
     out_image: *mut *mut Image,
     out_recognized: *mut bool,
 ) -> Status {
-    if out_image.is_null() {
-        set_last_error("ctt_decode_container: out_image is null");
-        return Status::NullPointer;
-    }
-    if data.is_null() && len != 0 {
-        set_last_error("ctt_decode_container: data is null but len != 0");
-        return Status::NullPointer;
-    }
-    let bytes = if len == 0 {
-        &[][..]
-    } else {
-        unsafe { std::slice::from_raw_parts(data, len) }
-    };
-    let overrides_inner: ctt::input::InputOverrides = match unsafe { overrides.as_ref() } {
-        Some(o) => (*o).into(),
-        None => ctt::input::InputOverrides::default(),
-    };
+    catch_panic(Status::Internal, || {
+        if out_image.is_null() {
+            set_last_error("ctt_decode_container: out_image is null");
+            return Status::NullPointer;
+        }
+        if data.is_null() && len != 0 {
+            set_last_error("ctt_decode_container: data is null but len != 0");
+            return Status::NullPointer;
+        }
+        let bytes = if len == 0 {
+            &[][..]
+        } else {
+            unsafe { std::slice::from_raw_parts(data, len) }
+        };
+        let overrides_inner: ctt::input::InputOverrides = match unsafe { overrides.as_ref() } {
+            Some(o) => (*o).into(),
+            None => ctt::input::InputOverrides::default(),
+        };
 
-    match ctt::input::decode_container(bytes, overrides_inner) {
-        Ok(Some(image)) => {
-            unsafe {
-                *out_image = Box::into_raw(Box::new(Image(image)));
+        match ctt::input::decode_container(bytes, overrides_inner) {
+            Ok(Some(image)) => {
+                unsafe {
+                    *out_image = Box::into_raw(Box::new(Image(image)));
+                }
+                if let Some(r) = unsafe { out_recognized.as_mut() } {
+                    *r = true;
+                }
+                Status::Ok
             }
-            if let Some(r) = unsafe { out_recognized.as_mut() } {
-                *r = true;
+            Ok(None) => {
+                unsafe {
+                    *out_image = std::ptr::null_mut();
+                }
+                if let Some(r) = unsafe { out_recognized.as_mut() } {
+                    *r = false;
+                }
+                Status::Ok
             }
-            Status::Ok
+            Err(e) => map_error(e),
         }
-        Ok(None) => {
-            unsafe {
-                *out_image = std::ptr::null_mut();
-            }
-            if let Some(r) = unsafe { out_recognized.as_mut() } {
-                *r = false;
-            }
-            Status::Ok
-        }
-        Err(e) => map_error(e),
-    }
+    })
 }
 
 /// Decode a container with the format chosen explicitly, bypassing magic
@@ -161,31 +165,33 @@ pub unsafe extern "C" fn ctt_decode_container_as(
     overrides: *const InputOverrides,
     out_image: *mut *mut Image,
 ) -> Status {
-    if out_image.is_null() {
-        set_last_error("ctt_decode_container_as: out_image is null");
-        return Status::NullPointer;
-    }
-    if data.is_null() && len != 0 {
-        set_last_error("ctt_decode_container_as: data is null but len != 0");
-        return Status::NullPointer;
-    }
-    let bytes = if len == 0 {
-        &[][..]
-    } else {
-        unsafe { std::slice::from_raw_parts(data, len) }
-    };
-    let overrides_inner: ctt::input::InputOverrides = match unsafe { overrides.as_ref() } {
-        Some(o) => (*o).into(),
-        None => ctt::input::InputOverrides::default(),
-    };
-
-    match ctt::input::decode_container_as(bytes, format.into(), overrides_inner) {
-        Ok(image) => {
-            unsafe {
-                *out_image = Box::into_raw(Box::new(Image(image)));
-            }
-            Status::Ok
+    catch_panic(Status::Internal, || {
+        if out_image.is_null() {
+            set_last_error("ctt_decode_container_as: out_image is null");
+            return Status::NullPointer;
         }
-        Err(e) => map_error(e),
-    }
+        if data.is_null() && len != 0 {
+            set_last_error("ctt_decode_container_as: data is null but len != 0");
+            return Status::NullPointer;
+        }
+        let bytes = if len == 0 {
+            &[][..]
+        } else {
+            unsafe { std::slice::from_raw_parts(data, len) }
+        };
+        let overrides_inner: ctt::input::InputOverrides = match unsafe { overrides.as_ref() } {
+            Some(o) => (*o).into(),
+            None => ctt::input::InputOverrides::default(),
+        };
+
+        match ctt::input::decode_container_as(bytes, format.into(), overrides_inner) {
+            Ok(image) => {
+                unsafe {
+                    *out_image = Box::into_raw(Box::new(Image(image)));
+                }
+                Status::Ok
+            }
+            Err(e) => map_error(e),
+        }
+    })
 }

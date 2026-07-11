@@ -8,13 +8,18 @@
 pub type Format = u32;
 
 /// Universal quality preset all encoders understand.
+///
+/// `Basic` is discriminant `0` so that a zero-initialized
+/// [`ConvertSettings`](crate::ConvertSettings) selects it (the same value
+/// `ctt_convert_settings_default` uses). The remaining presets keep their
+/// speed ordering.
 #[repr(u8)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Quality {
-    UltraFast = 0,
-    VeryFast = 1,
-    Fast = 2,
-    Basic = 3,
+    Basic = 0,
+    UltraFast = 1,
+    VeryFast = 2,
+    Fast = 3,
     Slow = 4,
     VerySlow = 5,
 }
@@ -164,11 +169,15 @@ impl From<Swizzle> for ctt::Swizzle {
 }
 
 /// Filter used when downsampling for mipmap generation.
+///
+/// `Triangle` is discriminant `0` so that a zero-initialized
+/// [`ConvertSettings`](crate::ConvertSettings) selects the same default filter
+/// as `ctt_convert_settings_default`.
 #[repr(u8)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MipmapFilter {
-    Nearest = 0,
-    Triangle = 1,
+    Triangle = 0,
+    Nearest = 1,
     CatmullRom = 2,
     Gaussian = 3,
     Lanczos3 = 4,

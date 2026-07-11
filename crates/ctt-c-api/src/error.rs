@@ -6,6 +6,11 @@ use std::ffi::{CString, c_char};
 /// `CTT_STATUS_OK` (0) means success. Negative codes are errors. The most
 /// recent error message is available via [`ctt_last_error_message`] until
 /// the next ctt call on this thread.
+///
+/// `CTT_STATUS_INTERNAL` signals an unexpected internal failure — most
+/// commonly a Rust panic that was caught at the FFI boundary (see the panic
+/// note in the header overview). It always leaves a message in the
+/// thread-local error slot.
 #[repr(i32)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Status {
@@ -67,6 +72,42 @@ pub(crate) fn map_error(e: ctt::Error) -> Status {
     status
 }
 
+/// Run `f`, containing any panic that unwinds out of it.
+///
+/// Edition 2024 turns an unwind across an `extern "C"` boundary into an
+/// immediate process abort, so every entry point that calls into non-trivial
+/// ctt core code (decode / convert / encode) routes its body through this
+/// shim. A caught panic is recorded in the thread-local error slot and the
+/// caller-supplied `sentinel` is returned in its place (`Status::Internal`
+/// for status-returning functions, a null pointer / `false` for others).
+///
+/// The closure is wrapped in [`AssertUnwindSafe`] because these entry points
+/// operate on raw pointers and already own the "consumed on failure" contract
+/// documented per function; a panic drops any owned locals as the stack
+/// unwinds into the `catch_unwind`, so no double-free or leak results.
+pub(crate) fn catch_panic<T>(sentinel: T, f: impl FnOnce() -> T) -> T {
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)) {
+        Ok(value) => value,
+        Err(payload) => {
+            set_last_error(format!(
+                "internal error: caught panic: {}",
+                panic_message(payload.as_ref())
+            ));
+            sentinel
+        }
+    }
+}
+
+fn panic_message(payload: &(dyn std::any::Any + Send)) -> String {
+    if let Some(s) = payload.downcast_ref::<&str>() {
+        (*s).to_string()
+    } else if let Some(s) = payload.downcast_ref::<String>() {
+        s.clone()
+    } else {
+        "unknown panic payload".to_string()
+    }
+}
+
 /// Pointer to a NUL-terminated UTF-8 string describing the most recent error
 /// produced on this thread, or `NULL` if there is no recorded error.
 ///
@@ -85,4 +126,44 @@ pub extern "C" fn ctt_last_error_message() -> *const c_char {
 #[unsafe(no_mangle)]
 pub extern "C" fn ctt_clear_last_error() {
     clear_last_error();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::ffi::CStr;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[test]
+    fn catch_panic_returns_sentinel_and_records_message() {
+        clear_last_error();
+        let result = catch_panic(Status::Internal, || panic!("ffi test panic"));
+        assert_eq!(result, Status::Internal);
+
+        let ptr = ctt_last_error_message();
+        assert!(!ptr.is_null());
+        let message = unsafe { CStr::from_ptr(ptr) }.to_str().unwrap();
+        assert!(message.contains("ffi test panic"), "got: {message}");
+    }
+
+    #[test]
+    fn catch_panic_drops_owned_locals_once() {
+        struct DropCounter(Arc<AtomicUsize>);
+        impl Drop for DropCounter {
+            fn drop(&mut self) {
+                self.0.fetch_add(1, Ordering::SeqCst);
+            }
+        }
+
+        let drops = Arc::new(AtomicUsize::new(0));
+        let owned = DropCounter(Arc::clone(&drops));
+        let result = catch_panic(false, move || {
+            let _owned = owned;
+            panic!("drop test");
+        });
+
+        assert!(!result);
+        assert_eq!(drops.load(Ordering::SeqCst), 1);
+    }
 }

@@ -95,6 +95,45 @@
  * VkFormat values are accepted and may be useful for round-tripping
  * container files that carry an exotic format. `0` (`VK_FORMAT_UNDEFINED`)
  * is never a valid input.
+ *
+ *
+ * Enum and bool validity (UNDEFINED BEHAVIOR if violated)
+ * -------------------------------------------------------
+ *
+ * Every `ctt_*` enum parameter or struct field (including the `tag` field of
+ * a tagged union such as `ctt_container`, `ctt_target_format`, and
+ * `ctt_encoder`) MUST hold one of the defined `CTT_*` enumerator values for
+ * that type. Every `bool` field — notably the `present` flag of the
+ * `ctt_optional_*` structs — MUST be exactly `0` or `1`.
+ *
+ * These types cross the ABI by value and are matched exhaustively on the Rust
+ * side. Passing an out-of-range discriminant or a `bool` byte other than 0/1
+ * (for example from an uninitialized field or a wild cast) is UNDEFINED
+ * BEHAVIOR; the library does not range-check them. Zero-initialize or use the
+ * provided `*_default()` / `ctt_encoder_auto()` constructors and assign only
+ * named `CTT_*` values.
+ *
+ *
+ * Zero-initialization
+ * -------------------
+ *
+ * `ctt_convert_settings` is laid out so that an all-zeroes value
+ * (`memset(&cfg, 0, sizeof cfg)`) is a valid settings struct that behaves
+ * exactly like `ctt_convert_settings_default()`: input format preserved, KTX2
+ * container, `CTT_QUALITY_BASIC`, triangle mipmap filter, and every optional
+ * override absent. Calling `ctt_convert_settings_default()` is still
+ * recommended for clarity and forward-compatibility if the defaults change.
+ *
+ *
+ * Panics
+ * ------
+ *
+ * Entry points that run the decode / convert / encode pipelines contain any
+ * internal Rust panic at the ABI boundary and report it as
+ * `CTT_STATUS_INTERNAL` (with a message in `ctt_last_error_message`), or as
+ * the function's failure sentinel (`NULL` / `false`) for non-status returns.
+ * A panic never unwinds across the C boundary. `CTT_STATUS_INTERNAL`
+ * indicates an unexpected bug — please report it.
  */
 
 
@@ -231,16 +270,21 @@ typedef uint8_t ctt_astcenc_normal_swizzle;
 
 /**
  * Universal quality preset all encoders understand.
+ *
+ * `Basic` is discriminant `0` so that a zero-initialized
+ * [`ConvertSettings`](crate::ConvertSettings) selects it (the same value
+ * `ctt_convert_settings_default` uses). The remaining presets keep their
+ * speed ordering.
  */
 enum ctt_quality
 #ifdef __cplusplus
   : uint8_t
 #endif // __cplusplus
  {
-    CTT_QUALITY_ULTRA_FAST = 0,
-    CTT_QUALITY_VERY_FAST = 1,
-    CTT_QUALITY_FAST = 2,
-    CTT_QUALITY_BASIC = 3,
+    CTT_QUALITY_BASIC = 0,
+    CTT_QUALITY_ULTRA_FAST = 1,
+    CTT_QUALITY_VERY_FAST = 2,
+    CTT_QUALITY_FAST = 3,
     CTT_QUALITY_SLOW = 4,
     CTT_QUALITY_VERY_SLOW = 5,
 };
@@ -300,14 +344,18 @@ typedef uint8_t ctt_swizzle_channel;
 
 /**
  * Filter used when downsampling for mipmap generation.
+ *
+ * `Triangle` is discriminant `0` so that a zero-initialized
+ * [`ConvertSettings`](crate::ConvertSettings) selects the same default filter
+ * as `ctt_convert_settings_default`.
  */
 enum ctt_mipmap_filter
 #ifdef __cplusplus
   : uint8_t
 #endif // __cplusplus
  {
-    CTT_MIPMAP_FILTER_NEAREST = 0,
-    CTT_MIPMAP_FILTER_TRIANGLE = 1,
+    CTT_MIPMAP_FILTER_TRIANGLE = 0,
+    CTT_MIPMAP_FILTER_NEAREST = 1,
     CTT_MIPMAP_FILTER_CATMULL_ROM = 2,
     CTT_MIPMAP_FILTER_GAUSSIAN = 3,
     CTT_MIPMAP_FILTER_LANCZOS3 = 4,
@@ -322,6 +370,11 @@ typedef uint8_t ctt_mipmap_filter;
  * `CTT_STATUS_OK` (0) means success. Negative codes are errors. The most
  * recent error message is available via [`ctt_last_error_message`] until
  * the next ctt call on this thread.
+ *
+ * `CTT_STATUS_INTERNAL` signals an unexpected internal failure — most
+ * commonly a Rust panic that was caught at the FFI boundary (see the panic
+ * note in the header overview). It always leaves a message in the
+ * thread-local error slot.
  */
 enum ctt_status
 #ifdef __cplusplus
@@ -395,6 +448,13 @@ enum ctt_pipeline_output_kind
  {
     CTT_PIPELINE_OUTPUT_KIND_ENCODED = 0,
     CTT_PIPELINE_OUTPUT_KIND_RAW = 1,
+    /**
+     * Not a real output variant: returned by
+     * [`ctt_pipeline_output_get_kind`] only when the handle is `NULL`. A
+     * valid output is never this value. (The `u8` representation cannot hold
+     * `-1`, so the next free discriminant is used as the invalid sentinel.)
+     */
+    CTT_PIPELINE_OUTPUT_KIND_INVALID = 2,
 };
 #ifndef __cplusplus
 typedef uint8_t ctt_pipeline_output_kind;
@@ -882,18 +942,22 @@ typedef struct {
  *
  * `Ktx2` writes a plain KTX2 file. `Ktx2Zstd` / `Ktx2Zlib` apply the
  * corresponding KTX2 supercompression scheme; the carried integer is the
- * compression level passed to the underlying codec. `Raw` returns the
- * processed image without serializing into a file format.
+ * compression level passed to the underlying codec. `Dds` writes a DDS file.
+ * `Raw` returns the processed image without serializing into a file format.
+ *
+ * `Ktx2` is tag `0` so that a zero-initialized
+ * [`ConvertSettings`] selects the same default container as
+ * `ctt_convert_settings_default`.
  */
 enum ctt_container_Tag
 #ifdef __cplusplus
   : uint8_t
 #endif // __cplusplus
  {
-    CTT_CONTAINER_DDS,
     CTT_CONTAINER_KTX2,
     CTT_CONTAINER_KTX2_ZSTD,
     CTT_CONTAINER_KTX2_ZLIB,
+    CTT_CONTAINER_DDS,
     CTT_CONTAINER_RAW,
 };
 #ifndef __cplusplus
@@ -957,6 +1021,13 @@ typedef struct {
  * Build via [`ctt_convert_settings_default`] and overwrite fields, or
  * fill the struct directly. Optional fields have a `present` flag — set
  * it to `false` to keep the default behavior.
+ *
+ * The enum discriminants are chosen so that a fully zero-initialized
+ * `ctt_convert_settings` (e.g. via `memset(&cfg, 0, sizeof cfg)`) behaves
+ * identically to `ctt_convert_settings_default()`: preserve input format,
+ * KTX2 container, `Basic` quality, triangle mipmap filter, and no overrides.
+ * Calling `ctt_convert_settings_default()` is still recommended — it is
+ * self-documenting and stays correct if defaults ever change.
  */
 typedef struct {
     ctt_target_format format;
@@ -1440,6 +1511,10 @@ ctt_status ctt_decode_container_as(const uint8_t *data,
 
 /**
  * Return the variant tag of the output.
+ *
+ * Returns `CTT_PIPELINE_OUTPUT_KIND_INVALID` if `out` is `NULL`; this is
+ * never a valid output tag and lets callers distinguish a null handle from a
+ * genuine (empty) encoded output.
  */
  ctt_pipeline_output_kind ctt_pipeline_output_get_kind(const ctt_pipeline_output *out);
 

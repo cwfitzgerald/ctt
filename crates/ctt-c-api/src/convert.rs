@@ -1,4 +1,4 @@
-use crate::error::{Status, map_error, set_last_error};
+use crate::error::{Status, catch_panic, map_error, set_last_error};
 use crate::formats::to_ctt_format;
 use crate::image::{Image, take_image};
 use crate::output::PipelineOutput;
@@ -682,15 +682,19 @@ impl TargetFormat {
 ///
 /// `Ktx2` writes a plain KTX2 file. `Ktx2Zstd` / `Ktx2Zlib` apply the
 /// corresponding KTX2 supercompression scheme; the carried integer is the
-/// compression level passed to the underlying codec. `Raw` returns the
-/// processed image without serializing into a file format.
+/// compression level passed to the underlying codec. `Dds` writes a DDS file.
+/// `Raw` returns the processed image without serializing into a file format.
+///
+/// `Ktx2` is tag `0` so that a zero-initialized
+/// [`ConvertSettings`] selects the same default container as
+/// `ctt_convert_settings_default`.
 #[repr(C, u8)]
 #[derive(Debug, Clone, Copy)]
 pub enum Container {
-    Dds,
     Ktx2,
     Ktx2Zstd(i32),
     Ktx2Zlib(u8),
+    Dds,
     Raw,
 }
 
@@ -719,6 +723,13 @@ impl From<Container> for ctt::Container {
 /// Build via [`ctt_convert_settings_default`] and overwrite fields, or
 /// fill the struct directly. Optional fields have a `present` flag — set
 /// it to `false` to keep the default behavior.
+///
+/// The enum discriminants are chosen so that a fully zero-initialized
+/// `ctt_convert_settings` (e.g. via `memset(&cfg, 0, sizeof cfg)`) behaves
+/// identically to `ctt_convert_settings_default()`: preserve input format,
+/// KTX2 container, `Basic` quality, triangle mipmap filter, and no overrides.
+/// Calling `ctt_convert_settings_default()` is still recommended — it is
+/// self-documenting and stays correct if defaults ever change.
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct ConvertSettings {
@@ -785,66 +796,68 @@ pub unsafe extern "C" fn ctt_convert(
     settings: *const ConvertSettings,
     out: *mut *mut PipelineOutput,
 ) -> Status {
-    if out.is_null() {
-        if !image.is_null() {
-            drop(unsafe { Box::from_raw(image) });
-        }
-        set_last_error("ctt_convert: out is null");
-        return Status::NullPointer;
-    }
-    let Some(settings) = (unsafe { settings.as_ref() }) else {
-        if !image.is_null() {
-            drop(unsafe { Box::from_raw(image) });
-        }
-        set_last_error("ctt_convert: settings is null");
-        return Status::NullPointer;
-    };
-
-    let image = match unsafe { take_image(image) } {
-        Ok(i) => i,
-        Err(s) => return s,
-    };
-
-    let format = match settings.format.into_inner() {
-        Ok(f) => f,
-        Err(s) => return s,
-    };
-
-    let swizzle = if settings.swizzle.present {
-        Some(settings.swizzle.value.into())
-    } else {
-        None
-    };
-
-    let inner = ctt::ConvertSettings {
-        format,
-        container: settings.container.into(),
-        quality: settings.quality.into_inner(),
-        output_color_space: settings
-            .output_color_space
-            .present
-            .then(|| settings.output_color_space.value.into()),
-        output_alpha: settings
-            .output_alpha
-            .present
-            .then(|| settings.output_alpha.value.into()),
-        swizzle,
-        mipmap: settings.mipmap,
-        mipmap_count: settings
-            .mipmap_count
-            .present
-            .then_some(settings.mipmap_count.value),
-        mipmap_filter: settings.mipmap_filter.into(),
-    };
-
-    match ctt::convert(image, inner) {
-        Ok(output) => {
-            let boxed = Box::into_raw(Box::new(PipelineOutput(Some(output))));
-            unsafe {
-                *out = boxed;
+    catch_panic(Status::Internal, || {
+        if out.is_null() {
+            if !image.is_null() {
+                drop(unsafe { Box::from_raw(image) });
             }
-            Status::Ok
+            set_last_error("ctt_convert: out is null");
+            return Status::NullPointer;
         }
-        Err(e) => map_error(e),
-    }
+        let Some(settings) = (unsafe { settings.as_ref() }) else {
+            if !image.is_null() {
+                drop(unsafe { Box::from_raw(image) });
+            }
+            set_last_error("ctt_convert: settings is null");
+            return Status::NullPointer;
+        };
+
+        let image = match unsafe { take_image(image) } {
+            Ok(i) => i,
+            Err(s) => return s,
+        };
+
+        let format = match settings.format.into_inner() {
+            Ok(f) => f,
+            Err(s) => return s,
+        };
+
+        let swizzle = if settings.swizzle.present {
+            Some(settings.swizzle.value.into())
+        } else {
+            None
+        };
+
+        let inner = ctt::ConvertSettings {
+            format,
+            container: settings.container.into(),
+            quality: settings.quality.into_inner(),
+            output_color_space: settings
+                .output_color_space
+                .present
+                .then(|| settings.output_color_space.value.into()),
+            output_alpha: settings
+                .output_alpha
+                .present
+                .then(|| settings.output_alpha.value.into()),
+            swizzle,
+            mipmap: settings.mipmap,
+            mipmap_count: settings
+                .mipmap_count
+                .present
+                .then_some(settings.mipmap_count.value),
+            mipmap_filter: settings.mipmap_filter.into(),
+        };
+
+        match ctt::convert(image, inner) {
+            Ok(output) => {
+                let boxed = Box::into_raw(Box::new(PipelineOutput(Some(output))));
+                unsafe {
+                    *out = boxed;
+                }
+                Status::Ok
+            }
+            Err(e) => map_error(e),
+        }
+    })
 }
