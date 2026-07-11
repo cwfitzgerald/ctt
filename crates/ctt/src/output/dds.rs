@@ -83,9 +83,12 @@ pub fn vk_format_to_dxgi(format: ktx2::Format, color_space: ColorSpace) -> Resul
         // Packed
         F::B10G11R11_UFLOAT_PACK32 => Ok(DxgiFormat::R11G11B10_Float),
         F::E5B9G9R9_UFLOAT_PACK32 => Ok(DxgiFormat::R9G9B9E5_SharedExp),
-        F::B5G6R5_UNORM_PACK16 => Ok(DxgiFormat::B5G6R5_UNorm),
-        F::B5G5R5A1_UNORM_PACK16 => Ok(DxgiFormat::B5G5R5A1_UNorm),
-        F::B4G4R4A4_UNORM_PACK16 => Ok(DxgiFormat::B4G4R4A4_UNorm),
+        // VK `_PACKnn` names are MSB-first, DXGI packed names are LSB-first, so
+        // the component order reverses. VK R5G6B5_PACK16 (red in bits 15:11)
+        // matches the word layout DXGI calls B5G6R5.
+        F::R5G6B5_UNORM_PACK16 => Ok(DxgiFormat::B5G6R5_UNorm),
+        F::A1R5G5B5_UNORM_PACK16 => Ok(DxgiFormat::B5G5R5A1_UNorm),
+        F::A4R4G4B4_UNORM_PACK16 => Ok(DxgiFormat::B4G4R4A4_UNorm),
 
         // ── BC compressed ───────────────────────────────────────────────
         F::BC1_RGBA_UNORM_BLOCK | F::BC1_RGB_UNORM_BLOCK => Ok(DxgiFormat::BC1_UNorm),
@@ -272,6 +275,24 @@ mod tests {
         assert_eq!(
             vk_format_to_dxgi(F::E5B9G9R9_UFLOAT_PACK32, ColorSpace::Linear).unwrap(),
             DxgiFormat::R9G9B9E5_SharedExp
+        );
+    }
+
+    /// VK `_PACK16` names are MSB-first; the DXGI equivalents reverse the
+    /// component order (VK R5G6B5 == DXGI B5G6R5, etc.).
+    #[test]
+    fn packed_formats_map_to_dxgi() {
+        assert_eq!(
+            vk_format_to_dxgi(F::R5G6B5_UNORM_PACK16, ColorSpace::Linear).unwrap(),
+            DxgiFormat::B5G6R5_UNorm
+        );
+        assert_eq!(
+            vk_format_to_dxgi(F::A1R5G5B5_UNORM_PACK16, ColorSpace::Linear).unwrap(),
+            DxgiFormat::B5G5R5A1_UNorm
+        );
+        assert_eq!(
+            vk_format_to_dxgi(F::A4R4G4B4_UNORM_PACK16, ColorSpace::Linear).unwrap(),
+            DxgiFormat::B4G4R4A4_UNorm
         );
     }
 }

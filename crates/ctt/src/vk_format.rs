@@ -3,10 +3,15 @@ use crate::surface::ColorSpace;
 /// Channel data type for uncompressed formats.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ChannelKind {
+    /// 8-bit unsigned integer per channel.
     U8,
+    /// 16-bit unsigned integer per channel.
     U16,
+    /// 16-bit half-precision float per channel.
     F16,
+    /// 32-bit single-precision float per channel.
     F32,
+    /// 32-bit unsigned integer per channel.
     U32,
 }
 
@@ -73,6 +78,7 @@ impl FormatExt for ktx2::Format {
             F::R16_UNORM | F::R16_SNORM | F::R16_UINT | F::R16_SINT | F::R16_SFLOAT => 2,
             F::R4G4B4A4_UNORM_PACK16
             | F::B4G4R4A4_UNORM_PACK16
+            | F::A4R4G4B4_UNORM_PACK16
             | F::R5G6B5_UNORM_PACK16
             | F::B5G6R5_UNORM_PACK16
             | F::R5G5B5A1_UNORM_PACK16
@@ -420,6 +426,7 @@ impl FormatExt for ktx2::Format {
             | F::R64G64B64A64_SFLOAT
             | F::R4G4B4A4_UNORM_PACK16
             | F::B4G4R4A4_UNORM_PACK16
+            | F::A4R4G4B4_UNORM_PACK16
             | F::R5G5B5A1_UNORM_PACK16
             | F::B5G5R5A1_UNORM_PACK16
             | F::A1R5G5B5_UNORM_PACK16 => 4,
