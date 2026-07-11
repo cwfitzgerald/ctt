@@ -115,11 +115,16 @@ fn load_f16_f32_bulk(surface: &Surface, channels: usize) -> Result<Buffer<f32>> 
     // Pre-fill default lanes (alpha=1.0) for sub-4-channel inputs.
     let mut pixels = vec![[0.0f32, 0.0, 0.0, 1.0]; w * h];
 
+    // Rows start at `row_idx * stride`; an odd stride yields odd byte offsets
+    // that `bytemuck::cast_slice::<u8, f16>` (align 2) would reject with a
+    // panic. `aligned_f16` casts in place when the row happens to be aligned
+    // and otherwise decodes it into a reused scratch buffer.
+    let mut scratch: Vec<f16> = Vec::new();
     if channels == 4 {
         // Each pixel is 4×f16 mapping 1:1 onto 4×f32 — bulk-convert each row
         // straight into the destination lanes.
         for (row_idx, row_region) in surface.data.chunks(stride).take(h).enumerate() {
-            let src: &[f16] = bytemuck::cast_slice(&row_region[..row_bytes]);
+            let src = aligned_f16(&row_region[..row_bytes], &mut scratch);
             let dst_pixels = &mut pixels[row_idx * w..(row_idx + 1) * w];
             let dst: &mut [f32] = bytemuck::cast_slice_mut(dst_pixels);
             src.convert_to_f32_slice(dst);
@@ -129,7 +134,7 @@ fn load_f16_f32_bulk(surface: &Surface, channels: usize) -> Result<Buffer<f32>> 
         // scatter into the leading lanes. The default alpha=1.0 stays put.
         let mut row_f32 = vec![0f32; w * channels];
         for (row_idx, row_region) in surface.data.chunks(stride).take(h).enumerate() {
-            let src: &[f16] = bytemuck::cast_slice(&row_region[..row_bytes]);
+            let src = aligned_f16(&row_region[..row_bytes], &mut scratch);
             src.convert_to_f32_slice(&mut row_f32);
             let dst_pixels = &mut pixels[row_idx * w..(row_idx + 1) * w];
             for (pixel, chunk) in dst_pixels.iter_mut().zip(row_f32.chunks_exact(channels)) {
@@ -143,6 +148,25 @@ fn load_f16_f32_bulk(surface: &Surface, channels: usize) -> Result<Buffer<f32>> 
         width: surface.width,
         height: surface.height,
     })
+}
+
+/// Reinterpret a row of bytes as `f16` lanes without ever misaligning.
+///
+/// Casts in place when `row` is already 2-byte aligned (the common case);
+/// otherwise — e.g. an odd `stride` places a row at an odd byte offset —
+/// decodes the row into `scratch` (reused across rows) via `from_le_bytes`
+/// and returns that. `row.len()` is always a multiple of 2 here.
+#[cfg(target_endian = "little")]
+fn aligned_f16<'a>(row: &'a [u8], scratch: &'a mut Vec<f16>) -> &'a [f16] {
+    match bytemuck::try_cast_slice::<u8, f16>(row) {
+        Ok(src) => src,
+        Err(_) => {
+            scratch.resize(row.len() / 2, f16::from_bits(0));
+            let scratch_bytes: &mut [u8] = bytemuck::cast_slice_mut(scratch.as_mut_slice());
+            scratch_bytes.copy_from_slice(row);
+            scratch.as_slice()
+        }
+    }
 }
 
 pub fn load_f32_f32(surface: &Surface, channels: usize) -> Result<Buffer<f32>> {
@@ -406,4 +430,59 @@ fn read_pixels_u64(
         width: surface.width,
         height: surface.height,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::alpha::AlphaMode;
+    use crate::surface::ColorSpace;
+
+    /// R16G16B16A16_SFLOAT with an *odd* row stride must load without panicking
+    /// — rows land at odd byte offsets that a plain `cast_slice::<u8, f16>`
+    /// would reject on its 2-byte alignment requirement.
+    #[test]
+    fn load_f16_odd_stride_no_panic() {
+        use half::f16;
+        let width = 2u32;
+        let height = 2u32;
+        let pixel_bytes = 4 * 2; // RGBA f16
+        let row_bytes = width as usize * pixel_bytes;
+        // One extra byte of padding per row makes the stride odd.
+        let stride = row_bytes + 1;
+
+        let mut data = vec![0u8; stride * height as usize];
+        let mut expected = Vec::new();
+        for y in 0..height as usize {
+            for x in 0..width as usize {
+                for c in 0..4usize {
+                    let v = (y * 8 + x * 4 + c) as f32 * 0.125 - 0.5;
+                    expected.push(v);
+                    let off = y * stride + (x * 4 + c) * 2;
+                    data[off..off + 2].copy_from_slice(&f16::from_f32(v).to_le_bytes());
+                }
+            }
+        }
+
+        let surface = Surface {
+            data,
+            width,
+            height,
+            depth: 1,
+            stride: stride as u32,
+            slice_stride: 0,
+            format: ktx2::Format::R16G16B16A16_SFLOAT,
+            color_space: ColorSpace::Linear,
+            alpha: AlphaMode::Opaque,
+        };
+
+        let buf = load_f16_f32(&surface, 4).unwrap();
+        assert_eq!(buf.width, width);
+        assert_eq!(buf.height, height);
+        // Values round-trip through f16 exactly (they were built from f16).
+        let flat: Vec<f32> = buf.pixels.iter().flat_map(|p| p.iter().copied()).collect();
+        for (got, want) in flat.iter().zip(&expected) {
+            assert_eq!(got, want);
+        }
+    }
 }
