@@ -1,10 +1,16 @@
 use std::fmt;
 
+/// How a surface's alpha channel relates to its color channels.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Default)]
 pub enum AlphaMode {
+    /// Straight (non-premultiplied) alpha: color channels are independent of
+    /// alpha. The default.
     #[default]
     Straight,
+    /// Premultiplied alpha: color channels have already been multiplied by
+    /// alpha.
     Premultiplied,
+    /// Fully opaque: the alpha channel carries no transparency information.
     Opaque,
 }
 

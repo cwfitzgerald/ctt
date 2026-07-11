@@ -36,7 +36,9 @@ pub fn detect_container(data: &[u8]) -> Option<InputFormat> {
 /// When set, these take precedence over the values read from the container.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct InputOverrides {
+    /// Overrides the color space of every surface when set.
     pub color_space: Option<ColorSpace>,
+    /// Overrides the alpha mode of every surface when set.
     pub alpha: Option<AlphaMode>,
 }
 

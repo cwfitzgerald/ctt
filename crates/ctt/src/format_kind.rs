@@ -14,21 +14,37 @@
 /// sRGB byte decoding). The [`FormatFamily`] reports the semantic interpretation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum FormatKind {
+    /// 8-bit unsigned integer lanes, RGBA channel order.
     U8,
+    /// 8-bit signed integer lanes, RGBA channel order.
     I8,
+    /// 16-bit unsigned integer lanes, RGBA channel order.
     U16,
+    /// 16-bit signed integer lanes, RGBA channel order.
     I16,
+    /// 16-bit half-precision float lanes, RGBA channel order.
     F16,
+    /// 32-bit unsigned integer lanes, RGBA channel order.
     U32,
+    /// 32-bit signed integer lanes, RGBA channel order.
     I32,
+    /// 32-bit single-precision float lanes, RGBA channel order.
     F32,
+    /// 64-bit unsigned integer lanes, RGBA channel order.
     U64,
+    /// 64-bit signed integer lanes, RGBA channel order.
     I64,
+    /// 64-bit double-precision float lanes, RGBA channel order.
     F64,
+    /// 8-bit sRGB-encoded lanes, RGBA channel order.
     Srgb8,
+    /// 8-bit unsigned integer lanes, BGRA channel order.
     Bgra8,
+    /// 8-bit sRGB-encoded lanes, BGRA channel order.
     Bgra8Srgb,
+    /// 8-bit unsigned integer lanes, BGR channel order.
     Bgr8,
+    /// 8-bit sRGB-encoded lanes, BGR channel order.
     Bgr8Srgb,
 }
 
