@@ -14,7 +14,10 @@ use crate::vk_format::FormatExt;
 /// Output container format.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Container {
+    /// DirectDraw Surface (`.dds`) file.
     Dds,
+    /// KTX2 (`.ktx2`) file, optionally supercompressed. `None` means no
+    /// supercompression.
     Ktx2(Option<Ktx2Supercompression>),
     /// Return the processed [`Image`] directly, without encoding into a file format.
     Raw,
@@ -30,12 +33,15 @@ pub enum Ktx2Supercompression {
 }
 
 impl Container {
+    /// KTX2 output with no supercompression.
     pub fn ktx2() -> Self {
         Container::Ktx2(None)
     }
+    /// KTX2 output with Zstandard supercompression at the given `zstd` level.
     pub fn ktx2_zstd(level: i32) -> Self {
         Container::Ktx2(Some(Ktx2Supercompression::Zstd { level }))
     }
+    /// KTX2 output with ZLIB supercompression at the given deflate level.
     pub fn ktx2_zlib(level: u8) -> Self {
         Container::Ktx2(Some(Ktx2Supercompression::Zlib { level }))
     }
@@ -46,13 +52,25 @@ impl Container {
 pub struct ConvertSettings {
     /// Target format. If `None`, the input format is preserved without compression.
     pub format: Option<TargetFormat>,
+    /// Output container format. Defaults to KTX2 with no supercompression
+    /// ([`Container::Ktx2(None)`](Container::Ktx2)).
     pub container: Container,
+    /// Encoder quality preset for compressed targets. Ignored for
+    /// uncompressed output.
     pub quality: Quality,
+    /// Override the output color space. `None` keeps the input's color space.
     pub output_color_space: Option<ColorSpace>,
+    /// Override the output alpha mode. `None` keeps the input's alpha mode.
     pub output_alpha: Option<AlphaMode>,
+    /// Optional channel swizzle applied to each pixel before encoding.
     pub swizzle: Option<Swizzle>,
+    /// Regenerate a full mip chain from the base level when `true`. When
+    /// `false`, any existing mip levels are preserved (and converted).
     pub mipmap: bool,
+    /// Number of mip levels to generate when `mipmap` is `true`. `None` builds
+    /// the full chain; larger-than-full values are clamped to the full chain.
     pub mipmap_count: Option<usize>,
+    /// Downsampling filter used for mipmap generation.
     pub mipmap_filter: mipmap::MipmapFilter,
 }
 
@@ -112,9 +130,24 @@ pub fn convert(image: Image, mut settings: ConvertSettings) -> Result<PipelineOu
     }
 
     // Compressed inputs that didn't qualify for passthrough have nowhere to
-    // go — the float/integer pipelines can't decode compressed data. Defer
-    // to passthrough::run's strict format check so the error is meaningful.
+    // go — the float/integer pipelines can't decode compressed data. A
+    // swizzle or mipmap request needs pixel-level access, so it can't be
+    // honored; fail loudly rather than silently dropping it in passthrough.
     if input_fmt.is_compressed() {
+        if settings.swizzle.is_some() || settings.mipmap {
+            return Err(Error::UnsupportedConversion(
+                "cannot swizzle or mipmap a compressed input; decode it to an \
+                 uncompressed format first"
+                    .into(),
+            ));
+        }
+        if input_cs != target_cs || input_alpha != target_alpha {
+            return Err(Error::UnsupportedConversion(
+                "cannot change color space or alpha mode for a compressed input; decode it to an \
+                 uncompressed format first"
+                    .into(),
+            ));
+        }
         log::debug!(
             "convert: compressed input did not qualify for passthrough; \
              falling back to passthrough format check"
@@ -191,32 +224,47 @@ fn convert_f32(
     let mut out_layers = Vec::with_capacity(image.surfaces.len());
     for layer in image.surfaces {
         profiling::scope!("convert_f32_layer");
-        let base = layer
-            .into_iter()
-            .next()
-            .ok_or_else(|| Error::UnsupportedFormat("empty layer".into()))?;
 
-        let mut buf: Buffer<f32> = load::load_f32(&base)?;
-
-        if let Some(sw) = &settings.swizzle {
-            swizzle::apply_f32(&mut buf, sw);
-        }
-
-        let bufs = if settings.mipmap {
-            mipmap::generate(buf, settings.mipmap_filter, settings.mipmap_count)?
+        let mips = if settings.mipmap {
+            // Regenerate the full chain from the base mip, discarding any
+            // pre-existing levels.
+            let base = layer
+                .into_iter()
+                .next()
+                .ok_or_else(|| Error::UnsupportedFormat("empty layer".into()))?;
+            let mut buf: Buffer<f32> = load::load_f32(&base)?;
+            if let Some(sw) = &settings.swizzle {
+                swizzle::apply_f32(&mut buf, sw);
+            }
+            let bufs = mipmap::generate(buf, settings.mipmap_filter, settings.mipmap_count)?;
+            let mut mips = Vec::with_capacity(bufs.len());
+            for b in bufs {
+                mips.push(store::store_f32(
+                    b,
+                    target_fmt,
+                    target_color_space,
+                    target_alpha,
+                )?);
+            }
+            mips
         } else {
-            vec![buf]
+            // Convert every existing mip level (matching the f64/integer
+            // paths) so an input mip chain isn't silently dropped.
+            let mut mips = Vec::with_capacity(layer.len());
+            for base in layer {
+                let mut buf: Buffer<f32> = load::load_f32(&base)?;
+                if let Some(sw) = &settings.swizzle {
+                    swizzle::apply_f32(&mut buf, sw);
+                }
+                mips.push(store::store_f32(
+                    buf,
+                    target_fmt,
+                    target_color_space,
+                    target_alpha,
+                )?);
+            }
+            mips
         };
-
-        let mut mips = Vec::with_capacity(bufs.len());
-        for b in bufs {
-            mips.push(store::store_f32(
-                b,
-                target_fmt,
-                target_color_space,
-                target_alpha,
-            )?);
-        }
         out_layers.push(mips);
     }
 
@@ -494,6 +542,167 @@ mod tests {
             }
             _ => panic!("expected Raw output"),
         }
+    }
+
+    /// Build an RGBA8 image with three explicit mip levels (8×8, 4×4, 2×2).
+    fn three_mip_rgba8() -> Image {
+        let mip = |w: u32, h: u32, fill: u8| Surface {
+            data: vec![fill; (w * h * 4) as usize],
+            width: w,
+            height: h,
+            depth: 1,
+            stride: w * 4,
+            slice_stride: 0,
+            format: ktx2::Format::R8G8B8A8_UNORM,
+            color_space: ColorSpace::Linear,
+            alpha: AlphaMode::Opaque,
+        };
+        Image {
+            surfaces: vec![vec![mip(8, 8, 10), mip(4, 4, 20), mip(2, 2, 30)]],
+            kind: crate::TextureKind::Texture2D,
+        }
+    }
+
+    #[test]
+    fn convert_f32_preserves_existing_mips_when_no_mipmap() {
+        // mipmap = false must convert (not drop) every input mip level. Target
+        // R8_UNORM (channel drop) so this routes through the f32 pipeline
+        // rather than the format-identity passthrough fast path.
+        let out = convert(
+            three_mip_rgba8(),
+            ConvertSettings {
+                format: Some(TargetFormat::Uncompressed(ktx2::Format::R8_UNORM)),
+                container: Container::Raw,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        match out {
+            PipelineOutput::Raw(img) => {
+                assert_eq!(img.surfaces[0].len(), 3, "existing 3-mip chain preserved");
+                assert_eq!(
+                    (img.surfaces[0][2].width, img.surfaces[0][2].height),
+                    (2, 2),
+                );
+            }
+            _ => panic!("expected Raw output"),
+        }
+    }
+
+    #[test]
+    fn convert_f32_regenerates_full_chain_with_mipmap() {
+        // mipmap = true regenerates the full chain from the 8×8 base → 4 levels
+        // (8,4,2,1), regardless of the 3 levels supplied on input.
+        let out = convert(
+            three_mip_rgba8(),
+            ConvertSettings {
+                format: Some(TargetFormat::Uncompressed(ktx2::Format::R8_UNORM)),
+                container: Container::Raw,
+                mipmap: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        match out {
+            PipelineOutput::Raw(img) => {
+                assert_eq!(img.surfaces[0].len(), 4, "full chain regenerated");
+                assert_eq!(
+                    (img.surfaces[0][3].width, img.surfaces[0][3].height),
+                    (1, 1),
+                );
+            }
+            _ => panic!("expected Raw output"),
+        }
+    }
+
+    fn bc7_1block_image() -> Image {
+        Image {
+            surfaces: vec![vec![Surface {
+                data: vec![0xFFu8; 16],
+                width: 4,
+                height: 4,
+                depth: 1,
+                stride: 16,
+                slice_stride: 0,
+                format: ktx2::Format::BC7_UNORM_BLOCK,
+                color_space: ColorSpace::Linear,
+                alpha: AlphaMode::Opaque,
+            }]],
+            kind: crate::TextureKind::Texture2D,
+        }
+    }
+
+    #[test]
+    fn convert_compressed_input_swizzle_errors() {
+        let err = convert(
+            bc7_1block_image(),
+            ConvertSettings {
+                container: Container::Raw,
+                swizzle: Some(Swizzle([
+                    processing::SwizzleChannel::B,
+                    processing::SwizzleChannel::G,
+                    processing::SwizzleChannel::R,
+                    processing::SwizzleChannel::A,
+                ])),
+                ..Default::default()
+            },
+        )
+        .unwrap_err();
+        assert!(
+            matches!(err, Error::UnsupportedConversion(_)),
+            "expected UnsupportedConversion, got {err:?}",
+        );
+    }
+
+    #[test]
+    fn convert_compressed_input_mipmap_errors() {
+        let err = convert(
+            bc7_1block_image(),
+            ConvertSettings {
+                container: Container::Raw,
+                mipmap: true,
+                ..Default::default()
+            },
+        )
+        .unwrap_err();
+        assert!(
+            matches!(err, Error::UnsupportedConversion(_)),
+            "expected UnsupportedConversion, got {err:?}",
+        );
+    }
+
+    #[test]
+    fn convert_compressed_input_color_space_change_errors() {
+        let err = convert(
+            bc7_1block_image(),
+            ConvertSettings {
+                container: Container::Raw,
+                output_color_space: Some(ColorSpace::Srgb),
+                ..Default::default()
+            },
+        )
+        .unwrap_err();
+        assert!(
+            matches!(err, Error::UnsupportedConversion(_)),
+            "expected UnsupportedConversion, got {err:?}",
+        );
+    }
+
+    #[test]
+    fn convert_compressed_input_alpha_change_errors() {
+        let err = convert(
+            bc7_1block_image(),
+            ConvertSettings {
+                container: Container::Raw,
+                output_alpha: Some(AlphaMode::Premultiplied),
+                ..Default::default()
+            },
+        )
+        .unwrap_err();
+        assert!(
+            matches!(err, Error::UnsupportedConversion(_)),
+            "expected UnsupportedConversion, got {err:?}",
+        );
     }
 
     #[test]
