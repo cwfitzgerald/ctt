@@ -60,6 +60,21 @@ pub fn run(args: Args) -> Result<(), Box<dyn std::error::Error>> {
         .as_ref()
         .ok_or_else(|| Error::UnsupportedFormat("missing --output".into()))?;
 
+    // Refuse to clobber one of our own inputs. Silent overwrite of unrelated
+    // existing files is intentionally allowed.
+    check_output_not_input(&args.input, output_path)?;
+
+    // `--cubemap-layout` only applies when splitting a single input image; it
+    // is meaningless (and silently ignored) with multiple face inputs.
+    if args.cubemap_layout.is_some() && args.input.len() > 1 {
+        return Err(Error::UnsupportedFormat(
+            "--cubemap-layout applies only to a single input image; \
+             it cannot be combined with multiple inputs"
+                .into(),
+        )
+        .into());
+    }
+
     // Container formats (KTX2, DDS) carry color-space and alpha metadata,
     // so leave the override `None` unless the user explicitly passes a flag.
     // Standard images (PNG, JPEG, …) have no such metadata; fall back to
@@ -82,8 +97,9 @@ pub fn run(args: Args) -> Result<(), Box<dyn std::error::Error>> {
     )?;
 
     let image = if args.cubemap {
-        log::info!("Cubemap mode, layout: {:?}", args.cubemap_layout);
-        build_cubemap_image(images, args.cubemap_layout)?
+        let layout = args.cubemap_layout.unwrap_or(CubemapLayoutArg::Cross);
+        log::info!("Cubemap mode, layout: {layout:?}");
+        build_cubemap_image(images, layout)?
     } else if args.volume {
         log::info!("Volume mode: stacking {} slices", images.len());
         build_volume_image(images, &args.input)?
@@ -141,13 +157,59 @@ pub fn run(args: Args) -> Result<(), Box<dyn std::error::Error>> {
         }
     };
 
-    fs::write(output_path, &output_bytes)?;
+    fs::write(output_path, &output_bytes).map_err(|e| {
+        Error::OutputEncoding(format!("failed to write {}: {e}", output_path.display()))
+    })?;
     log::info!(
         "Output written: {} ({} bytes)",
         output_path.display(),
         output_bytes.len()
     );
     Ok(())
+}
+
+/// Error out if `output` refers to the same file as any input path, so we
+/// never silently truncate an input we still need to read.
+///
+/// The comparison is best-effort canonicalized: inputs exist and canonicalize
+/// cleanly, but the output usually does not exist yet, so we canonicalize its
+/// parent directory and rejoin the file name. If even that fails we fall back
+/// to the lexical path, which still catches the common `in.png -o in.png` case.
+fn check_output_not_input(
+    inputs: &[std::path::PathBuf],
+    output: &std::path::Path,
+) -> Result<(), Error> {
+    let output_key = normalize_for_compare(output);
+    for input in inputs {
+        let same_existing_file =
+            output.exists() && same_file::is_same_file(input, output).unwrap_or(false);
+        if same_existing_file || normalize_for_compare(input) == output_key {
+            return Err(Error::UnsupportedFormat(format!(
+                "output path {} is also an input; refusing to overwrite it",
+                output.display()
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// Best-effort absolute, symlink-resolved key for path comparison. Falls back
+/// to canonicalizing the parent (for not-yet-existing outputs), then to the
+/// lexical path.
+fn normalize_for_compare(path: &std::path::Path) -> std::path::PathBuf {
+    if let Ok(canonical) = fs::canonicalize(path) {
+        return canonical;
+    }
+    if let Some(name) = path.file_name() {
+        let parent = match path.parent() {
+            Some(p) if !p.as_os_str().is_empty() => p,
+            _ => std::path::Path::new("."),
+        };
+        if let Ok(canonical_parent) = fs::canonicalize(parent) {
+            return canonical_parent.join(name);
+        }
+    }
+    path.to_path_buf()
 }
 
 /// Resolve the container format from the explicit flag or the output file extension.
@@ -180,16 +242,28 @@ fn resolve_container(
 }
 
 fn print_encoder_table() {
+    print!("{}", encoder_table_string());
+}
+
+/// Build the `--list-encoders` table as a string. Exposed so tests can assert
+/// on its contents without capturing stdout.
+pub fn encoder_table_string() -> String {
+    use std::fmt::Write as _;
+
+    let mut out = String::new();
     let encoders: Vec<EncoderInfo> = compiled_in_encoders();
 
     if encoders.is_empty() {
-        println!("No encoder backends are enabled.");
-        println!("Recompile with features: encoder-intel, encoder-bc7enc");
-        return;
+        let _ = writeln!(out, "No encoder backends are enabled.");
+        let _ = writeln!(
+            out,
+            "Recompile with features: encoder-intel, encoder-bc7enc"
+        );
+        return out;
     }
 
-    println!("{:<10} {:<12} Formats", "Encoder", "Priority");
-    println!("{:<10} {:<12} -------", "-------", "--------");
+    let _ = writeln!(out, "{:<10} {:<12} Formats", "Encoder", "Priority");
+    let _ = writeln!(out, "{:<10} {:<12} -------", "-------", "--------");
 
     for (i, encoder) in encoders.iter().enumerate() {
         let mut formats = Vec::new();
@@ -249,14 +323,33 @@ fn print_encoder_table() {
                 formats.push(format_short_name(f));
             }
         }
-        println!("{:<10} {:<12} {}", encoder.name, i + 1, formats.join(", "));
+        let _ = writeln!(
+            out,
+            "{:<10} {:<12} {}",
+            encoder.name,
+            i + 1,
+            formats.join(", ")
+        );
     }
 
-    println!();
-    println!("Use a bare format name (e.g. bc7) to use the highest-priority encoder,");
-    println!("or prefix with the encoder name (e.g. intel_bc7) to choose explicitly.");
-    println!("ASTC formats use astc_WxH (e.g. astc_4x4, astc_8x8, astc_12x12).");
-    println!("Uncompressed formats use WebGPU (rgba8unorm) or Vulkan (r8g8b8a8_unorm) names.");
+    let _ = writeln!(out);
+    let _ = writeln!(
+        out,
+        "Use a bare format name (e.g. bc7) to use the highest-priority encoder,"
+    );
+    let _ = writeln!(
+        out,
+        "or prefix with the encoder name (e.g. intel_bc7) to choose explicitly."
+    );
+    let _ = writeln!(
+        out,
+        "ASTC formats use astc_WxH (e.g. astc_4x4, astc_8x8, astc_12x12)."
+    );
+    let _ = writeln!(
+        out,
+        "Uncompressed formats use WebGPU (rgba8unorm) or Vulkan (r8g8b8a8_unorm) names."
+    );
+    out
 }
 
 fn load_images(
@@ -269,7 +362,8 @@ fn load_images(
     let mut images = Vec::with_capacity(paths.len());
     for path in paths {
         profiling::scope!("load image", &path.display().to_string());
-        let data = fs::read(path)?;
+        let data = fs::read(path)
+            .map_err(|e| Error::InputDecoding(format!("failed to read {}: {e}", path.display())))?;
 
         let image = if let Some(img) = decode_container(&data, overrides)? {
             img
@@ -753,6 +847,17 @@ fn merge_encoder_opts(tf: TargetFormat, args: &Args) -> Result<TargetFormat, Err
         }
         return Ok(tf);
     };
+
+    // A bare format name (e.g. `-f bc7`) yields `Encoder::Auto`. Resolve it to
+    // the concrete backend that will actually run so the matching
+    // `--<encoder>-opts` are applied instead of being warn-dropped. If nothing
+    // supports the format, leave `Auto` in place and let the encode step raise
+    // the real error.
+    if matches!(encoder, Encoder::Auto)
+        && let Some(resolved) = ctt::encoders::resolve_auto_encoder(format)
+    {
+        encoder = resolved;
+    }
 
     if let Some(raw) = args.astcenc_opts.as_deref() {
         encoder = apply_astcenc_opts(encoder, raw)?;

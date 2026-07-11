@@ -6,7 +6,12 @@ use clap::Parser;
 #[derive(Debug, Parser)]
 #[command(name = "ctt", version, about, max_term_width = 100)]
 pub struct Args {
-    /// Input image file(s). For cubemaps with separate faces, provide 6 files.
+    /// Input image file(s).
+    ///
+    /// A single input is converted as-is. N plain inputs assemble a 2D array
+    /// texture (argv order = layer order). With --cubemap, provide 6 face
+    /// files for one cubemap, or N×6 files to assemble a cubemap array. A
+    /// single input plus --cubemap is split according to --cubemap-layout.
     #[arg(required_unless_present_any = ["list_encoders", "help_encoder"])]
     pub input: Vec<PathBuf>,
 
@@ -29,9 +34,10 @@ pub struct Args {
     #[arg(long, conflicts_with = "volume")]
     pub cubemap: bool,
 
-    /// Cubemap layout when using a single input image.
-    #[arg(long, default_value = "cross", requires = "cubemap")]
-    pub cubemap_layout: CubemapLayoutArg,
+    /// Cubemap layout when splitting a single input image (default: cross).
+    /// Applies only to a single input; rejected with multiple inputs.
+    #[arg(long, requires = "cubemap")]
+    pub cubemap_layout: Option<CubemapLayoutArg>,
 
     /// Treat each input as a Z slice of a 3D (volume) texture, stacked in
     /// argv order. Mip generation is unsupported for 3D textures.
@@ -122,21 +128,50 @@ pub struct Args {
 
     /// Enable zstd supercompression for KTX2 output.
     ///
-    /// Optionally takes a compression level: negative (fast mode) through 22
-    /// (maximum compression). Default when omitted: 0, which maps to the zstd
-    /// library default (currently level 3).
-    #[arg(long, num_args = 0..=1, default_missing_value = "0", value_name = "LEVEL", conflicts_with = "zlib")]
+    /// Optionally takes a compression level attached with `=`: negative (fast
+    /// mode) through 22 (maximum compression). Use `--zstd` for the default or
+    /// `--zstd=<LEVEL>` (e.g. `--zstd=19`); `--zstd <LEVEL>` is not accepted.
+    /// Default when omitted: 0, which maps to the zstd library default
+    /// (currently level 3).
+    #[arg(
+        long,
+        num_args = 0..=1,
+        require_equals = true,
+        default_missing_value = "0",
+        value_name = "LEVEL",
+        value_parser = zstd_level_parser(),
+        conflicts_with = "zlib",
+    )]
     pub zstd: Option<i32>,
 
     /// Enable zlib supercompression for KTX2 output.
-    /// Optionally takes a compression level: 1 (fastest) through 10 (maximum
-    /// compression). Default when omitted: 6.
-    #[arg(long, num_args = 0..=1, default_missing_value = "6", value_name = "LEVEL", conflicts_with = "zstd")]
+    ///
+    /// Optionally takes a compression level attached with `=`: 1 (fastest)
+    /// through 10 (maximum compression). Use `--zlib` for the default or
+    /// `--zlib=<LEVEL>` (e.g. `--zlib=9`); `--zlib <LEVEL>` is not accepted.
+    /// Default when omitted: 6.
+    #[arg(
+        long,
+        num_args = 0..=1,
+        require_equals = true,
+        default_missing_value = "6",
+        value_name = "LEVEL",
+        value_parser = clap::value_parser!(u8).range(1..=10),
+        conflicts_with = "zstd",
+    )]
     pub zlib: Option<u8>,
 
     /// Increase logging verbosity (-v = debug, -vv = trace).
     #[arg(short, action = clap::ArgAction::Count)]
     pub verbose: u8,
+}
+
+/// Value parser for `--zstd` levels, bounded by the range the linked zstd
+/// library actually accepts (`ZSTD_minCLevel()..=ZSTD_maxCLevel()`) — a large
+/// negative fast-mode floor up to 22.
+fn zstd_level_parser() -> clap::builder::RangedI64ValueParser<i32> {
+    let range = zstd::compression_level_range();
+    clap::value_parser!(i32).range((*range.start() as i64)..=(*range.end() as i64))
 }
 
 #[derive(Debug, Clone, Copy, clap::ValueEnum)]

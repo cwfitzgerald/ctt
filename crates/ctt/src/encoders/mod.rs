@@ -49,6 +49,53 @@ pub struct EncoderInfo {
     pub supported_formats: &'static [ktx2::Format],
 }
 
+/// Resolve [`Encoder::Auto`] to the concrete backend that will actually run
+/// for `format`, honoring compiled-in features and the same priority order as
+/// the internal auto-pick used during encoding.
+///
+/// Returns [`None`] when no compiled-in encoder supports `format`; callers can
+/// leave [`Encoder::Auto`] in place and let the encode step surface the real
+/// "no encoder supports …" error. The encoding path delegates to this resolver;
+/// it is public so the CLI can apply the matching
+/// `--<encoder>-opts` to the backend Auto will select.
+pub fn resolve_auto_encoder(format: ktx2::Format) -> Option<Encoder> {
+    #[cfg_attr(
+        not(any(
+            feature = "encoder-bc7enc",
+            feature = "encoder-intel",
+            feature = "encoder-etcpak",
+            feature = "encoder-amd",
+            feature = "encoder-astcenc",
+        )),
+        expect(unused_imports)
+    )]
+    use backend::Encoder as _;
+
+    #[cfg(feature = "encoder-bc7enc")]
+    if bc7enc::Bc7encEncoder::supported_formats().contains(&format) {
+        return Some(Encoder::Bc7enc(Default::default()));
+    }
+    #[cfg(feature = "encoder-intel")]
+    if ispc::IspcEncoder::supported_formats().contains(&format) {
+        return Some(Encoder::Intel(Default::default()));
+    }
+    #[cfg(feature = "encoder-etcpak")]
+    if etcpak::EtcpakEncoder::supported_formats().contains(&format) {
+        return Some(Encoder::Etcpak(Default::default()));
+    }
+    #[cfg(feature = "encoder-amd")]
+    if compressonator::CompressonatorEncoder::supported_formats().contains(&format) {
+        return Some(Encoder::Amd(Default::default()));
+    }
+    #[cfg(feature = "encoder-astcenc")]
+    if astcenc::AstcencEncoder::supported_formats().contains(&format) {
+        return Some(Encoder::Astcenc(Default::default()));
+    }
+
+    let _ = format;
+    None
+}
+
 /// All compiled-in encoders, in priority order. The first entry that supports
 /// a given format wins for [`Encoder::Auto`].
 pub fn compiled_in_encoders() -> Vec<EncoderInfo> {
@@ -90,4 +137,41 @@ pub fn compiled_in_encoders() -> Vec<EncoderInfo> {
             supported_formats: astcenc::AstcencEncoder::supported_formats(),
         },
     ]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn encoder_name(encoder: &Encoder) -> &'static str {
+        match encoder {
+            Encoder::Auto => "auto",
+            #[cfg(feature = "encoder-bc7enc")]
+            Encoder::Bc7enc(_) => "bc7e",
+            #[cfg(feature = "encoder-intel")]
+            Encoder::Intel(_) => "intel",
+            #[cfg(feature = "encoder-etcpak")]
+            Encoder::Etcpak(_) => "etcpak",
+            #[cfg(feature = "encoder-amd")]
+            Encoder::Amd(_) => "amd",
+            #[cfg(feature = "encoder-astcenc")]
+            Encoder::Astcenc(_) => "astcenc",
+        }
+    }
+
+    #[test]
+    fn auto_resolution_matches_compiled_encoder_priority() {
+        let encoders = compiled_in_encoders();
+        for info in &encoders {
+            for &format in info.supported_formats {
+                let expected = encoders
+                    .iter()
+                    .find(|candidate| candidate.supported_formats.contains(&format))
+                    .unwrap()
+                    .name;
+                let resolved = resolve_auto_encoder(format).unwrap();
+                assert_eq!(encoder_name(&resolved), expected, "format {format:?}");
+            }
+        }
+    }
 }

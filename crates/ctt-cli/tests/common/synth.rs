@@ -249,6 +249,22 @@ pub fn write_solid_rgba8_png(path: &Path, width: u32, height: u32, color: [u8; 4
     .expect("write png");
 }
 
+/// Write raw pixel `bytes` to `path` as an image of `color_type`. The encoded
+/// container format is chosen by the `image` crate from the path extension
+/// (e.g. `.png`, `.exr`). Used to exercise the CLI's non-RGBA8 load paths.
+///
+/// For 16-bit and 32-bit-float color types, `bytes` must be the native-endian
+/// byte layout of the samples (build with [`bytemuck::cast_slice`]).
+pub fn write_image_bytes(
+    path: &Path,
+    width: u32,
+    height: u32,
+    color_type: image::ExtendedColorType,
+    bytes: &[u8],
+) {
+    image::save_buffer(path, bytes, width, height, color_type).expect("write image");
+}
+
 /// Build a multi-layer Image from N tightly-packed RGBA8 layers (each
 /// `width`×`height`). All layers share color space and alpha mode.
 pub fn make_array_image(

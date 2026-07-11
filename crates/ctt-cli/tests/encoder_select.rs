@@ -2,6 +2,26 @@
 
 use crate::common::{TestFixture, read, run_cli};
 
+/// `--list-encoders` runs cleanly (no `-o`/input required) and lists every
+/// backend compiled into ctt-cli. The library builds the same string it prints,
+/// so we assert on that directly.
+#[test]
+fn list_encoders_smoke() {
+    // Runs without an output path or inputs.
+    run_cli(["ctt", "--list-encoders"]).expect("--list-encoders run succeeded");
+
+    // ctt-cli always compiles in all five backends; each must appear.
+    let table = ctt_cli::encoder_table_string();
+    for name in ["bc7e", "intel", "etcpak", "amd", "astcenc"] {
+        assert!(
+            table.contains(name),
+            "encoder table should list `{name}`; got:\n{table}"
+        );
+    }
+    assert!(table.contains("bc7"), "table should mention bc7 formats");
+    assert!(table.contains("astc"), "table should mention astc formats");
+}
+
 /// `intel_bc7` and `bc7e_bc7` are different encoders for the same target
 /// format; their output bytes must differ for the same RGBA8 input.
 #[test]

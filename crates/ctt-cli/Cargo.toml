@@ -46,7 +46,9 @@ facet = { workspace = true }
 facet-reflect = { workspace = true }
 fern = { workspace = true }
 profiling = { workspace = true }
+same-file = { workspace = true }
 log = { workspace = true }
+zstd = { workspace = true }
 
 [dev-dependencies]
 ktx2 = { workspace = true }

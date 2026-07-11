@@ -90,6 +90,33 @@ fn bc7_ktx2_to_dds_payload_preserved() {
     assert::assert_payload_eq(&read(&input), &out_bytes);
 }
 
+/// The checked-in BC7 DDS golden decodes as input and re-encodes to KTX2 with
+/// its format and dimensions preserved.
+#[test]
+fn bc7_dds_input_to_ktx2() {
+    let f = TestFixture::new();
+    let input = f.data_file("bc7_4x4.dds");
+    let output = f.output_file("from_dds.ktx2");
+
+    run_cli([
+        "ctt",
+        input.to_str().unwrap(),
+        "-o",
+        output.to_str().unwrap(),
+    ])
+    .expect("run succeeded");
+
+    let bytes = read(&output);
+    assert!(
+        bytes.starts_with(assert::KTX2_MAGIC),
+        "output must start with KTX2 magic"
+    );
+    let info = assert::parse_ktx2(&bytes);
+    assert_eq!(info.width, 4);
+    assert_eq!(info.height, 4);
+    assert_eq!(info.format, Some(ktx2::Format::BC7_UNORM_BLOCK));
+}
+
 // One representative test per supported compressed format, both directions.
 // DDS does not support ETC; that error case is covered in errors.rs.
 

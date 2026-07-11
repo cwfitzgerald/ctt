@@ -82,32 +82,14 @@ pub fn encode_all(image: Image, step: &EncoderStep) -> Result<Image> {
 }
 
 /// Auto-pick: first compiled-in backend that supports `target` wins.
+///
+/// Delegates to [`crate::encoders::resolve_auto_encoder`] so that the
+/// public resolution API and the encode step can never disagree about
+/// which backend `Encoder::Auto` selects.
 fn pick_auto(target: ktx2::Format) -> Result<Encoder> {
-    #[cfg(feature = "encoder-bc7enc")]
-    if crate::encoders::bc7enc::Bc7encEncoder::supported_formats().contains(&target) {
-        return Ok(Encoder::Bc7enc(Default::default()));
-    }
-    #[cfg(feature = "encoder-intel")]
-    if crate::encoders::ispc::IspcEncoder::supported_formats().contains(&target) {
-        return Ok(Encoder::Intel(Default::default()));
-    }
-    #[cfg(feature = "encoder-etcpak")]
-    if crate::encoders::etcpak::EtcpakEncoder::supported_formats().contains(&target) {
-        return Ok(Encoder::Etcpak(Default::default()));
-    }
-    #[cfg(feature = "encoder-amd")]
-    if crate::encoders::compressonator::CompressonatorEncoder::supported_formats().contains(&target)
-    {
-        return Ok(Encoder::Amd(Default::default()));
-    }
-    #[cfg(feature = "encoder-astcenc")]
-    if crate::encoders::astcenc::AstcencEncoder::supported_formats().contains(&target) {
-        return Ok(Encoder::Astcenc(Default::default()));
-    }
-    let _ = target;
-    Err(Error::UnsupportedFormat(format!(
-        "no compiled-in encoder supports {target:?}"
-    )))
+    crate::encoders::resolve_auto_encoder(target).ok_or_else(|| {
+        Error::UnsupportedFormat(format!("no compiled-in encoder supports {target:?}"))
+    })
 }
 
 #[cfg_attr(
