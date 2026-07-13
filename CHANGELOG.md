@@ -62,7 +62,6 @@ Per Keep a Changelog there are 6 main categories of changes:
 - Mipmap count is clamped to the real chain length (no panic on huge counts, no duplicate 1×1 levels); mip-chain math uses integer `ilog2`.
 - Fixed a u32 overflow in ASTC output-size allocation for very large surfaces; hardened dimension/stride math across the pipeline against integer overflow.
 - 3D image validation no longer shift-panics on unusually long mip lists, and ASTC output-size/allocation failures return errors on all pointer widths.
-- Source-built AArch64 bc7enc calls pad the final ISPC gang, avoiding a macOS ARM memory-corruption failure on sub-block images.
 - C API: fixed a memory leak in `ctt_cubemap_input_separate_faces` when aborting on a NULL face; all six faces are now consumed as documented.
 - C API: Rust panics in decode/convert/encode entry points are contained at the FFI boundary and reported as `CTT_STATUS_INTERNAL` instead of aborting the host process.
 - C API: documented the enum/bool validity contract (out-of-range values are undefined behavior) and the zero-initialization guarantee in the generated header.
