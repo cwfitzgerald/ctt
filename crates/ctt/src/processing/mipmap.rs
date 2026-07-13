@@ -45,17 +45,20 @@ pub fn full_mip_count(width: u32, height: u32) -> usize {
     width.max(height).max(1).ilog2() as usize + 1
 }
 
-/// Generate a mip chain starting from `base` (which becomes mip 0).
+/// Extend an existing mip chain to the requested length.
 ///
-/// Produces up to `count` levels; `count` must be at least 1. A requested
-/// `count` larger than the true full chain length is clamped down to it, so
-/// the result never contains duplicate 1×1 levels.
-pub fn generate(
-    base: Buffer<f32>,
+/// Existing levels are retained. If the requested length is shorter than the
+/// supplied chain, excess levels are dropped. A requested length larger than
+/// the full chain is clamped, so the result never contains duplicate 1×1 levels.
+pub fn complete(
+    mut out: Vec<Buffer<f32>>,
     filter: MipmapFilter,
     count: Option<usize>,
 ) -> Result<Vec<Buffer<f32>>> {
-    profiling::scope!("mipmap::generate");
+    profiling::scope!("mipmap::complete");
+    let base = out
+        .first()
+        .ok_or_else(|| Error::UnsupportedFormat("mip chain must not be empty".into()))?;
     // Clamp any requested count to the true full chain length: an oversized
     // count (up to usize::MAX) must neither blow up `Vec::with_capacity` nor
     // push duplicate 1×1 levels past the real chain.
@@ -69,8 +72,8 @@ pub fn generate(
         .resize_alg(filter.to_resize_alg())
         .use_alpha(false);
     let mut resizer = Resizer::new();
-    let mut out = Vec::with_capacity(target);
-    out.push(base);
+    out.truncate(target);
+    out.reserve(target - out.len());
 
     while out.len() < target {
         profiling::scope!("mip_level");
@@ -132,18 +135,18 @@ mod tests {
     }
 
     #[test]
-    fn generate_clamps_usize_max_count() {
+    fn complete_clamps_usize_max_count() {
         // usize::MAX must not blow up Vec::with_capacity; it clamps to the
         // true full chain (8×8 → 8,4,2,1 = 4 levels).
-        let chain = generate(solid(8, 8), MipmapFilter::Triangle, Some(usize::MAX)).unwrap();
+        let chain = complete(vec![solid(8, 8)], MipmapFilter::Triangle, Some(usize::MAX)).unwrap();
         assert_eq!(chain.len(), 4);
         assert_eq!((chain[3].width, chain[3].height), (1, 1));
     }
 
     #[test]
-    fn generate_clamps_oversized_count_no_duplicate_1x1() {
+    fn complete_clamps_oversized_count_no_duplicate_1x1() {
         // 20 requested on 8×8 clamps to 4; no duplicate 1×1 levels tacked on.
-        let chain = generate(solid(8, 8), MipmapFilter::Triangle, Some(20)).unwrap();
+        let chain = complete(vec![solid(8, 8)], MipmapFilter::Triangle, Some(20)).unwrap();
         assert_eq!(chain.len(), 4);
         let ones = chain
             .iter()

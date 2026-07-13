@@ -51,7 +51,7 @@ Per Keep a Changelog there are 6 main categories of changes:
 ### Fixed
 
 - **CLI:** per-encoder option flags (`--bc7e-opts`, etc.) were silently ignored when a bare format name (e.g. `-f bc7`) auto-selected the encoder; they now apply to the encoder Auto resolves to.
-- f32-pipeline conversions no longer silently drop an input's existing mip chain when mipmap generation is disabled.
+- f32-pipeline conversions no longer silently drop existing mip levels; mipmap generation now preserves supplied levels and generates only the missing tail.
 - Compressed inputs with a swizzle or mipmap request now error clearly instead of silently ignoring the request.
 - Fixed R/B channel order for 16-bit packed DDS formats (`B5G6R5`, `B5G5R5A1`, `B4G4R4A4`) and their legacy D3D9 equivalents, in both read and write paths.
 - DDS cubemaps flagged only via the DX10 header (no legacy caps2 bit) are now classified as cubemaps instead of 2D arrays.

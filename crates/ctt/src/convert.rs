@@ -68,11 +68,12 @@ pub struct ConvertSettings {
     pub allow_discarding_alpha: bool,
     /// Optional channel swizzle applied to each pixel before encoding.
     pub swizzle: Option<Swizzle>,
-    /// Regenerate a full mip chain from the base level when `true`. When
-    /// `false`, any existing mip levels are preserved (and converted).
+    /// Complete the mip chain when `true`, preserving existing levels and
+    /// generating only the missing tail. When `false`, any existing mip levels
+    /// are preserved (and converted).
     pub mipmap: bool,
-    /// Number of mip levels to generate when `mipmap` is `true`. `None` builds
-    /// the full chain; larger-than-full values are clamped to the full chain.
+    /// Number of mip levels to retain or generate when `mipmap` is `true`.
+    /// `None` builds the full chain; larger-than-full values are clamped.
     pub mipmap_count: Option<usize>,
     /// Downsampling filter used for mipmap generation.
     pub mipmap_filter: mipmap::MipmapFilter,
@@ -278,28 +279,35 @@ fn convert_f32(
         profiling::scope!("convert_f32_layer");
 
         let mips = if settings.mipmap {
-            // Regenerate the full chain from the base mip, discarding any
-            // pre-existing levels.
-            let mut base = layer
-                .into_iter()
-                .next()
-                .ok_or_else(|| Error::UnsupportedFormat("empty layer".into()))?;
-            // An alpha-less final target must not force the premultiplied
-            // round-trip: it zeros RGB wherever α=0. Apply only the single
-            // direct conversion the effective output mode requires.
-            let (load_alpha, store_alpha) = if final_has_alpha {
-                (base.alpha, target_alpha)
-            } else {
-                alpha_less_load_store(target_alpha, base.alpha)
-            };
-            base.alpha = load_alpha;
-            let mut buf: Buffer<f32> = load::load_f32(&base)?;
-            if let Some(sw) = &settings.swizzle {
-                swizzle::apply_f32(&mut buf, sw);
+            let target_count = settings
+                .mipmap_count
+                .unwrap_or_else(|| mipmap::full_mip_count(layer[0].width, layer[0].height));
+            let mut bufs = Vec::with_capacity(layer.len().min(target_count));
+            let mut store_alphas = Vec::with_capacity(bufs.capacity());
+            for mut surface in layer.into_iter().take(target_count) {
+                // An alpha-less final target must not force the premultiplied
+                // round-trip: it zeros RGB wherever alpha=0. Apply only the
+                // single direct conversion the effective output mode requires.
+                let (load_alpha, store_alpha) = if final_has_alpha {
+                    (surface.alpha, target_alpha)
+                } else {
+                    alpha_less_load_store(target_alpha, surface.alpha)
+                };
+                surface.alpha = load_alpha;
+                let mut buf: Buffer<f32> = load::load_f32(&surface)?;
+                if let Some(sw) = &settings.swizzle {
+                    swizzle::apply_f32(&mut buf, sw);
+                }
+                bufs.push(buf);
+                store_alphas.push(store_alpha);
             }
-            let bufs = mipmap::generate(buf, settings.mipmap_filter, settings.mipmap_count)?;
+            let generated_store_alpha = *store_alphas
+                .last()
+                .ok_or_else(|| Error::UnsupportedFormat("mipmap count must be >= 1".into()))?;
+            let bufs = mipmap::complete(bufs, settings.mipmap_filter, settings.mipmap_count)?;
+            store_alphas.resize(bufs.len(), generated_store_alpha);
             let mut mips = Vec::with_capacity(bufs.len());
-            for b in bufs {
+            for (b, store_alpha) in bufs.into_iter().zip(store_alphas) {
                 let mut surface = store::store_f32(b, target_fmt, target_color_space, store_alpha)?;
                 surface.alpha = target_alpha;
                 mips.push(surface);
@@ -658,9 +666,9 @@ mod tests {
     }
 
     #[test]
-    fn convert_f32_regenerates_full_chain_with_mipmap() {
-        // mipmap = true regenerates the full chain from the 8×8 base → 4 levels
-        // (8,4,2,1), regardless of the 3 levels supplied on input.
+    fn convert_f32_completes_existing_chain_with_mipmap() {
+        // The supplied 8×8, 4×4, and 2×2 levels are retained; only the
+        // missing 1×1 tail is generated from the final existing level.
         let out = convert(
             three_mip_rgba8(),
             ConvertSettings {
@@ -673,11 +681,38 @@ mod tests {
         .unwrap();
         match out {
             PipelineOutput::Raw(img) => {
-                assert_eq!(img.surfaces[0].len(), 4, "full chain regenerated");
+                assert_eq!(img.surfaces[0].len(), 4, "full chain completed");
+                assert_eq!(img.surfaces[0][0].data[0], 10);
+                assert_eq!(img.surfaces[0][1].data[0], 20);
+                assert_eq!(img.surfaces[0][2].data[0], 30);
+                assert_eq!(img.surfaces[0][3].data[0], 30);
                 assert_eq!(
                     (img.surfaces[0][3].width, img.surfaces[0][3].height),
                     (1, 1),
                 );
+            }
+            _ => panic!("expected Raw output"),
+        }
+    }
+
+    #[test]
+    fn convert_f32_mipmap_count_truncates_existing_chain() {
+        let out = convert(
+            three_mip_rgba8(),
+            ConvertSettings {
+                format: Some(TargetFormat::Uncompressed(ktx2::Format::R8_UNORM)),
+                container: Container::Raw,
+                mipmap: true,
+                mipmap_count: Some(2),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        match out {
+            PipelineOutput::Raw(img) => {
+                assert_eq!(img.surfaces[0].len(), 2);
+                assert_eq!(img.surfaces[0][0].data[0], 10);
+                assert_eq!(img.surfaces[0][1].data[0], 20);
             }
             _ => panic!("expected Raw output"),
         }
