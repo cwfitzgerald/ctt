@@ -95,10 +95,8 @@ attached (`generate_release_notes: true`).
 This is a virtual workspace, so a bare `cargo publish` does not work — each
 crate must be published individually with `-p`, and they must go out in
 dependency order so every crate's dependencies already exist on crates.io when
-its verification build runs. Recent cargo (≥ 1.90) blocks until each freshly
-published crate is available in the index before returning, so the commands can
-be run back-to-back; on older toolchains, wait for the index to update between
-tiers.
+its verification build runs. Cargo waits for each freshly published crate to
+become available in the index, so the commands can be run back-to-back.
 
 Publish in this order:
 

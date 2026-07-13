@@ -27,6 +27,7 @@ Per Keep a Changelog there are 6 main categories of changes:
 - Vertical (3:4) cubemap cross layout support with automatic orientation detection. The bottom face (`-Z`) follows the standard convention of being stored rotated 180°.
 - `A4R4G4B4_UNORM_PACK16` support for DDS input/output.
 - `ctt::encoders::resolve_auto_encoder` returns the concrete encoder `Encoder::Auto` will select for a format.
+- Rust, CLI, and C API controls for acknowledging an intentional alpha-channel discard (`allow_discarding_alpha` / `--allow-discarding-alpha`). The C settings struct includes the corresponding field.
 - C API: `CTT_PIPELINE_OUTPUT_KIND_INVALID`; `ctt_pipeline_output_get_kind(NULL)` now returns it instead of masquerading as `CTT_PIPELINE_OUTPUT_KIND_ENCODED`.
 - C API: new example programs covering a real BC7 encode, error paths, and zero-initialized settings; all are compiled and run in CI.
 - CI now builds a matrix of encoder feature combinations, catching feature/link breakage.
@@ -38,6 +39,7 @@ Per Keep a Changelog there are 6 main categories of changes:
 - **CLI:** `--zstd`/`--zlib` now require `=` for an explicit level (`--zstd=5`); a bare `--zstd` no longer consumes the following input path. Levels are range-validated.
 - astcenc quality tiers are now all distinct and monotonic (`fast` is no longer aliased to `basic`); `basic` still maps to astcenc's medium preset, so default performance is unchanged.
 - astcenc and Compressonator encoders now honor `Surface::stride` (padded rows are repacked), matching the other backends.
+- Converting to an alpha-less format preserves straight-alpha RGB values by default; requesting premultiplied output still bakes alpha into RGB, and output alpha metadata now matches the requested mode.
 - `ctt-intel-texture-compressor` and `ctt-bc7enc-rdo` emit a clear `compile_error!` when built without an ISPC backend (`prebuilt` or `build-from-source`) instead of failing at link time.
 - The README library example and the crate-level quick start are now compile-checked doctests in CI.
 
@@ -54,10 +56,13 @@ Per Keep a Changelog there are 6 main categories of changes:
 - Fixed R/B channel order for 16-bit packed DDS formats (`B5G6R5`, `B5G5R5A1`, `B4G4R4A4`) and their legacy D3D9 equivalents, in both read and write paths.
 - DDS cubemaps flagged only via the DX10 header (no legacy caps2 bit) are now classified as cubemaps instead of 2D arrays.
 - `split_cubemap` validates its input and returns errors instead of panicking on short data or mis-divisible cross/strip dimensions.
+- `split_cubemap` accepts validated block-compressed separate faces while retaining the uncompressed requirement for cross/strip extraction.
 - Zero-width/height images are rejected up front instead of panicking downstream.
 - f16 surfaces with odd row strides load without panicking.
 - Mipmap count is clamped to the real chain length (no panic on huge counts, no duplicate 1×1 levels); mip-chain math uses integer `ilog2`.
 - Fixed a u32 overflow in ASTC output-size allocation for very large surfaces; hardened dimension/stride math across the pipeline against integer overflow.
+- 3D image validation no longer shift-panics on unusually long mip lists, and ASTC output-size/allocation failures return errors on all pointer widths.
+- Source-built AArch64 bc7enc calls pad the final ISPC gang, avoiding a macOS ARM memory-corruption failure on sub-block images.
 - C API: fixed a memory leak in `ctt_cubemap_input_separate_faces` when aborting on a NULL face; all six faces are now consumed as documented.
 - C API: Rust panics in decode/convert/encode entry points are contained at the FFI boundary and reported as `CTT_STATUS_INTERNAL` instead of aborting the host process.
 - C API: documented the enum/bool validity contract (out-of-range values are undefined behavior) and the zero-initialization guarantee in the generated header.
@@ -67,6 +72,7 @@ Per Keep a Changelog there are 6 main categories of changes:
 ### Security
 
 - KTX2: a supercompressed file declaring a huge uncompressed size no longer triggers an unbounded allocation before validation (decompression bomb).
+- KTX2 decoding now enforces decoded-byte and surface-count resource limits, including for otherwise self-consistent compressed headers.
 - DDS/KTX2: malicious headers with absurd mip/level counts or overflowing dimensions now error cleanly instead of panicking.
 
 ## v0.4.0

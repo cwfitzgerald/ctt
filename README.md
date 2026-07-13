@@ -178,8 +178,8 @@ Cubemap array from N×6 face images. Pass a multiple of six inputs with
 (you can also pass several already-assembled cubemaps):
 
 ```sh
-ctt +x0.png -x0.png +y0.png -y0.png +z0.png -z0.png \
-    +x1.png -x1.png +y1.png -y1.png +z1.png -z1.png \
+ctt px0.png nx0.png py0.png ny0.png pz0.png nz0.png \
+    px1.png nx1.png py1.png ny1.png pz1.png nz1.png \
     -o cube_array.ktx2 -f bc7 --cubemap
 ```
 
@@ -220,6 +220,12 @@ Swizzle channels:
 ```sh
 ctt input.png -o output.ktx2 -f bc7 --swizzle bgra
 ```
+
+Converting a texture with straight alpha to a format without alpha preserves
+the RGB values and emits a warning. Use `--output-alpha premultiplied` to bake
+alpha into RGB, `--output-alpha opaque` to explicitly discard it, or
+`--allow-discarding-alpha` to acknowledge the default discard and silence the
+warning without changing pixels.
 
 ### Per-encoder tuning
 
