@@ -43,6 +43,12 @@ pub trait FormatExt {
     /// Number of color channels. Returns `None` for unknown formats.
     fn channel_count(&self) -> Option<usize>;
 
+    /// Whether this format stores an alpha channel (true for 4-channel
+    /// RGBA/BCn-with-alpha formats). Compressed and uncompressed alike.
+    fn has_alpha_channel(&self) -> bool {
+        self.channel_count() == Some(4)
+    }
+
     /// Channel data type for uncompressed formats. Returns `None` for compressed or unknown formats.
     fn channel_kind(&self) -> Option<ChannelKind>;
 
@@ -764,6 +770,27 @@ mod tests {
         assert_eq!(F::R8G8B8A8_UNORM.channel_count(), Some(4));
         assert_eq!(F::BC4_UNORM_BLOCK.channel_count(), Some(1));
         assert_eq!(F::BC7_UNORM_BLOCK.channel_count(), Some(4));
+    }
+
+    #[test]
+    fn has_alpha_channel_values() {
+        // No alpha channel.
+        assert!(!F::BC6H_UFLOAT_BLOCK.has_alpha_channel());
+        assert!(!F::BC6H_SFLOAT_BLOCK.has_alpha_channel());
+        assert!(!F::BC1_RGB_UNORM_BLOCK.has_alpha_channel());
+        assert!(!F::BC1_RGB_SRGB_BLOCK.has_alpha_channel());
+        assert!(!F::BC4_UNORM_BLOCK.has_alpha_channel());
+        assert!(!F::BC5_UNORM_BLOCK.has_alpha_channel());
+        assert!(!F::R8G8B8_UNORM.has_alpha_channel());
+        assert!(!F::R32G32B32_SFLOAT.has_alpha_channel());
+
+        // Alpha channel present.
+        assert!(F::BC7_UNORM_BLOCK.has_alpha_channel());
+        assert!(F::BC1_RGBA_UNORM_BLOCK.has_alpha_channel());
+        assert!(F::BC2_UNORM_BLOCK.has_alpha_channel());
+        assert!(F::BC3_UNORM_BLOCK.has_alpha_channel());
+        assert!(F::R8G8B8A8_UNORM.has_alpha_channel());
+        assert!(F::ASTC_4x4_UNORM_BLOCK.has_alpha_channel());
     }
 
     #[test]

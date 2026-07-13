@@ -62,6 +62,10 @@ pub struct ConvertSettings {
     pub output_color_space: Option<ColorSpace>,
     /// Override the output alpha mode. `None` keeps the input's alpha mode.
     pub output_alpha: Option<AlphaMode>,
+    /// Suppress the warning emitted when a meaningful (`Straight`) alpha
+    /// channel is dropped because the target format has none. Does not change
+    /// pixel output.
+    pub allow_discarding_alpha: bool,
     /// Optional channel swizzle applied to each pixel before encoding.
     pub swizzle: Option<Swizzle>,
     /// Regenerate a full mip chain from the base level when `true`. When
@@ -104,6 +108,20 @@ pub fn convert(image: Image, mut settings: ConvertSettings) -> Result<PipelineOu
         .as_ref()
         .map(|s| s.target_format)
         .unwrap_or(target_fmt);
+
+    let final_has_alpha = final_target_fmt.has_alpha_channel();
+    if warn_discarding_alpha(
+        input_fmt.has_alpha_channel(),
+        final_has_alpha,
+        target_alpha,
+        settings.allow_discarding_alpha,
+    ) {
+        log::warn!(
+            "{final_target_fmt:?} has no alpha channel; discarding the source's straight \
+             alpha and keeping color. Set output alpha to premultiplied to bake it in, opaque \
+             to mark the texture opaque, or allow_discarding_alpha to silence."
+        );
+    }
 
     log::debug!(
         "convert: {input_fmt:?} ({input_cs:?}, {input_alpha:?}) → \
@@ -179,10 +197,43 @@ pub fn convert(image: Image, mut settings: ConvertSettings) -> Result<PipelineOu
     log::debug!("convert: routing through {variant:?} pipeline");
 
     match variant {
-        Variant::F32 => convert_f32(image, settings, target_fmt, encoder_step),
-        Variant::F64 => convert_f64(image, settings, target_fmt, encoder_step),
+        Variant::F32 => convert_f32(image, settings, target_fmt, encoder_step, final_has_alpha),
+        Variant::F64 => convert_f64(image, settings, target_fmt, encoder_step, final_has_alpha),
         Variant::U32 => convert_u32(image, settings, target_fmt, encoder_step),
         Variant::U64 => convert_u64(image, settings, target_fmt, encoder_step),
+    }
+}
+
+/// Whether to warn that a meaningful straight alpha is being dropped.
+///
+/// The warning fires only when the source has alpha, the final output format
+/// does not, the effective output alpha is `Straight`, and the caller has not
+/// acknowledged the drop. `Opaque` and `Premultiplied` outputs are deliberate
+/// and therefore silent.
+fn warn_discarding_alpha(
+    source_has_alpha: bool,
+    final_has_alpha: bool,
+    effective_out: AlphaMode,
+    allow: bool,
+) -> bool {
+    source_has_alpha && !final_has_alpha && effective_out == AlphaMode::Straight && !allow
+}
+
+/// Pick the `(load, store)` alpha modes that apply the single direct
+/// conversion an alpha-less target needs, given the effective `output_alpha`
+/// and the source's alpha mode.
+///
+/// `load_f32` premultiplies iff the load alpha is `Straight`; `store_f32`
+/// unpremultiplies iff the store alpha is `Straight`. Choosing the pair below
+/// therefore applies at most one premultiply or one unpremultiply, avoiding
+/// the destructive round-trip that zeros RGB at α=0.
+fn alpha_less_load_store(target_alpha: AlphaMode, src_alpha: AlphaMode) -> (AlphaMode, AlphaMode) {
+    use AlphaMode::*;
+    match (target_alpha, src_alpha) {
+        (Premultiplied, Straight) => (Straight, Opaque), // bake: premultiply once
+        (Premultiplied, _) => (Opaque, Opaque),          // already premul / opaque
+        (_, Premultiplied) => (Opaque, Straight),        // keep color: unpremultiply once
+        (_, _) => (Opaque, Opaque),                      // keep color: pass through
     }
 }
 
@@ -214,6 +265,7 @@ fn convert_f32(
     settings: ConvertSettings,
     target_fmt: ktx2::Format,
     encoder_step: Option<encode::EncoderStep>,
+    final_has_alpha: bool,
 ) -> Result<PipelineOutput> {
     let input_base = &image.surfaces[0][0];
     let target_color_space = settings
@@ -228,10 +280,19 @@ fn convert_f32(
         let mips = if settings.mipmap {
             // Regenerate the full chain from the base mip, discarding any
             // pre-existing levels.
-            let base = layer
+            let mut base = layer
                 .into_iter()
                 .next()
                 .ok_or_else(|| Error::UnsupportedFormat("empty layer".into()))?;
+            // An alpha-less final target must not force the premultiplied
+            // round-trip: it zeros RGB wherever α=0. Apply only the single
+            // direct conversion the effective output mode requires.
+            let (load_alpha, store_alpha) = if final_has_alpha {
+                (base.alpha, target_alpha)
+            } else {
+                alpha_less_load_store(target_alpha, base.alpha)
+            };
+            base.alpha = load_alpha;
             let mut buf: Buffer<f32> = load::load_f32(&base)?;
             if let Some(sw) = &settings.swizzle {
                 swizzle::apply_f32(&mut buf, sw);
@@ -239,29 +300,30 @@ fn convert_f32(
             let bufs = mipmap::generate(buf, settings.mipmap_filter, settings.mipmap_count)?;
             let mut mips = Vec::with_capacity(bufs.len());
             for b in bufs {
-                mips.push(store::store_f32(
-                    b,
-                    target_fmt,
-                    target_color_space,
-                    target_alpha,
-                )?);
+                let mut surface = store::store_f32(b, target_fmt, target_color_space, store_alpha)?;
+                surface.alpha = target_alpha;
+                mips.push(surface);
             }
             mips
         } else {
             // Convert every existing mip level (matching the f64/integer
             // paths) so an input mip chain isn't silently dropped.
             let mut mips = Vec::with_capacity(layer.len());
-            for base in layer {
+            for mut base in layer {
+                let (load_alpha, store_alpha) = if final_has_alpha {
+                    (base.alpha, target_alpha)
+                } else {
+                    alpha_less_load_store(target_alpha, base.alpha)
+                };
+                base.alpha = load_alpha;
                 let mut buf: Buffer<f32> = load::load_f32(&base)?;
                 if let Some(sw) = &settings.swizzle {
                     swizzle::apply_f32(&mut buf, sw);
                 }
-                mips.push(store::store_f32(
-                    buf,
-                    target_fmt,
-                    target_color_space,
-                    target_alpha,
-                )?);
+                let mut surface =
+                    store::store_f32(buf, target_fmt, target_color_space, store_alpha)?;
+                surface.alpha = target_alpha;
+                mips.push(surface);
             }
             mips
         };
@@ -286,6 +348,7 @@ fn convert_f64(
     settings: ConvertSettings,
     target_fmt: ktx2::Format,
     encoder_step: Option<encode::EncoderStep>,
+    final_has_alpha: bool,
 ) -> Result<PipelineOutput> {
     if settings.mipmap {
         return Err(Error::UnsupportedFormat(
@@ -303,17 +366,22 @@ fn convert_f64(
     for layer in image.surfaces {
         profiling::scope!("convert_f64_layer");
         let mut mips = Vec::with_capacity(layer.len());
-        for base in layer {
+        for mut base in layer {
+            // See `convert_f32`: an alpha-less target skips the destructive
+            // premultiplied round-trip.
+            let (load_alpha, store_alpha) = if final_has_alpha {
+                (base.alpha, target_alpha)
+            } else {
+                alpha_less_load_store(target_alpha, base.alpha)
+            };
+            base.alpha = load_alpha;
             let mut buf = load::load_f64(&base)?;
             if let Some(sw) = &settings.swizzle {
                 swizzle::apply_f64(&mut buf, sw);
             }
-            mips.push(store::store_f64(
-                buf,
-                target_fmt,
-                target_color_space,
-                target_alpha,
-            )?);
+            let mut surface = store::store_f64(buf, target_fmt, target_color_space, store_alpha)?;
+            surface.alpha = target_alpha;
+            mips.push(surface);
         }
         out_layers.push(mips);
     }
@@ -1116,5 +1184,164 @@ mod tests {
             }
             _ => panic!("expected Raw output"),
         }
+    }
+
+    #[test]
+    fn warn_discarding_alpha_truth_table() {
+        use AlphaMode::*;
+        // Alpha-bearing final target: never warn regardless of alpha mode.
+        for mode in [Straight, Premultiplied, Opaque] {
+            assert!(
+                !warn_discarding_alpha(true, true, mode, false),
+                "has-alpha {mode:?}"
+            );
+        }
+        // An alpha-less source has nothing meaningful to discard.
+        assert!(!warn_discarding_alpha(false, false, Straight, false));
+        // Alpha-less final target with effective Straight output: warn unless
+        // the caller acknowledged the drop.
+        assert!(warn_discarding_alpha(true, false, Straight, false));
+        assert!(!warn_discarding_alpha(true, false, Straight, true));
+        // Alpha-less target with a deliberate disposition: always silent.
+        assert!(!warn_discarding_alpha(true, false, Premultiplied, false));
+        assert!(!warn_discarding_alpha(true, false, Opaque, false));
+    }
+
+    #[test]
+    fn alpha_less_output_keeps_requested_metadata() {
+        for target_alpha in [AlphaMode::Premultiplied, AlphaMode::Opaque] {
+            let mut data = Vec::new();
+            for value in [0.8f32, 0.4, 0.2, 0.5] {
+                data.extend_from_slice(&value.to_le_bytes());
+            }
+            let image = make_image(
+                data,
+                1,
+                1,
+                ktx2::Format::R32G32B32A32_SFLOAT,
+                ColorSpace::Linear,
+                AlphaMode::Straight,
+            );
+            let output = convert(
+                image,
+                ConvertSettings {
+                    format: Some(TargetFormat::Uncompressed(ktx2::Format::R32G32B32_SFLOAT)),
+                    output_alpha: Some(target_alpha),
+                    container: Container::Raw,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+            let PipelineOutput::Raw(image) = output else {
+                panic!("expected raw output");
+            };
+            assert_eq!(image.surfaces[0][0].alpha, target_alpha);
+        }
+    }
+}
+
+/// Regression tests for the f32 → alpha-less (BC6H) alpha handling. Gated on
+/// the AMD encoder because it both encodes BC6H and can decode a block back.
+#[cfg(all(test, feature = "encoder-amd"))]
+mod bc6h_alpha_tests {
+    use super::*;
+    use crate::surface::Surface;
+
+    /// Build a 4×4 `R32G32B32A32_SFLOAT` image with every texel set to
+    /// `(r, g, b, a)`, tagged with the given source alpha mode.
+    fn solid_rgba_f32(r: f32, g: f32, b: f32, a: f32, alpha: AlphaMode) -> Image {
+        let mut data = Vec::with_capacity(4 * 4 * 16);
+        for _ in 0..(4 * 4) {
+            for c in [r, g, b, a] {
+                data.extend_from_slice(&c.to_le_bytes());
+            }
+        }
+        Image {
+            surfaces: vec![vec![Surface {
+                data,
+                width: 4,
+                height: 4,
+                depth: 1,
+                stride: 4 * 16,
+                slice_stride: 0,
+                format: ktx2::Format::R32G32B32A32_SFLOAT,
+                color_space: ColorSpace::Linear,
+                alpha,
+            }]],
+            kind: crate::TextureKind::Texture2D,
+        }
+    }
+
+    /// Encode `image` to BC6H (Raw container) and decode the first texel's RGB.
+    fn encode_bc6h_first_texel(image: Image, output_alpha: Option<AlphaMode>) -> [f32; 3] {
+        let out = convert(
+            image,
+            ConvertSettings {
+                format: Some(TargetFormat::Compressed {
+                    format: ktx2::Format::BC6H_UFLOAT_BLOCK,
+                    encoder: crate::encoders::Encoder::Auto,
+                }),
+                container: Container::Raw,
+                quality: Quality::UltraFast,
+                output_alpha,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let img = match out {
+            PipelineOutput::Raw(img) => img,
+            _ => panic!("expected Raw output"),
+        };
+        let block: [u8; 16] = img.surfaces[0][0].data.as_slice().try_into().unwrap();
+        let texels = ctt_compressonator::bc6h::decompress_block(&block).unwrap();
+        [
+            half::f16::from_bits(texels[0]).to_f32(),
+            half::f16::from_bits(texels[1]).to_f32(),
+            half::f16::from_bits(texels[2]).to_f32(),
+        ]
+    }
+
+    fn assert_rgb_close(actual: [f32; 3], expected: [f32; 3]) {
+        for i in 0..3 {
+            assert!(
+                (actual[i] - expected[i]).abs() <= 0.02,
+                "channel {i}: got {}, expected {} (full {actual:?} vs {expected:?})",
+                actual[i],
+                expected[i],
+            );
+        }
+    }
+
+    #[test]
+    fn zero_alpha_straight_keeps_color() {
+        // The core fix: α=0 must not zero RGB when the target has no alpha.
+        let img = solid_rgba_f32(4.0, 2.0, 1.0, 0.0, AlphaMode::Straight);
+        assert_rgb_close(encode_bc6h_first_texel(img, None), [4.0, 2.0, 1.0]);
+    }
+
+    #[test]
+    fn partial_alpha_straight_keeps_color() {
+        let img = solid_rgba_f32(4.0, 2.0, 1.0, 0.5, AlphaMode::Straight);
+        assert_rgb_close(encode_bc6h_first_texel(img, None), [4.0, 2.0, 1.0]);
+    }
+
+    #[test]
+    fn zero_alpha_opaque_source_keeps_color() {
+        let img = solid_rgba_f32(4.0, 2.0, 1.0, 0.0, AlphaMode::Opaque);
+        assert_rgb_close(encode_bc6h_first_texel(img, None), [4.0, 2.0, 1.0]);
+    }
+
+    #[test]
+    fn premultiplied_output_bakes_partial_alpha() {
+        let img = solid_rgba_f32(4.0, 2.0, 1.0, 0.5, AlphaMode::Straight);
+        let out = encode_bc6h_first_texel(img, Some(AlphaMode::Premultiplied));
+        assert_rgb_close(out, [2.0, 1.0, 0.5]);
+    }
+
+    #[test]
+    fn premultiplied_output_bakes_zero_alpha_to_black() {
+        let img = solid_rgba_f32(4.0, 2.0, 1.0, 0.0, AlphaMode::Straight);
+        let out = encode_bc6h_first_texel(img, Some(AlphaMode::Premultiplied));
+        assert_rgb_close(out, [0.0, 0.0, 0.0]);
     }
 }

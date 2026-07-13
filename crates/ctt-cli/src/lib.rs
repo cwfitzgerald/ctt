@@ -144,6 +144,7 @@ pub fn run(args: Args) -> Result<(), Box<dyn std::error::Error>> {
         quality: map_quality(args.quality),
         output_color_space: args.output_color_space.map(map_color_space),
         output_alpha: args.output_alpha.map(map_alpha_mode),
+        allow_discarding_alpha: args.allow_discarding_alpha,
         swizzle,
         mipmap: args.mipmap,
         mipmap_count: args.mipmap_count,

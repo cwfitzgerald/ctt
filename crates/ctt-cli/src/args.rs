@@ -75,6 +75,11 @@ pub struct Args {
     #[arg(long, visible_alias = "oa")]
     pub output_alpha: Option<AlphaModeArg>,
 
+    /// Acknowledge that a target format without an alpha channel drops the
+    /// source's straight alpha, silencing the warning. Does not change pixels.
+    #[arg(long)]
+    pub allow_discarding_alpha: bool,
+
     /// Compression quality preset.
     #[arg(long, default_value = "basic")]
     pub quality: QualityArg,

@@ -738,6 +738,10 @@ pub struct ConvertSettings {
     pub quality: Quality,
     pub output_color_space: OptionalColorSpace,
     pub output_alpha: OptionalAlphaMode,
+    /// Suppress the warning emitted when a meaningful (`Straight`) alpha
+    /// channel is dropped because the target format has none. Does not change
+    /// pixel output.
+    pub allow_discarding_alpha: bool,
     pub swizzle: OptionalSwizzle,
     pub mipmap: bool,
     pub mipmap_count: OptionalSize,
@@ -760,6 +764,7 @@ pub extern "C" fn ctt_convert_settings_default() -> ConvertSettings {
             present: false,
             value: AlphaMode::Straight,
         },
+        allow_discarding_alpha: false,
         swizzle: OptionalSwizzle {
             present: false,
             value: crate::types::Swizzle {
@@ -840,6 +845,7 @@ pub unsafe extern "C" fn ctt_convert(
                 .output_alpha
                 .present
                 .then(|| settings.output_alpha.value.into()),
+            allow_discarding_alpha: settings.allow_discarding_alpha,
             swizzle,
             mipmap: settings.mipmap,
             mipmap_count: settings

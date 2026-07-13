@@ -1035,6 +1035,12 @@ typedef struct {
     ctt_quality quality;
     ctt_optional_color_space output_color_space;
     ctt_optional_alpha_mode output_alpha;
+    /**
+     * Suppress the warning emitted when a meaningful (`Straight`) alpha
+     * channel is dropped because the target format has none. Does not change
+     * pixel output.
+     */
+    bool allow_discarding_alpha;
     ctt_optional_swizzle swizzle;
     bool mipmap;
     ctt_optional_size mipmap_count;
