@@ -61,9 +61,6 @@ const MACOS_STATIC_SYS_LIBS: &[&str] = &[
 fn artifacts_dir() -> PathBuf {
     let mut p = std::env::current_exe().expect("current_exe");
     p.pop();
-    if p.file_name().and_then(|n| n.to_str()) == Some("deps") {
-        p.pop();
-    }
     p
 }
 

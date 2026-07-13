@@ -2869,23 +2869,23 @@ static uniform uint32_t estimate_partition_list(uniform uint32_t mode, const var
 	return min(num_solutions, orig_max_solutions);
 }
 
-static inline void set_block_bits(uint8_t *pBytes, uint32_t val, uint32_t num_bits, varying uint32_t *uniform pCur_ofs)
+static inline void set_block_bits(varying uint64_t *uniform pLow, varying uint64_t *uniform pHigh, uint32_t val, uint32_t num_bits, varying uint32_t *uniform pCur_ofs)
 {
 	assert(num_bits < 32);
 	uint32_t limit = 1U << num_bits;
 	assert(val < limit);
-		
-	while (num_bits)
+
+	const uint32_t cur_ofs = *pCur_ofs;
+	if (cur_ofs < 64)
 	{
-		const uint32_t n = minimumu(8 - (*pCur_ofs & 7), num_bits);
-
-#pragma ignore warning(perf)
-		pBytes[*pCur_ofs >> 3] |= (uint8_t)(val << (*pCur_ofs & 7));
-
-		val >>= n;
-		num_bits -= n;
-		*pCur_ofs += n;
+		*pLow |= (uint64_t)val << cur_ofs;
+		if (cur_ofs + num_bits > 64)
+			*pHigh |= (uint64_t)val >> (64 - cur_ofs);
 	}
+	else
+		*pHigh |= (uint64_t)val << (cur_ofs - 64);
+
+	*pCur_ofs += num_bits;
 
 	assert(*pCur_ofs <= 128);
 }
@@ -3034,29 +3034,29 @@ static void encode_bc7_block(void *pBlock, const varying bc7_optimization_result
 		}
 	}
 
-	uint8_t *pBlock_bytes = (uint8_t *)(pBlock);
-	memset(pBlock_bytes, 0, BC7E_BLOCK_SIZE);
+	uint64_t block_low = 0;
+	uint64_t block_high = 0;
 
 	uint32_t cur_bit_ofs = 0;
 		
-	set_block_bits(pBlock_bytes, 1 << best_mode, best_mode + 1, &cur_bit_ofs);
+	set_block_bits(&block_low, &block_high, 1 << best_mode, best_mode + 1, &cur_bit_ofs);
 
 	if ((best_mode == 4) || (best_mode == 5))
-		set_block_bits(pBlock_bytes, pResults->m_rotation, 2, &cur_bit_ofs);
+		set_block_bits(&block_low, &block_high, pResults->m_rotation, 2, &cur_bit_ofs);
 
 	if (best_mode == 4)
-		set_block_bits(pBlock_bytes, pResults->m_index_selector, 1, &cur_bit_ofs);
+		set_block_bits(&block_low, &block_high, pResults->m_index_selector, 1, &cur_bit_ofs);
 
 	if (total_partitions > 1)
-		set_block_bits(pBlock_bytes, pResults->m_partition, (total_partitions == 64) ? 6 : 4, &cur_bit_ofs);
+		set_block_bits(&block_low, &block_high, pResults->m_partition, (total_partitions == 64) ? 6 : 4, &cur_bit_ofs);
 
 	const uint32_t total_comps = (best_mode >= 4) ? 4 : 3;
 	for (uniform uint32_t comp = 0; comp < total_comps; comp++)
 	{
 		for (uniform uint32_t subset = 0; subset < total_subsets; subset++)
 		{
-			set_block_bits(pBlock_bytes, low[subset].m_c[comp], (comp == 3) ? g_bc7_alpha_precision_table[best_mode] : g_bc7_color_precision_table[best_mode], &cur_bit_ofs);
-			set_block_bits(pBlock_bytes, high[subset].m_c[comp], (comp == 3) ? g_bc7_alpha_precision_table[best_mode] : g_bc7_color_precision_table[best_mode], &cur_bit_ofs);
+			set_block_bits(&block_low, &block_high, low[subset].m_c[comp], (comp == 3) ? g_bc7_alpha_precision_table[best_mode] : g_bc7_color_precision_table[best_mode], &cur_bit_ofs);
+			set_block_bits(&block_low, &block_high, high[subset].m_c[comp], (comp == 3) ? g_bc7_alpha_precision_table[best_mode] : g_bc7_color_precision_table[best_mode], &cur_bit_ofs);
 		}
 	}
 
@@ -3065,10 +3065,10 @@ static void encode_bc7_block(void *pBlock, const varying bc7_optimization_result
 	{
 		for (uniform uint32_t subset = 0; subset < total_subsets; subset++)
 		{
-			set_block_bits(pBlock_bytes, pbits[subset][0], 1, &cur_bit_ofs);
+			set_block_bits(&block_low, &block_high, pbits[subset][0], 1, &cur_bit_ofs);
 #pragma ignore warning(perf)
 			if (!g_bc7_mode_has_shared_p_bits[best_mode])
-				set_block_bits(pBlock_bytes, pbits[subset][1], 1, &cur_bit_ofs);
+				set_block_bits(&block_low, &block_high, pbits[subset][1], 1, &cur_bit_ofs);
 		}
 	}
 
@@ -3083,7 +3083,7 @@ static void encode_bc7_block(void *pBlock, const varying bc7_optimization_result
 			if ((idx == anchor[0]) || (idx == anchor[1]) || (idx == anchor[2]))
 				n--;
 
-			set_block_bits(pBlock_bytes, pResults->m_index_selector ? alpha_selectors[idx] : color_selectors[idx], n, &cur_bit_ofs);
+			set_block_bits(&block_low, &block_high, pResults->m_index_selector ? alpha_selectors[idx] : color_selectors[idx], n, &cur_bit_ofs);
 		}
 	}
 
@@ -3100,12 +3100,18 @@ static void encode_bc7_block(void *pBlock, const varying bc7_optimization_result
 				if ((idx == anchor[0]) || (idx == anchor[1]) || (idx == anchor[2]))
 					n--;
 
-				set_block_bits(pBlock_bytes, pResults->m_index_selector ? color_selectors[idx] : alpha_selectors[idx], n, &cur_bit_ofs);
+				set_block_bits(&block_low, &block_high, pResults->m_index_selector ? color_selectors[idx] : alpha_selectors[idx], n, &cur_bit_ofs);
 			}
 		}
 	}
 
 	assert(cur_bit_ofs == 128);
+
+#pragma ignore warning(perf)
+	((uint64_t *)(pBlock))[0] = block_low;
+
+#pragma ignore warning(perf)
+	((uint64_t *)(pBlock))[1] = block_high;
 }
 
 static inline void encode_bc7_block_mode6(void *pBlock, varying bc7_optimization_results *uniform pResults)
