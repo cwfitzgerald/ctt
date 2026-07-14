@@ -31,7 +31,7 @@ enum Cmd {
     GenerateCHeader,
     /// Vendor third-party source code into crate directories.
     ///
-    /// With no subcommand, vendors all targets.
+    /// With no target, vendors all targets.
     Vendor(vendor::VendorArgs),
 }
 

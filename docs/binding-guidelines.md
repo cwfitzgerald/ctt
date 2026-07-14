@@ -38,15 +38,38 @@ Prefer flat `src/bindings.rs` over a `src/bindings/` directory. Only use a direc
 
 ### `cargo xtask vendor [<target>]`
 
-Vendors upstream source into crate directories. Defaults to sibling checkouts; override with `--src <path>`.
+Vendors upstream source into crate directories. With no target, vendors all of them.
 
-| Target | Default source | Destination |
+Sources are pulled from git and pinned by [`vendor.lock`](../vendor.lock) at the
+workspace root, which records the upstream `repo`, tracked `ref` (branch/tag),
+and exact `commit` for each target:
+
+- **Default** (no flags): re-vendors each target at its pinned `commit`, so the
+  output is fully reproducible.
+- **`--update`**: re-resolves `ref` to its newest commit, vendors that, and
+  rewrites `commit` in the lock. This is how you bump a dependency.
+- **`--src <path>`**: vendors one target from a local checkout instead of git.
+  This is a local override and does not modify the lock; it cannot be combined
+  with `--update`.
+
+Git checkouts are cached under `target/vendor-cache/<target>/`. Pinned commits
+already present in the cache can be regenerated without network access. The
+tool rejects modified caches rather than recording a commit that does not
+describe their contents.
+
+| Target | Upstream | Destination |
 |---|---|---|
-| `bc7enc-rdo` | `../bc7enc_rdo` | `crates/ctt-bc7enc-rdo/ispc/` |
-| `astcenc` | `../astc-encoder/Source` | `crates/ctt-astcenc/cpp/` |
-| `compressonator` | `../compressonator` | `crates/ctt-compressonator/cpp/` |
+| `bc7enc-rdo` | `richgel999/bc7enc_rdo` | `crates/ctt-bc7enc-rdo/ispc/` |
+| `astcenc` | `ARM-software/astc-encoder` | `crates/ctt-astcenc/cpp/` |
+| `compressonator` | `GPUOpen-Tools/compressonator` | `crates/ctt-compressonator/cpp/` |
+| `etcpak` | `wolfpld/etcpak` | `crates/ctt-etcpak/cpp/` |
+| `intel` | `GameTechDev/ISPCTextureCompressor` | `crates/ctt-intel-texture-compressor/ispc/` |
 
-Only vendor files needed to compile. The compressonator target applies platform patches automatically.
+Only vendor files needed to compile. Local modifications are applied as
+programmatic patches on top of the pulled source (e.g. `compressonator`'s
+platform guards, `bc7enc-rdo`'s bit-packing fix, `intel`'s `fastSkipThreshold`
+rename) so re-running the script reproduces the tree exactly.
+Vendored text is normalized to LF line endings on every platform.
 
 ### `cargo xtask generate-bindings`
 

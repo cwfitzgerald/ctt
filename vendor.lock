@@ -1,0 +1,35 @@
+# Vendoring lock file — managed by `cargo xtask vendor`.
+#
+# Records, per vendored dependency, the exact upstream commit vendored into its
+# crate so the vendoring can be reproduced. Running `cargo xtask vendor` with no
+# flags re-vendors each target at its pinned `commit`. Passing `--update`
+# re-resolves `ref` to its newest commit and rewrites `commit` here.
+#
+#   repo   — upstream git remote
+#   ref    — branch or tag tracked by `--update`
+#   commit — exact commit currently vendored
+
+[astcenc]
+repo = "https://github.com/ARM-software/astc-encoder"
+ref = "5.6.0"
+commit = "2c9eafa70960bfabaa4701aed99e51857b70839a"
+
+[bc7enc-rdo]
+repo = "https://github.com/richgel999/bc7enc_rdo"
+ref = "master"
+commit = "dbe416d28a5530b4e8cc45b14bf034dc6b96bbde"
+
+[compressonator]
+repo = "https://github.com/GPUOpen-Tools/compressonator"
+ref = "master"
+commit = "f4b53d79ec5abbb50924f58aebb7bf2793200b94"
+
+[etcpak]
+repo = "https://github.com/wolfpld/etcpak"
+ref = "master"
+commit = "9110365ba6916c9554c231c5cdcac77b2618cb89"
+
+[intel-texture-compressor]
+repo = "https://github.com/GameTechDev/ISPCTextureCompressor"
+ref = "master"
+commit = "79ddbc90334fc31edd438e68ccb0fe99b4e15aab"

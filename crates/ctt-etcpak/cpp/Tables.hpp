@@ -3,6 +3,10 @@
 
 #include <stdint.h>
 
+#if defined __AVX__ && !defined __SSE4_1__
+#  define __SSE4_1__
+#endif
+
 #ifdef __AVX2__
 #  include <immintrin.h>
 #endif

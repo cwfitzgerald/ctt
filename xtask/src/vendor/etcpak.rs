@@ -1,19 +1,17 @@
-use std::path::PathBuf;
+use std::path::Path;
 
 use anyhow::Result;
 
-use super::{clean_and_create, copy_file, copy_files, git_revision, require_dir};
+use super::{clean_and_create, copy_files, copy_text_file, require_dir};
 use crate::util::workspace_root;
 
 /// Automatically vendored from <https://github.com/wolfpld/etcpak>.
-/// Default source: `../etcpak` relative to the workspace root.
 /// Regenerate with: `cargo xtask vendor etcpak [--src <path>]`
-pub fn vendor_etcpak(src: Option<PathBuf>) -> Result<()> {
+///
+/// `src_dir` is the repository root.
+pub fn vendor_etcpak(src_dir: &Path) -> Result<()> {
     let ws = workspace_root();
-    let src_dir = src.unwrap_or_else(|| ws.join("../etcpak"));
-    require_dir(&src_dir)?;
-
-    let rev = git_revision(&src_dir)?;
+    require_dir(src_dir)?;
 
     let crate_dir = ws.join("crates/ctt-etcpak");
     let dst_dir = crate_dir.join("cpp");
@@ -21,7 +19,7 @@ pub fn vendor_etcpak(src: Option<PathBuf>) -> Result<()> {
 
     // C++ source files
     copy_files(
-        &src_dir,
+        src_dir,
         &dst_dir,
         &[
             "ProcessRGB.cpp",
@@ -35,11 +33,11 @@ pub fn vendor_etcpak(src: Option<PathBuf>) -> Result<()> {
     )?;
 
     // C source file
-    copy_file(&src_dir.join("bcdec.c"), &dst_dir.join("bcdec.c"))?;
+    copy_text_file(&src_dir.join("bcdec.c"), &dst_dir.join("bcdec.c"))?;
 
     // Headers
     copy_files(
-        &src_dir,
+        src_dir,
         &dst_dir,
         &[
             "ProcessRGB.hpp",
@@ -58,11 +56,10 @@ pub fn vendor_etcpak(src: Option<PathBuf>) -> Result<()> {
     )?;
 
     // License
-    copy_file(
+    copy_text_file(
         &src_dir.join("LICENSE.txt"),
         &crate_dir.join("LICENSE-BSD-ETCPAK.md"),
     )?;
 
-    println!("Vendored etcpak from {} (rev {rev})", src_dir.display());
     Ok(())
 }
