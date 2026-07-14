@@ -36,6 +36,7 @@ ispc-build-from-source = ["ctt/ispc-build-from-source"]
 
 [dependencies]
 ctt = { workspace = true }
+log = { workspace = true }
 
 [dev-dependencies]
 cc = { workspace = true }
