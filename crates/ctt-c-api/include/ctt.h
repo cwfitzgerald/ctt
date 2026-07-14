@@ -87,6 +87,17 @@
  * thread-local.
  *
  *
+ * Logging
+ * -------
+ *
+ * ctt emits diagnostic log records (conversion routing decisions, container
+ * details, dropped-alpha warnings). They are discarded until a callback is
+ * installed with `ctt_set_log_callback`; `ctt_set_log_level` sets the
+ * severity threshold (defaulting to all messages). The callback may fire from
+ * any thread and must not call back into ctt. See those functions and
+ * `ctt_log_callback` for the full contract.
+ *
+ *
  * Formats
  * -------
  *
@@ -436,6 +447,31 @@ enum ctt_input_format
 };
 #ifndef __cplusplus
 typedef uint8_t ctt_input_format;
+#endif // __cplusplus
+
+/**
+ * Severity of a log record.
+ *
+ * Ordered from least to most verbose. As an argument to
+ * [`ctt_set_log_level`], a level enables that severity and everything above
+ * it (e.g. `CTT_LOG_LEVEL_INFO` passes error, warning, and info records but
+ * drops debug and trace). `CTT_LOG_LEVEL_OFF` disables logging entirely and
+ * never appears as the `level` of a callback invocation.
+ */
+enum ctt_log_level
+#ifdef __cplusplus
+  : uint8_t
+#endif // __cplusplus
+ {
+    CTT_LOG_LEVEL_OFF = 0,
+    CTT_LOG_LEVEL_ERROR = 1,
+    CTT_LOG_LEVEL_WARN = 2,
+    CTT_LOG_LEVEL_INFO = 3,
+    CTT_LOG_LEVEL_DEBUG = 4,
+    CTT_LOG_LEVEL_TRACE = 5,
+};
+#ifndef __cplusplus
+typedef uint8_t ctt_log_level;
 #endif // __cplusplus
 
 /**
@@ -1058,6 +1094,21 @@ typedef struct {
     ctt_optional_alpha_mode alpha;
 } ctt_input_overrides;
 
+/**
+ * Callback invoked for each log record ctt emits.
+ *
+ * `level` is the record's severity (never `CTT_LOG_LEVEL_OFF`). `message` is
+ * a NUL-terminated UTF-8 string valid only for the duration of the call —
+ * copy it if you need to retain it. `user_data` is the opaque pointer passed
+ * to [`ctt_set_log_callback`], forwarded unchanged.
+ *
+ * The callback may be invoked from any thread and from multiple threads
+ * concurrently; it must be thread-safe. It must not call back into ctt.
+ *
+ * A `NULL` function pointer clears the callback (see [`ctt_set_log_callback`]).
+ */
+typedef void (*ctt_log_callback)(ctt_log_level level, const char *message, void *user_data);
+
 #define CTT_FORMAT_R8_UNORM 9
 
 #define CTT_FORMAT_R8_SNORM 10
@@ -1509,6 +1560,29 @@ ctt_status ctt_decode_container_as(const uint8_t *data,
                                    ctt_input_format format,
                                    const ctt_input_overrides *overrides,
                                    ctt_image **out_image);
+
+/**
+ * Set the callback that receives ctt's log records, replacing any previous
+ * one. Pass `NULL` to stop delivery.
+ *
+ * `user_data` is stored and forwarded unchanged to every invocation of
+ * `callback`; ctt never dereferences it. It is the caller's responsibility to
+ * keep whatever it points at alive until the callback is cleared or replaced.
+ *
+ * The first call to this function (or to [`ctt_set_log_level`]) installs
+ * ctt's global logger. If the host process has already installed a different
+ * `log` logger, ctt's records cannot be routed here.
+ */
+ void ctt_set_log_callback(ctt_log_callback callback, void *user_data);
+
+/**
+ * Set the maximum log level ctt will emit. Records more verbose than `level`
+ * are dropped before reaching the callback.
+ *
+ * The default is `CTT_LOG_LEVEL_TRACE` (all messages). Pass
+ * `CTT_LOG_LEVEL_OFF` to disable logging.
+ */
+ void ctt_set_log_level(ctt_log_level level);
 
 /**
  * Destroy a pipeline output. `out` may be NULL.

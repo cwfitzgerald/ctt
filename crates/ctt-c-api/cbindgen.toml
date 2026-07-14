@@ -89,6 +89,17 @@ header = """\
  * thread-local.
  *
  *
+ * Logging
+ * -------
+ *
+ * ctt emits diagnostic log records (conversion routing decisions, container
+ * details, dropped-alpha warnings). They are discarded until a callback is
+ * installed with `ctt_set_log_callback`; `ctt_set_log_level` sets the
+ * severity threshold (defaulting to all messages). The callback may fire from
+ * any thread and must not call back into ctt. See those functions and
+ * `ctt_log_callback` for the full contract.
+ *
+ *
  * Formats
  * -------
  *
@@ -204,6 +215,8 @@ item_types = [
 "ColorSpace" = "ctt_color_space"
 "TextureKind" = "ctt_texture_kind"
 "Status" = "ctt_status"
+"LogLevel" = "ctt_log_level"
+"LogCallback" = "ctt_log_callback"
 "OptionalColorSpace" = "ctt_optional_color_space"
 "OptionalAlphaMode" = "ctt_optional_alpha_mode"
 "OptionalSwizzle" = "ctt_optional_swizzle"
