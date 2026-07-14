@@ -5,7 +5,18 @@
 //! handled separately in [`super::alpha`]. sRGB decoding is applied here
 //! (RGB channels only; alpha rides through as linear).
 
+pub(crate) mod a2_10_10_10;
+pub(crate) mod b10g11r11;
+pub(crate) mod e5b9g9r9;
 pub(crate) mod srgb;
+
+pub use a2_10_10_10::{
+    load_a2b10g10r10_sint_u32, load_a2b10g10r10_snorm_f32, load_a2b10g10r10_uint_u32,
+    load_a2b10g10r10_unorm_f32, load_a2r10g10b10_sint_u32, load_a2r10g10b10_snorm_f32,
+    load_a2r10g10b10_uint_u32, load_a2r10g10b10_unorm_f32,
+};
+pub use b10g11r11::load_b10g11r11_f32;
+pub use e5b9g9r9::load_e5b9g9r9_f32;
 pub use srgb::{load_bgr8_srgb_f32, load_bgra8_srgb_f32, load_srgb8_f32};
 
 use half::f16;
@@ -286,6 +297,48 @@ pub fn load_i64_sint_u64(surface: &Surface, channels: usize) -> Result<Buffer<u6
 }
 
 // ---- Helpers ----
+
+/// Drive a SIMD packed-32-bit loader: run `row_fn` over each row of a
+/// 4-byte-per-pixel surface, decoding into 4 lanes per pixel. Because 4 input
+/// bytes become 4 output lanes, byte offsets double as lane offsets throughout
+/// the row helpers.
+///
+/// # Safety
+/// `row_fn` must write `row.len()` lanes starting at the pointer it is given.
+#[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
+unsafe fn load_packed_rows<T: Copy + bytemuck::Pod>(
+    surface: &Surface,
+    mut row_fn: impl FnMut(&[u8], *mut T),
+) -> Result<Buffer<T>> {
+    validate_surface(surface, 4)?;
+
+    let w = surface.width as usize;
+    let h = surface.height as usize;
+    let stride = surface.stride as usize;
+    let row_bytes = w * 4;
+    let total_pixels = w * h;
+
+    let mut pixels: Vec<[T; 4]> = Vec::with_capacity(total_pixels);
+    let out_base = pixels.as_mut_ptr() as *mut T;
+
+    let mut out_i = 0usize;
+    for row_region in surface.data.chunks(stride).take(h) {
+        let row = &row_region[..row_bytes];
+        // SAFETY: `out_i` stays within the reserved capacity; validate_surface
+        // bounded the input slice.
+        row_fn(row, unsafe { out_base.add(out_i) });
+        out_i += row_bytes;
+    }
+    debug_assert_eq!(out_i, total_pixels * 4);
+    // SAFETY: `row_fn` initialized all `total_pixels * 4` lanes (caller contract).
+    unsafe { pixels.set_len(total_pixels) };
+
+    Ok(Buffer {
+        pixels,
+        width: surface.width,
+        height: surface.height,
+    })
+}
 
 fn validate_surface(surface: &Surface, pixel_bytes: usize) -> Result<()> {
     let w = surface.width as usize;

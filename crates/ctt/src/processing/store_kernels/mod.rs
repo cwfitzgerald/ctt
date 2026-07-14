@@ -4,7 +4,18 @@
 //! Input lanes are in *linear*, *premultiplied* space (for float pipelines);
 //! unpremultiplication and sRGB re-encoding happen at the callers / here.
 
+pub(crate) mod a2_10_10_10;
+pub(crate) mod b10g11r11;
+pub(crate) mod e5b9g9r9;
 pub(crate) mod srgb;
+
+pub use a2_10_10_10::{
+    store_a2b10g10r10_sint_u32, store_a2b10g10r10_snorm_f32, store_a2b10g10r10_uint_u32,
+    store_a2b10g10r10_unorm_f32, store_a2r10g10b10_sint_u32, store_a2r10g10b10_snorm_f32,
+    store_a2r10g10b10_uint_u32, store_a2r10g10b10_unorm_f32,
+};
+pub use b10g11r11::store_b10g11r11_f32;
+pub use e5b9g9r9::store_e5b9g9r9_f32;
 pub use srgb::{store_bgr8_srgb_f32, store_bgra8_srgb_f32, store_srgb8_f32};
 
 use half::f16;
@@ -226,6 +237,22 @@ pub fn store_i64_sint_u64(buf: &Buffer<u64>, channels: usize) -> Vec<u8> {
 }
 
 // ---- Helpers ----
+
+/// Allocate the output for a packed 32-bit store and hand `encode_all` the raw
+/// pixel/word pointers (`n` 4-lane pixels in, `n` little-endian words out).
+///
+/// The word pointer originates from a byte buffer, so it is not necessarily
+/// 4-aligned; `encode_all` must use unaligned stores.
+#[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
+fn store_packed_words<T>(
+    pixels: &[[T; 4]],
+    encode_all: impl FnOnce(*const T, *mut u32, usize),
+) -> Vec<u8> {
+    let n = pixels.len();
+    let mut out = vec![0u8; n * 4];
+    encode_all(pixels.as_ptr() as *const T, out.as_mut_ptr() as *mut u32, n);
+    out
+}
 
 fn write_pixels(
     buf: &Buffer<f32>,

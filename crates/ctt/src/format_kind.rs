@@ -46,6 +46,28 @@ pub enum FormatKind {
     Bgr8,
     /// 8-bit sRGB-encoded lanes, BGR channel order.
     Bgr8Srgb,
+
+    // --- Packed 32-bit formats (single u32 word, bit-packed channels). ---
+    /// Shared 5-bit exponent + 9-bit mantissas, `E5B9G9R9` layout (RGB, no alpha).
+    E5b9g9r9Ufloat,
+    /// Unsigned 11/11/10-bit floats, `B10G11R11` layout (RGB, no alpha).
+    B10g11r11Ufloat,
+    /// 2-bit alpha + three 10-bit unorm lanes, `A2B10G10R10` layout.
+    A2b10g10r10Unorm,
+    /// 2-bit alpha + three 10-bit snorm lanes, `A2B10G10R10` layout.
+    A2b10g10r10Snorm,
+    /// 2-bit alpha + three 10-bit uint lanes, `A2B10G10R10` layout.
+    A2b10g10r10Uint,
+    /// 2-bit alpha + three 10-bit sint lanes, `A2B10G10R10` layout.
+    A2b10g10r10Sint,
+    /// 2-bit alpha + three 10-bit unorm lanes, `A2R10G10B10` layout.
+    A2r10g10b10Unorm,
+    /// 2-bit alpha + three 10-bit snorm lanes, `A2R10G10B10` layout.
+    A2r10g10b10Snorm,
+    /// 2-bit alpha + three 10-bit uint lanes, `A2R10G10B10` layout.
+    A2r10g10b10Uint,
+    /// 2-bit alpha + three 10-bit sint lanes, `A2R10G10B10` layout.
+    A2r10g10b10Sint,
 }
 
 /// Semantic interpretation of a format's values.
@@ -189,6 +211,20 @@ pub fn classify(fmt: ktx2::Format, color_space: crate::surface::ColorSpace) -> O
         F::R64G64B64A64_UINT => (U64, Uint, 4),
         F::R64G64B64A64_SINT => (I64, Sint, 4),
         F::R64G64B64A64_SFLOAT => (F64, Float, 4),
+
+        // --- Packed 32-bit ---
+        F::E5B9G9R9_UFLOAT_PACK32 => (E5b9g9r9Ufloat, Float, 3),
+        F::B10G11R11_UFLOAT_PACK32 => (B10g11r11Ufloat, Float, 3),
+
+        F::A2B10G10R10_UNORM_PACK32 => (A2b10g10r10Unorm, Unorm, 4),
+        F::A2B10G10R10_SNORM_PACK32 => (A2b10g10r10Snorm, Snorm, 4),
+        F::A2B10G10R10_UINT_PACK32 => (A2b10g10r10Uint, Uint, 4),
+        F::A2B10G10R10_SINT_PACK32 => (A2b10g10r10Sint, Sint, 4),
+
+        F::A2R10G10B10_UNORM_PACK32 => (A2r10g10b10Unorm, Unorm, 4),
+        F::A2R10G10B10_SNORM_PACK32 => (A2r10g10b10Snorm, Snorm, 4),
+        F::A2R10G10B10_UINT_PACK32 => (A2r10g10b10Uint, Uint, 4),
+        F::A2R10G10B10_SINT_PACK32 => (A2r10g10b10Sint, Sint, 4),
 
         _ => return None,
     };

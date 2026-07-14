@@ -94,6 +94,12 @@ pub fn store_f32(
         (FormatKind::I16, _) => k::store_i16_snorm_f32(&buf, info.channels),
         (FormatKind::F16, _) => k::store_f16_f32(&buf, info.channels),
         (FormatKind::F32, _) => k::store_f32_f32(&buf, info.channels),
+        (FormatKind::E5b9g9r9Ufloat, _) => k::store_e5b9g9r9_f32(&buf),
+        (FormatKind::B10g11r11Ufloat, _) => k::store_b10g11r11_f32(&buf),
+        (FormatKind::A2b10g10r10Unorm, _) => k::store_a2b10g10r10_unorm_f32(&buf),
+        (FormatKind::A2b10g10r10Snorm, _) => k::store_a2b10g10r10_snorm_f32(&buf),
+        (FormatKind::A2r10g10b10Unorm, _) => k::store_a2r10g10b10_unorm_f32(&buf),
+        (FormatKind::A2r10g10b10Snorm, _) => k::store_a2r10g10b10_snorm_f32(&buf),
         (other, _) => {
             return Err(Error::UnsupportedFormat(format!(
                 "float pipeline: unsupported target kind {other:?}"
@@ -202,6 +208,10 @@ pub fn store_u32(
         FormatKind::I16 => k::store_i16_sint_u32(&buf, info.channels),
         FormatKind::U32 => k::store_u32_uint_u32(&buf, info.channels),
         FormatKind::I32 => k::store_i32_sint_u32(&buf, info.channels),
+        FormatKind::A2b10g10r10Uint => k::store_a2b10g10r10_uint_u32(&buf),
+        FormatKind::A2b10g10r10Sint => k::store_a2b10g10r10_sint_u32(&buf),
+        FormatKind::A2r10g10b10Uint => k::store_a2r10g10b10_uint_u32(&buf),
+        FormatKind::A2r10g10b10Sint => k::store_a2r10g10b10_sint_u32(&buf),
         other => {
             return Err(Error::UnsupportedFormat(format!(
                 "u32 pipeline: unsupported target kind {other:?}"

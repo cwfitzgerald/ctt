@@ -234,6 +234,17 @@ fn parse_uncompressed(s: &str) -> Option<ktx2::Format> {
 
         // --- Packed ---
         "rg11b10ufloat" | "rg11b10float" | "b10g11r11_ufloat" | "b10g11r11_ufloat_pack32" => F::B10G11R11_UFLOAT_PACK32,
+        "rgb9e5ufloat" | "rgb9e5float" | "e5b9g9r9_ufloat" | "e5b9g9r9_ufloat_pack32" => F::E5B9G9R9_UFLOAT_PACK32,
+
+        "rgb10a2unorm" | "a2b10g10r10_unorm" | "a2b10g10r10_unorm_pack32" => F::A2B10G10R10_UNORM_PACK32,
+        "a2b10g10r10_snorm" | "a2b10g10r10_snorm_pack32" => F::A2B10G10R10_SNORM_PACK32,
+        "rgb10a2uint" | "a2b10g10r10_uint" | "a2b10g10r10_uint_pack32" => F::A2B10G10R10_UINT_PACK32,
+        "a2b10g10r10_sint" | "a2b10g10r10_sint_pack32" => F::A2B10G10R10_SINT_PACK32,
+
+        "a2r10g10b10_unorm" | "a2r10g10b10_unorm_pack32" => F::A2R10G10B10_UNORM_PACK32,
+        "a2r10g10b10_snorm" | "a2r10g10b10_snorm_pack32" => F::A2R10G10B10_SNORM_PACK32,
+        "a2r10g10b10_uint" | "a2r10g10b10_uint_pack32" => F::A2R10G10B10_UINT_PACK32,
+        "a2r10g10b10_sint" | "a2r10g10b10_sint_pack32" => F::A2R10G10B10_SINT_PACK32,
 
         _ => return None,
     })
@@ -289,15 +300,25 @@ mod tests {
     }
 
     #[test]
-    fn packed_rg11b10() {
-        assert_eq!(
-            parse_uncompressed("rg11b10ufloat"),
-            Some(F::B10G11R11_UFLOAT_PACK32)
-        );
-        assert_eq!(
-            parse_uncompressed("b10g11r11_ufloat"),
-            Some(F::B10G11R11_UFLOAT_PACK32)
-        );
+    fn packed_formats() {
+        let cases = [
+            ("rg11b10ufloat", F::B10G11R11_UFLOAT_PACK32),
+            ("b10g11r11_ufloat_pack32", F::B10G11R11_UFLOAT_PACK32),
+            ("rgb9e5ufloat", F::E5B9G9R9_UFLOAT_PACK32),
+            ("e5b9g9r9_ufloat_pack32", F::E5B9G9R9_UFLOAT_PACK32),
+            ("rgb10a2unorm", F::A2B10G10R10_UNORM_PACK32),
+            ("a2b10g10r10_snorm_pack32", F::A2B10G10R10_SNORM_PACK32),
+            ("rgb10a2uint", F::A2B10G10R10_UINT_PACK32),
+            ("a2b10g10r10_sint_pack32", F::A2B10G10R10_SINT_PACK32),
+            ("a2r10g10b10_unorm_pack32", F::A2R10G10B10_UNORM_PACK32),
+            ("a2r10g10b10_snorm_pack32", F::A2R10G10B10_SNORM_PACK32),
+            ("a2r10g10b10_uint_pack32", F::A2R10G10B10_UINT_PACK32),
+            ("a2r10g10b10_sint_pack32", F::A2R10G10B10_SINT_PACK32),
+        ];
+
+        for (name, expected) in cases {
+            assert_eq!(parse_uncompressed(name), Some(expected), "{name}");
+        }
     }
 
     #[test]

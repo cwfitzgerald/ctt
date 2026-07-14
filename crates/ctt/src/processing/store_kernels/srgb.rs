@@ -8,7 +8,16 @@
 
 use std::sync::LazyLock;
 
+#[cfg(target_arch = "x86_64")]
+use crate::processing::x86::has_avx512;
+
 use super::{Buffer, write_pixels};
+
+#[cfg(target_arch = "x86_64")]
+use std::arch::x86_64::*;
+
+#[cfg(target_arch = "aarch64")]
+use std::arch::aarch64::*;
 
 const OETF_LUT_SIZE: usize = 4096;
 
@@ -77,8 +86,7 @@ const SRGB_OETF_MINIMAX_C: f32 = 0.027_579_91;
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "sse4.1")]
 #[inline]
-unsafe fn rsqrt_refined_sse4_1(x: std::arch::x86_64::__m128) -> std::arch::x86_64::__m128 {
-    use std::arch::x86_64::*;
+unsafe fn rsqrt_refined_sse4_1(x: __m128) -> __m128 {
     let y = _mm_rsqrt_ps(x);
     let y_sq = _mm_mul_ps(y, y);
     let half_x = _mm_mul_ps(_mm_set1_ps(0.5), x);
@@ -93,8 +101,7 @@ unsafe fn rsqrt_refined_sse4_1(x: std::arch::x86_64::__m128) -> std::arch::x86_6
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "sse4.1")]
 #[inline]
-unsafe fn rcp_refined_sse4_1(x: std::arch::x86_64::__m128) -> std::arch::x86_64::__m128 {
-    use std::arch::x86_64::*;
+unsafe fn rcp_refined_sse4_1(x: __m128) -> __m128 {
     let y = _mm_rcp_ps(x);
     let correction = _mm_sub_ps(_mm_set1_ps(2.0), _mm_mul_ps(x, y));
     _mm_mul_ps(y, correction)
@@ -107,8 +114,7 @@ unsafe fn rcp_refined_sse4_1(x: std::arch::x86_64::__m128) -> std::arch::x86_64:
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2,fma")]
 #[inline]
-unsafe fn rsqrt_refined_avx2(x: std::arch::x86_64::__m256) -> std::arch::x86_64::__m256 {
-    use std::arch::x86_64::*;
+unsafe fn rsqrt_refined_avx2(x: __m256) -> __m256 {
     let y = _mm256_rsqrt_ps(x);
     let y_sq = _mm256_mul_ps(y, y);
     let half_x = _mm256_mul_ps(_mm256_set1_ps(0.5), x);
@@ -123,8 +129,7 @@ unsafe fn rsqrt_refined_avx2(x: std::arch::x86_64::__m256) -> std::arch::x86_64:
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2,fma")]
 #[inline]
-unsafe fn rcp_refined_avx2(x: std::arch::x86_64::__m256) -> std::arch::x86_64::__m256 {
-    use std::arch::x86_64::*;
+unsafe fn rcp_refined_avx2(x: __m256) -> __m256 {
     let y = _mm256_rcp_ps(x);
     let correction = _mm256_fnmadd_ps(x, y, _mm256_set1_ps(2.0));
     _mm256_mul_ps(y, correction)
@@ -139,8 +144,7 @@ unsafe fn rcp_refined_avx2(x: std::arch::x86_64::__m256) -> std::arch::x86_64::_
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx512f,avx512vl,avx512bw")]
 #[inline]
-unsafe fn rsqrt_refined_avx512(x: std::arch::x86_64::__m512) -> std::arch::x86_64::__m512 {
-    use std::arch::x86_64::*;
+unsafe fn rsqrt_refined_avx512(x: __m512) -> __m512 {
     let y = _mm512_rsqrt14_ps(x);
     let y_sq = _mm512_mul_ps(y, y);
     let half_x = _mm512_mul_ps(_mm512_set1_ps(0.5), x);
@@ -156,8 +160,7 @@ unsafe fn rsqrt_refined_avx512(x: std::arch::x86_64::__m512) -> std::arch::x86_6
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx512f,avx512vl,avx512bw")]
 #[inline]
-unsafe fn rcp_refined_avx512(x: std::arch::x86_64::__m512) -> std::arch::x86_64::__m512 {
-    use std::arch::x86_64::*;
+unsafe fn rcp_refined_avx512(x: __m512) -> __m512 {
     let y = _mm512_rcp14_ps(x);
     let correction = _mm512_fnmadd_ps(x, y, _mm512_set1_ps(2.0));
     _mm512_mul_ps(y, correction)
@@ -168,12 +171,8 @@ pub fn store_srgb8_f32(buf: &Buffer<f32>, channels: usize) -> Vec<u8> {
 
     #[cfg(target_arch = "x86_64")]
     {
-        if channels == 4
-            && is_x86_feature_detected!("avx512f")
-            && is_x86_feature_detected!("avx512bw")
-            && is_x86_feature_detected!("avx512vl")
-        {
-            // SAFETY: runtime check confirms avx512f + bw + vl are available.
+        if channels == 4 && has_avx512() {
+            // SAFETY: runtime check confirms avx512f + vl + bw are available.
             return unsafe { store_srgb8_f32_avx512::<false>(buf) };
         }
         if channels == 4 && is_x86_feature_detected!("avx2") && is_x86_feature_detected!("fma") {
@@ -222,11 +221,8 @@ pub fn store_bgra8_srgb_f32(buf: &Buffer<f32>) -> Vec<u8> {
 
     #[cfg(target_arch = "x86_64")]
     {
-        if is_x86_feature_detected!("avx512f")
-            && is_x86_feature_detected!("avx512bw")
-            && is_x86_feature_detected!("avx512vl")
-        {
-            // SAFETY: runtime check confirms avx512f + bw + vl are available.
+        if has_avx512() {
+            // SAFETY: runtime check confirms avx512f + vl + bw are available.
             return unsafe { store_srgb8_f32_avx512::<true>(buf) };
         }
         if is_x86_feature_detected!("avx2") && is_x86_feature_detected!("fma") {
@@ -303,9 +299,7 @@ pub fn store_bgr8_srgb_f32(buf: &Buffer<f32>) -> Vec<u8> {
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "sse4.1")]
 #[inline]
-unsafe fn encode_srgb_pixel_sse4_1<const BGRA: bool>(lanes: std::arch::x86_64::__m128) -> u32 {
-    use std::arch::x86_64::*;
-
+unsafe fn encode_srgb_pixel_sse4_1<const BGRA: bool>(lanes: __m128) -> u32 {
     // Swap R↔B lanes so the BGRA output byte order falls out of the packus
     // chain below. Alpha stays at lane 3 so `alpha_lane_mask` still applies.
     // `0b11_00_01_10` picks lanes [2, 1, 0, 3] → `[B, G, R, A]`.
@@ -370,8 +364,6 @@ unsafe fn encode_srgb_pixel_sse4_1<const BGRA: bool>(lanes: std::arch::x86_64::_
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "sse4.1")]
 pub unsafe fn store_srgb8_f32_sse4_1<const BGRA: bool>(buf: &Buffer<f32>) -> Vec<u8> {
-    use std::arch::x86_64::*;
-
     profiling::scope!("store_srgb8_f32_sse4_1");
 
     let total_pixels = buf.pixels.len();
@@ -410,11 +402,7 @@ pub unsafe fn store_srgb8_f32_sse4_1<const BGRA: bool>(buf: &Buffer<f32>) -> Vec
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2,fma")]
 #[inline]
-unsafe fn encode_srgb_pixels_avx2<const BGRA: bool>(
-    lanes: std::arch::x86_64::__m256,
-) -> std::arch::x86_64::__m128i {
-    use std::arch::x86_64::*;
-
+unsafe fn encode_srgb_pixels_avx2<const BGRA: bool>(lanes: __m256) -> __m128i {
     // Per-128-bit-lane shuffle swaps R↔B within each pixel; alpha stays at
     // lanes 3 and 7 so the alpha-bypass blend still applies.
     let lanes = if BGRA {
@@ -479,8 +467,6 @@ unsafe fn encode_srgb_pixels_avx2<const BGRA: bool>(
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2,fma")]
 pub unsafe fn store_srgb8_f32_avx2_fma<const BGRA: bool>(buf: &Buffer<f32>) -> Vec<u8> {
-    use std::arch::x86_64::*;
-
     profiling::scope!("store_srgb8_f32_avx2_fma");
 
     let total_pixels = buf.pixels.len();
@@ -544,11 +530,7 @@ pub unsafe fn store_srgb8_f32_avx2_fma<const BGRA: bool>(buf: &Buffer<f32>) -> V
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx512f,avx512vl,avx512bw")]
 #[inline]
-unsafe fn encode_srgb_pixels_avx512<const BGRA: bool>(
-    lanes: std::arch::x86_64::__m512,
-) -> std::arch::x86_64::__m128i {
-    use std::arch::x86_64::*;
-
+unsafe fn encode_srgb_pixels_avx512<const BGRA: bool>(lanes: __m512) -> __m128i {
     // Per-128-bit-lane shuffle swaps R↔B within each pixel; alpha stays at
     // lanes 3/7/11/15 so the alpha-bypass blend still applies.
     let lanes = if BGRA {
@@ -606,8 +588,6 @@ unsafe fn encode_srgb_pixels_avx512<const BGRA: bool>(
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx512f,avx512vl,avx512bw")]
 pub unsafe fn store_srgb8_f32_avx512<const BGRA: bool>(buf: &Buffer<f32>) -> Vec<u8> {
-    use std::arch::x86_64::*;
-
     profiling::scope!("store_srgb8_f32_avx512");
 
     let total_pixels = buf.pixels.len();
@@ -661,11 +641,7 @@ pub unsafe fn store_srgb8_f32_avx512<const BGRA: bool>(buf: &Buffer<f32>) -> Vec
 #[cfg(target_arch = "aarch64")]
 #[target_feature(enable = "neon")]
 #[inline]
-unsafe fn encode_srgb_lanes_neon<const BGRA: bool>(
-    lanes: std::arch::aarch64::float32x4_t,
-) -> std::arch::aarch64::uint16x4_t {
-    use std::arch::aarch64::*;
-
+unsafe fn encode_srgb_lanes_neon<const BGRA: bool>(lanes: float32x4_t) -> uint16x4_t {
     let lanes = if BGRA {
         let r = vgetq_lane_f32::<0>(lanes);
         let b = vgetq_lane_f32::<2>(lanes);
@@ -710,9 +686,7 @@ unsafe fn encode_srgb_lanes_neon<const BGRA: bool>(
 #[cfg(target_arch = "aarch64")]
 #[target_feature(enable = "neon")]
 #[inline]
-unsafe fn encode_srgb_pixel_neon<const BGRA: bool>(lanes: std::arch::aarch64::float32x4_t) -> u32 {
-    use std::arch::aarch64::*;
-
+unsafe fn encode_srgb_pixel_neon<const BGRA: bool>(lanes: float32x4_t) -> u32 {
     // SAFETY: same NEON target feature as this helper.
     let u16s = unsafe { encode_srgb_lanes_neon::<BGRA>(lanes) };
     let u8s = vqmovn_u16(vcombine_u16(u16s, u16s));
@@ -732,8 +706,6 @@ unsafe fn encode_srgb_pixel_neon<const BGRA: bool>(lanes: std::arch::aarch64::fl
 #[cfg(target_arch = "aarch64")]
 #[target_feature(enable = "neon")]
 pub unsafe fn store_srgb8_f32_neon<const BGRA: bool>(buf: &Buffer<f32>) -> Vec<u8> {
-    use std::arch::aarch64::*;
-
     profiling::scope!("store_srgb8_f32_neon");
 
     let total_pixels = buf.pixels.len();

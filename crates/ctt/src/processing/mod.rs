@@ -14,6 +14,8 @@ pub(crate) mod passthrough;
 pub(crate) mod store;
 pub(crate) mod store_kernels;
 pub(crate) mod swizzle;
+#[cfg(target_arch = "x86_64")]
+pub(crate) mod x86;
 
 pub use buffer::{Buffer, Variant};
 pub use mipmap::MipmapFilter;
@@ -442,6 +444,203 @@ mod tests {
         let out =
             store::store_u32(buf, ktx2::Format::R32G32B32A32_UINT, AlphaMode::Opaque).unwrap();
         assert_eq!(out.data, data);
+    }
+
+    // ---- Packed 32-bit formats ----
+
+    /// Build a surface from packed 32-bit words (one per pixel), laid out as a
+    /// single row.
+    fn packed_surface(words: &[u32], format: ktx2::Format) -> Surface {
+        let mut data = Vec::with_capacity(words.len() * 4);
+        for w in words {
+            data.extend_from_slice(&w.to_le_bytes());
+        }
+        make_surface(data, words.len() as u32, 1, format)
+    }
+
+    fn stored_words(surface: &Surface) -> Vec<u32> {
+        surface
+            .data
+            .chunks_exact(4)
+            .map(|c| u32::from_le_bytes(c.try_into().unwrap()))
+            .collect()
+    }
+
+    #[test]
+    fn roundtrip_a2b10g10r10_unorm_bit_exact() {
+        // UNORM 10-bit and 2-bit codes are a bijection through the pipeline, so
+        // every valid word must round-trip bit-exactly.
+        let pack = |r: u32, g: u32, b: u32, a: u32| (a << 30) | (b << 20) | (g << 10) | r;
+        let mut words = Vec::new();
+        for &r in &[0u32, 1, 511, 512, 1022, 1023] {
+            for &a in &[0u32, 1, 2, 3] {
+                words.push(pack(r, 1023 - r, (r * 3) & 0x3ff, a));
+            }
+        }
+        let surface = packed_surface(&words, ktx2::Format::A2B10G10R10_UNORM_PACK32);
+        let buf = load::load_f32(&surface).unwrap();
+        let out = store::store_f32(
+            buf,
+            ktx2::Format::A2B10G10R10_UNORM_PACK32,
+            ColorSpace::Linear,
+            AlphaMode::Opaque,
+        )
+        .unwrap();
+        assert_eq!(stored_words(&out), words);
+    }
+
+    #[test]
+    fn a2r10g10b10_swaps_r_and_b_vs_a2b() {
+        // Same packed word interpreted under both channel orders must yield
+        // R and B swapped in the decoded buffer.
+        let word = (0b10u32 << 30) | (300 << 20) | (200 << 10) | 100; // A=2, slot2=300, G=200, slot0=100
+        let a2b = packed_surface(&[word], ktx2::Format::A2B10G10R10_UNORM_PACK32);
+        let a2r = packed_surface(&[word], ktx2::Format::A2R10G10B10_UNORM_PACK32);
+        let b_buf = load::load_f32(&a2b).unwrap();
+        let r_buf = load::load_f32(&a2r).unwrap();
+        // A2B: R=slot0=100, B=slot2=300. A2R: R=slot2=300, B=slot0=100.
+        assert!((b_buf.pixels[0][0] - 100.0 / 1023.0).abs() < 1e-6);
+        assert!((b_buf.pixels[0][2] - 300.0 / 1023.0).abs() < 1e-6);
+        assert!((r_buf.pixels[0][0] - 300.0 / 1023.0).abs() < 1e-6);
+        assert!((r_buf.pixels[0][2] - 100.0 / 1023.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn roundtrip_a2b10g10r10_uint_bit_exact() {
+        let pack = |r: u32, g: u32, b: u32, a: u32| (a << 30) | (b << 20) | (g << 10) | r;
+        let words = vec![
+            pack(0, 1023, 512, 3),
+            pack(1023, 0, 1, 0),
+            pack(500, 600, 700, 2),
+        ];
+        let surface = packed_surface(&words, ktx2::Format::A2B10G10R10_UINT_PACK32);
+        let buf = load::load_u32(&surface).unwrap();
+        let out = store::store_u32(
+            buf,
+            ktx2::Format::A2B10G10R10_UINT_PACK32,
+            AlphaMode::Opaque,
+        )
+        .unwrap();
+        assert_eq!(stored_words(&out), words);
+    }
+
+    #[test]
+    fn roundtrip_a2b10g10r10_sint_bit_exact() {
+        // Full signed range (incl. -512) round-trips: store clamps to [-512,511].
+        let pack = |r: u32, g: u32, b: u32, a: u32| (a << 30) | (b << 20) | (g << 10) | r;
+        let words = vec![
+            pack(0x200, 0x1ff, 0, 0b10), // R=-512, G=511, B=0, A=-2
+            pack(0x3ff, 1, 0x201, 0b01), // R=-1, G=1, B=-511, A=1
+            pack(0, 0x3ff, 0x1ff, 0b11), // R=0, G=-1, B=511, A=-1
+        ];
+        let surface = packed_surface(&words, ktx2::Format::A2B10G10R10_SINT_PACK32);
+        let buf = load::load_u32(&surface).unwrap();
+        let out = store::store_u32(
+            buf,
+            ktx2::Format::A2B10G10R10_SINT_PACK32,
+            AlphaMode::Opaque,
+        )
+        .unwrap();
+        assert_eq!(stored_words(&out), words);
+    }
+
+    #[test]
+    fn roundtrip_a2b10g10r10_snorm_values() {
+        // SNORM value-level round-trip for representable codes (excludes -512,
+        // which maps to -1 == code -511).
+        let pack = |r: u32, g: u32, b: u32, a: u32| (a << 30) | (b << 20) | (g << 10) | r;
+        let words = vec![
+            pack(0x1ff, 0x201, 0, 0b01), // R=1.0, G=-1.0, B=0.0, A=1.0
+            pack(0, 511, 100, 0),
+        ];
+        let surface = packed_surface(&words, ktx2::Format::A2B10G10R10_SNORM_PACK32);
+        let buf = load::load_f32(&surface).unwrap();
+        let out = store::store_f32(
+            buf,
+            ktx2::Format::A2B10G10R10_SNORM_PACK32,
+            ColorSpace::Linear,
+            AlphaMode::Opaque,
+        )
+        .unwrap();
+        assert_eq!(stored_words(&out), words);
+    }
+
+    #[test]
+    fn roundtrip_e5b9g9r9_values() {
+        // Shared-exponent RGB: encode a set of values, decode, and check the
+        // relative error is within the format's ~1/512 mantissa resolution.
+        let vals = [
+            [0.0f32, 0.0, 0.0],
+            [1.0, 0.5, 0.25],
+            [0.1, 0.2, 0.3],
+            [10.0, 20.0, 5.0],
+            [100.0, 0.01, 1.0],
+        ];
+        let pixels: Vec<[f32; 4]> = vals.iter().map(|v| [v[0], v[1], v[2], 1.0]).collect();
+        let buf = Buffer {
+            pixels,
+            width: vals.len() as u32,
+            height: 1,
+        };
+        let out = store::store_f32(
+            buf,
+            ktx2::Format::E5B9G9R9_UFLOAT_PACK32,
+            ColorSpace::Linear,
+            AlphaMode::Opaque,
+        )
+        .unwrap();
+        let reload = load::load_f32(&out).unwrap();
+        for (got, want) in reload.pixels.iter().zip(&vals) {
+            // The mantissa step is set by the largest channel (shared exponent),
+            // so accuracy is bounded relative to that, not per-channel.
+            let max_c = want.iter().cloned().fold(0.0f32, f32::max);
+            for c in 0..3 {
+                let diff = (got[c] - want[c]).abs();
+                assert!(
+                    diff <= max_c / 256.0 + 1e-6,
+                    "channel {c}: got {} want {}",
+                    got[c],
+                    want[c]
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn roundtrip_b10g11r11_values() {
+        let vals = [
+            [0.0f32, 0.0, 0.0],
+            [1.0, 0.5, 0.25],
+            [0.1, 0.2, 0.3],
+            [12.5, 3.0, 7.0],
+        ];
+        let pixels: Vec<[f32; 4]> = vals.iter().map(|v| [v[0], v[1], v[2], 1.0]).collect();
+        let buf = Buffer {
+            pixels,
+            width: vals.len() as u32,
+            height: 1,
+        };
+        let out = store::store_f32(
+            buf,
+            ktx2::Format::B10G11R11_UFLOAT_PACK32,
+            ColorSpace::Linear,
+            AlphaMode::Opaque,
+        )
+        .unwrap();
+        let reload = load::load_f32(&out).unwrap();
+        for (got, want) in reload.pixels.iter().zip(&vals) {
+            // R,G have 6 mantissa bits (~1/64), B has 5 (~1/32).
+            let tol = [1.0 / 64.0, 1.0 / 64.0, 1.0 / 32.0];
+            for c in 0..3 {
+                let w = want[c];
+                let diff = (got[c] - w).abs();
+                assert!(
+                    diff <= w.abs() * tol[c] + 1e-6,
+                    "channel {c}: got {} want {w}",
+                    got[c]
+                );
+            }
+        }
     }
 
     #[test]

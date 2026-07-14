@@ -564,6 +564,113 @@ mod tests {
     }
 
     #[test]
+    fn convert_rgba8_to_a2b10g10r10_unorm_end_to_end() {
+        // Full convert() chain into a packed UNORM target. R=255→1023, G=0→0,
+        // B=128 (128/255≈0.502 → ×1023 = 513.5 → rounds to 514), A=255→3.
+        let image = make_image(
+            vec![255, 0, 128, 255],
+            1,
+            1,
+            ktx2::Format::R8G8B8A8_UNORM,
+            ColorSpace::Linear,
+            AlphaMode::Opaque,
+        );
+        let out = convert(
+            image,
+            ConvertSettings {
+                format: Some(TargetFormat::Uncompressed(
+                    ktx2::Format::A2B10G10R10_UNORM_PACK32,
+                )),
+                container: Container::Raw,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        match out {
+            PipelineOutput::Raw(img) => {
+                let s = &img.surfaces[0][0];
+                assert_eq!(s.format, ktx2::Format::A2B10G10R10_UNORM_PACK32);
+                assert_eq!(s.data.len(), 4);
+                let word = u32::from_le_bytes(s.data[..4].try_into().unwrap());
+                let r = word & 0x3ff;
+                let g = (word >> 10) & 0x3ff;
+                let b = (word >> 20) & 0x3ff;
+                let a = word >> 30;
+                assert_eq!((r, g, b, a), (1023, 0, 514, 3));
+            }
+            _ => panic!("expected Raw output"),
+        }
+    }
+
+    #[test]
+    fn convert_rgba8_to_e5b9g9r9_end_to_end() {
+        let image = make_image(
+            vec![255, 128, 0, 255],
+            1,
+            1,
+            ktx2::Format::R8G8B8A8_UNORM,
+            ColorSpace::Linear,
+            AlphaMode::Opaque,
+        );
+        let out = convert(
+            image,
+            ConvertSettings {
+                format: Some(TargetFormat::Uncompressed(
+                    ktx2::Format::E5B9G9R9_UFLOAT_PACK32,
+                )),
+                container: Container::Raw,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        match out {
+            PipelineOutput::Raw(img) => {
+                let s = &img.surfaces[0][0];
+                assert_eq!(s.format, ktx2::Format::E5B9G9R9_UFLOAT_PACK32);
+                assert_eq!(s.data, 0x8001_0300u32.to_le_bytes());
+            }
+            _ => panic!("expected Raw output"),
+        }
+    }
+
+    #[test]
+    fn convert_uint_to_a2b10g10r10_uint_end_to_end() {
+        // Integer pipeline: R8G8B8A8_UINT → A2B10G10R10_UINT.
+        let image = make_image(
+            vec![255, 12, 200, 2],
+            1,
+            1,
+            ktx2::Format::R8G8B8A8_UINT,
+            ColorSpace::Linear,
+            AlphaMode::Opaque,
+        );
+        let out = convert(
+            image,
+            ConvertSettings {
+                format: Some(TargetFormat::Uncompressed(
+                    ktx2::Format::A2B10G10R10_UINT_PACK32,
+                )),
+                container: Container::Raw,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        match out {
+            PipelineOutput::Raw(img) => {
+                let s = &img.surfaces[0][0];
+                assert_eq!(s.format, ktx2::Format::A2B10G10R10_UINT_PACK32);
+                let word = u32::from_le_bytes(s.data[..4].try_into().unwrap());
+                // UINT values pass through unscaled (alpha clamped to 3).
+                assert_eq!(word & 0x3ff, 255);
+                assert_eq!((word >> 10) & 0x3ff, 12);
+                assert_eq!((word >> 20) & 0x3ff, 200);
+                assert_eq!(word >> 30, 2);
+            }
+            _ => panic!("expected Raw output"),
+        }
+    }
+
+    #[test]
     fn convert_rgba8_to_r8_channel_drop() {
         let image = make_image(
             vec![100, 150, 200, 255],

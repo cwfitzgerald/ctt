@@ -54,6 +54,12 @@ pub fn load_f32(surface: &Surface) -> Result<Buffer<f32>> {
         FormatKind::I16 => (k::load_i16_snorm_f32(surface, info.channels)?, false),
         FormatKind::F16 => (k::load_f16_f32(surface, info.channels)?, false),
         FormatKind::F32 => (k::load_f32_f32(surface, info.channels)?, false),
+        FormatKind::E5b9g9r9Ufloat => (k::load_e5b9g9r9_f32(surface)?, false),
+        FormatKind::B10g11r11Ufloat => (k::load_b10g11r11_f32(surface)?, false),
+        FormatKind::A2b10g10r10Unorm => (k::load_a2b10g10r10_unorm_f32(surface)?, false),
+        FormatKind::A2b10g10r10Snorm => (k::load_a2b10g10r10_snorm_f32(surface)?, false),
+        FormatKind::A2r10g10b10Unorm => (k::load_a2r10g10b10_unorm_f32(surface)?, false),
+        FormatKind::A2r10g10b10Snorm => (k::load_a2r10g10b10_snorm_f32(surface)?, false),
         other => {
             return Err(Error::UnsupportedFormat(format!(
                 "float pipeline: unsupported format kind {other:?}"
@@ -139,6 +145,10 @@ pub fn load_u32(surface: &Surface) -> Result<Buffer<u32>> {
         FormatKind::I16 => k::load_i16_sint_u32(surface, info.channels),
         FormatKind::U32 => k::load_u32_uint_u32(surface, info.channels),
         FormatKind::I32 => k::load_i32_sint_u32(surface, info.channels),
+        FormatKind::A2b10g10r10Uint => k::load_a2b10g10r10_uint_u32(surface),
+        FormatKind::A2b10g10r10Sint => k::load_a2b10g10r10_sint_u32(surface),
+        FormatKind::A2r10g10b10Uint => k::load_a2r10g10b10_uint_u32(surface),
+        FormatKind::A2r10g10b10Sint => k::load_a2r10g10b10_sint_u32(surface),
         other => Err(Error::UnsupportedFormat(format!(
             "u32 pipeline: unsupported format kind {other:?}"
         ))),

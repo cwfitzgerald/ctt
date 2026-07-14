@@ -8,9 +8,17 @@
 use std::sync::LazyLock;
 
 use crate::error::Result;
+#[cfg(target_arch = "x86_64")]
+use crate::processing::x86::has_avx512;
 use crate::surface::Surface;
 
 use super::{Buffer, read_pixels_f32};
+
+#[cfg(target_arch = "x86_64")]
+use std::arch::x86_64::*;
+
+#[cfg(target_arch = "aarch64")]
+use std::arch::aarch64::*;
 
 /// sRGB EOTF lookup table — maps every u8 value (0–255) to its linear f32 equivalent.
 static EOTF_LUT: LazyLock<[f32; 256]> = LazyLock::new(|| {
@@ -47,12 +55,8 @@ pub fn load_srgb8_f32(surface: &Surface, channels: usize) -> Result<Buffer<f32>>
 
     #[cfg(target_arch = "x86_64")]
     {
-        if channels == 4
-            && is_x86_feature_detected!("avx512f")
-            && is_x86_feature_detected!("avx512bw")
-            && is_x86_feature_detected!("avx512vl")
-        {
-            // SAFETY: runtime check confirms avx512f + bw + vl are available.
+        if channels == 4 && has_avx512() {
+            // SAFETY: runtime check confirms avx512f + vl + bw are available.
             return unsafe { load_srgb8_rgba_f32_avx512(surface) };
         }
         if channels == 4 && is_x86_feature_detected!("avx2") && is_x86_feature_detected!("fma") {
@@ -134,9 +138,7 @@ pub fn load_bgr8_srgb_f32(surface: &Surface) -> Result<Buffer<f32>> {
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "sse4.1")]
 #[inline]
-unsafe fn decode_srgb_pixel_sse4_1(bytes_ptr: *const u8) -> std::arch::x86_64::__m128 {
-    use std::arch::x86_64::*;
-
+unsafe fn decode_srgb_pixel_sse4_1(bytes_ptr: *const u8) -> __m128 {
     // SAFETY: caller guarantees 4 valid bytes at bytes_ptr.
     let raw = unsafe { bytes_ptr.cast::<u32>().read_unaligned() };
     let packed = _mm_cvtsi32_si128(raw as i32);
@@ -179,8 +181,6 @@ unsafe fn decode_srgb_pixel_sse4_1(bytes_ptr: *const u8) -> std::arch::x86_64::_
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "sse4.1")]
 pub unsafe fn load_srgb8_rgba_f32_sse4_1(surface: &Surface) -> Result<Buffer<f32>> {
-    use std::arch::x86_64::*;
-
     profiling::scope!("load_srgb8_rgba_f32_sse4_1");
     super::validate_surface(surface, 4)?;
 
@@ -237,8 +237,6 @@ pub unsafe fn load_srgb8_rgba_f32_sse4_1(surface: &Surface) -> Result<Buffer<f32
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2,fma")]
 pub unsafe fn load_srgb8_rgba_f32_avx2_fma(surface: &Surface) -> Result<Buffer<f32>> {
-    use std::arch::x86_64::*;
-
     profiling::scope!("load_srgb8_rgba_f32_avx2_fma");
     super::validate_surface(surface, 4)?;
 
@@ -330,11 +328,7 @@ pub unsafe fn load_srgb8_rgba_f32_avx2_fma(surface: &Surface) -> Result<Buffer<f
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx512f,avx512vl,avx512bw")]
 #[inline]
-unsafe fn decode_srgb_pixels_avx512(
-    bytes: std::arch::x86_64::__m128i,
-) -> std::arch::x86_64::__m512 {
-    use std::arch::x86_64::*;
-
+unsafe fn decode_srgb_pixels_avx512(bytes: __m128i) -> __m512 {
     let coeff_a = _mm512_set1_ps(SRGB_MINIMAX_A);
     let coeff_b = _mm512_set1_ps(SRGB_MINIMAX_B);
     let coeff_c = _mm512_set1_ps(SRGB_MINIMAX_C);
@@ -374,8 +368,6 @@ unsafe fn decode_srgb_pixels_avx512(
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx512f,avx512vl,avx512bw")]
 pub unsafe fn load_srgb8_rgba_f32_avx512(surface: &Surface) -> Result<Buffer<f32>> {
-    use std::arch::x86_64::*;
-
     profiling::scope!("load_srgb8_rgba_f32_avx512");
     super::validate_surface(surface, 4)?;
 
@@ -444,11 +436,7 @@ pub unsafe fn load_srgb8_rgba_f32_avx512(surface: &Surface) -> Result<Buffer<f32
 #[cfg(target_arch = "aarch64")]
 #[target_feature(enable = "neon")]
 #[inline]
-unsafe fn decode_srgb_lanes_neon(
-    as_u32: std::arch::aarch64::uint32x4_t,
-) -> std::arch::aarch64::float32x4_t {
-    use std::arch::aarch64::*;
-
+unsafe fn decode_srgb_lanes_neon(as_u32: uint32x4_t) -> float32x4_t {
     let as_f32 = vcvtq_f32_u32(as_u32);
 
     let coeff_a = vdupq_n_f32(SRGB_MINIMAX_A);
@@ -478,9 +466,7 @@ unsafe fn decode_srgb_lanes_neon(
 #[cfg(target_arch = "aarch64")]
 #[target_feature(enable = "neon")]
 #[inline]
-unsafe fn decode_srgb_pixel_neon(bytes_ptr: *const u8) -> std::arch::aarch64::float32x4_t {
-    use std::arch::aarch64::*;
-
+unsafe fn decode_srgb_pixel_neon(bytes_ptr: *const u8) -> float32x4_t {
     let mut lanes = vdupq_n_u32(0);
     // SAFETY: caller guarantees 4 valid bytes at bytes_ptr.
     unsafe {
@@ -506,8 +492,6 @@ unsafe fn decode_srgb_pixel_neon(bytes_ptr: *const u8) -> std::arch::aarch64::fl
 #[cfg(target_arch = "aarch64")]
 #[target_feature(enable = "neon")]
 pub unsafe fn load_srgb8_rgba_f32_neon(surface: &Surface) -> Result<Buffer<f32>> {
-    use std::arch::aarch64::*;
-
     profiling::scope!("load_srgb8_rgba_f32_neon");
     super::validate_surface(surface, 4)?;
 
