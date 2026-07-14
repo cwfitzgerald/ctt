@@ -66,5 +66,9 @@ harness = false
 name = "f16"
 harness = false
 
+[[bench]]
+name = "packed"
+harness = false
+
 [lints]
 workspace = true

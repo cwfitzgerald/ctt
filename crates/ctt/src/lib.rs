@@ -115,4 +115,47 @@ pub mod bench_internals {
     pub use crate::processing::load_kernels::srgb::load_srgb8_rgba_f32_neon;
     #[cfg(target_arch = "aarch64")]
     pub use crate::processing::store_kernels::srgb::store_srgb8_f32_neon;
+
+    // ---- Packed 32-bit formats ----
+
+    pub use crate::processing::load_kernels::a2_10_10_10::{A2B_R_SHIFT, load_a2_unorm_serial};
+    pub use crate::processing::load_kernels::b10g11r11::load_b10g11r11_f32_serial;
+    pub use crate::processing::store_kernels::a2_10_10_10::store_a2_unorm_serial;
+    pub use crate::processing::store_kernels::b10g11r11::store_b10g11r11_f32_serial;
+    pub use crate::processing::store_kernels::e5b9g9r9::store_e5b9g9r9_f32_serial;
+
+    #[cfg(target_arch = "x86_64")]
+    pub use crate::processing::x86::has_avx512;
+
+    #[cfg(target_arch = "x86_64")]
+    pub use crate::processing::load_kernels::a2_10_10_10::{
+        load_a2_f32_avx2, load_a2_f32_avx512, load_a2_f32_sse4_1,
+    };
+    #[cfg(target_arch = "x86_64")]
+    pub use crate::processing::load_kernels::b10g11r11::{
+        load_b10g11r11_f32_avx2_fma, load_b10g11r11_f32_avx512, load_b10g11r11_f32_sse4_1,
+    };
+    #[cfg(target_arch = "x86_64")]
+    pub use crate::processing::store_kernels::a2_10_10_10::{
+        store_a2_f32_avx2_fma, store_a2_f32_avx512, store_a2_f32_sse4_1,
+    };
+    #[cfg(target_arch = "x86_64")]
+    pub use crate::processing::store_kernels::b10g11r11::{
+        store_b10g11r11_f32_avx2, store_b10g11r11_f32_avx512,
+    };
+    #[cfg(target_arch = "x86_64")]
+    pub use crate::processing::store_kernels::e5b9g9r9::{
+        store_e5b9g9r9_f32_avx2_fma, store_e5b9g9r9_f32_avx512, store_e5b9g9r9_f32_sse4_1,
+    };
+
+    #[cfg(target_arch = "aarch64")]
+    pub use crate::processing::load_kernels::a2_10_10_10::load_a2_f32_neon;
+    #[cfg(target_arch = "aarch64")]
+    pub use crate::processing::load_kernels::b10g11r11::load_b10g11r11_f32_neon;
+    #[cfg(target_arch = "aarch64")]
+    pub use crate::processing::store_kernels::a2_10_10_10::store_a2_f32_neon;
+    #[cfg(target_arch = "aarch64")]
+    pub use crate::processing::store_kernels::b10g11r11::store_b10g11r11_f32_neon;
+    #[cfg(target_arch = "aarch64")]
+    pub use crate::processing::store_kernels::e5b9g9r9::store_e5b9g9r9_f32_neon;
 }
