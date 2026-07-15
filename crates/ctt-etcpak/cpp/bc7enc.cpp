@@ -8,6 +8,10 @@
 #include <limits.h>
 #include <algorithm>
 
+#if defined __AVX__ && !defined __SSE4_1__
+#  define __SSE4_1__
+#endif
+
 #if defined __SSE4_1__ || defined __AVX2__ || defined _MSC_VER
 #  ifdef _MSC_VER
 #    include <intrin.h>

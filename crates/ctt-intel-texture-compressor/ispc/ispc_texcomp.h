@@ -24,7 +24,7 @@
 
 struct rgba_surface
 {
-    uint8_t *ptr;
+    uint8_t* ptr;
     int32_t width;
     int32_t height;
     int32_t stride; // in bytes
@@ -71,36 +71,36 @@ struct astc_enc_settings
 };
 
 // profiles for RGB data (alpha channel will be ignored)
-extern "C" void GetProfile_ultrafast(bc7_enc_settings *settings);
-extern "C" void GetProfile_veryfast(bc7_enc_settings *settings);
-extern "C" void GetProfile_fast(bc7_enc_settings *settings);
-extern "C" void GetProfile_basic(bc7_enc_settings *settings);
-extern "C" void GetProfile_slow(bc7_enc_settings *settings);
+extern "C" void GetProfile_ultrafast(bc7_enc_settings* settings);
+extern "C" void GetProfile_veryfast(bc7_enc_settings* settings);
+extern "C" void GetProfile_fast(bc7_enc_settings* settings);
+extern "C" void GetProfile_basic(bc7_enc_settings* settings);
+extern "C" void GetProfile_slow(bc7_enc_settings* settings);
 
 // profiles for RGBA inputs
-extern "C" void GetProfile_alpha_ultrafast(bc7_enc_settings *settings);
-extern "C" void GetProfile_alpha_veryfast(bc7_enc_settings *settings);
-extern "C" void GetProfile_alpha_fast(bc7_enc_settings *settings);
-extern "C" void GetProfile_alpha_basic(bc7_enc_settings *settings);
-extern "C" void GetProfile_alpha_slow(bc7_enc_settings *settings);
+extern "C" void GetProfile_alpha_ultrafast(bc7_enc_settings* settings);
+extern "C" void GetProfile_alpha_veryfast(bc7_enc_settings* settings);
+extern "C" void GetProfile_alpha_fast(bc7_enc_settings* settings);
+extern "C" void GetProfile_alpha_basic(bc7_enc_settings* settings);
+extern "C" void GetProfile_alpha_slow(bc7_enc_settings* settings);
 
 // profiles for BC6H (RGB HDR)
-extern "C" void GetProfile_bc6h_veryfast(bc6h_enc_settings *settings);
-extern "C" void GetProfile_bc6h_fast(bc6h_enc_settings *settings);
-extern "C" void GetProfile_bc6h_basic(bc6h_enc_settings *settings);
-extern "C" void GetProfile_bc6h_slow(bc6h_enc_settings *settings);
-extern "C" void GetProfile_bc6h_veryslow(bc6h_enc_settings *settings);
+extern "C" void GetProfile_bc6h_veryfast(bc6h_enc_settings* settings);
+extern "C" void GetProfile_bc6h_fast(bc6h_enc_settings* settings);
+extern "C" void GetProfile_bc6h_basic(bc6h_enc_settings* settings);
+extern "C" void GetProfile_bc6h_slow(bc6h_enc_settings* settings);
+extern "C" void GetProfile_bc6h_veryslow(bc6h_enc_settings* settings);
 
 // profiles for ETC
-extern "C" void GetProfile_etc_slow(etc_enc_settings *settings);
+extern "C" void GetProfile_etc_slow(etc_enc_settings* settings);
 
 // profiles for ASTC
-extern "C" void GetProfile_astc_fast(astc_enc_settings *settings, int block_width, int block_height);
-extern "C" void GetProfile_astc_alpha_fast(astc_enc_settings *settings, int block_width, int block_height);
-extern "C" void GetProfile_astc_alpha_slow(astc_enc_settings *settings, int block_width, int block_height);
+extern "C" void GetProfile_astc_fast(astc_enc_settings* settings, int block_width, int block_height);
+extern "C" void GetProfile_astc_alpha_fast(astc_enc_settings* settings, int block_width, int block_height);
+extern "C" void GetProfile_astc_alpha_slow(astc_enc_settings* settings, int block_width, int block_height);
 
 // helper function to replicate border pixels for the desired block sizes (bpp = 32 or 64)
-extern "C" void ReplicateBorders(rgba_surface *dst_slice, const rgba_surface *src_tex, int x, int y, int bpp);
+extern "C" void ReplicateBorders(rgba_surface* dst_slice, const rgba_surface* src_tex, int x, int y, int bpp);
 
 /*
 Notes:
@@ -115,11 +115,11 @@ Notes:
     - the RGB profiles are slightly faster as they ignore the alpha channel
 */
 
-extern "C" void CompressBlocksBC1(const rgba_surface *src, uint8_t *dst);
-extern "C" void CompressBlocksBC3(const rgba_surface *src, uint8_t *dst);
-extern "C" void CompressBlocksBC4(const rgba_surface *src, uint8_t *dst);
-extern "C" void CompressBlocksBC5(const rgba_surface *src, uint8_t *dst);
-extern "C" void CompressBlocksBC6H(const rgba_surface *src, uint8_t *dst, bc6h_enc_settings *settings);
-extern "C" void CompressBlocksBC7(const rgba_surface *src, uint8_t *dst, bc7_enc_settings *settings);
-extern "C" void CompressBlocksETC1(const rgba_surface *src, uint8_t *dst, etc_enc_settings *settings);
-extern "C" void CompressBlocksASTC(const rgba_surface *src, uint8_t *dst, astc_enc_settings *settings);
+extern "C" void CompressBlocksBC1(const rgba_surface* src, uint8_t* dst);
+extern "C" void CompressBlocksBC3(const rgba_surface* src, uint8_t* dst);
+extern "C" void CompressBlocksBC4(const rgba_surface* src, uint8_t* dst);
+extern "C" void CompressBlocksBC5(const rgba_surface* src, uint8_t* dst);
+extern "C" void CompressBlocksBC6H(const rgba_surface* src, uint8_t* dst, bc6h_enc_settings* settings);
+extern "C" void CompressBlocksBC7(const rgba_surface* src, uint8_t* dst, bc7_enc_settings* settings);
+extern "C" void CompressBlocksETC1(const rgba_surface* src, uint8_t* dst, etc_enc_settings* settings);
+extern "C" void CompressBlocksASTC(const rgba_surface* src, uint8_t* dst, astc_enc_settings* settings);

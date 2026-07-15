@@ -1,22 +1,20 @@
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use anyhow::Result;
 
 use super::{
-    clean_and_create, copy_file, copy_files, git_revision, read_text, replace_required,
-    require_dir, write_text,
+    clean_and_create, copy_files, copy_text_file, read_text, replace_required, require_dir,
+    write_text,
 };
 use crate::util::workspace_root;
 
 /// Automatically vendored from <https://github.com/GPUOpen-Tools/compressonator>.
-/// Default source: `../compressonator` relative to the workspace root.
 /// Regenerate with: `cargo xtask vendor compressonator [--src <path>]`
-pub fn vendor_compressonator(src: Option<PathBuf>) -> Result<()> {
+///
+/// `src_dir` is the repository root.
+pub fn vendor_compressonator(src_dir: &Path) -> Result<()> {
     let ws = workspace_root();
-    let src_dir = src.unwrap_or_else(|| ws.join("../compressonator"));
-    require_dir(&src_dir)?;
-
-    let rev = git_revision(&src_dir)?;
+    require_dir(src_dir)?;
 
     let crate_dir = ws.join("crates/ctt-compressonator");
     let dst_dir = crate_dir.join("cpp");
@@ -84,7 +82,7 @@ pub fn vendor_compressonator(src: Option<PathBuf>) -> Result<()> {
     )?;
 
     // License
-    copy_file(
+    copy_text_file(
         &src_dir.join("license/corelicense.txt"),
         &crate_dir.join("LICENSE-MIT-COMPRESSONATOR.md"),
     )?;
@@ -92,10 +90,6 @@ pub fn vendor_compressonator(src: Option<PathBuf>) -> Result<()> {
     // Apply patches
     patch_compressonator(&dst_dir)?;
 
-    println!(
-        "Vendored compressonator from {} (rev {rev})",
-        src_dir.display()
-    );
     Ok(())
 }
 
