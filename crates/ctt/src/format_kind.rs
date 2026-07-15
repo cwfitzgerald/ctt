@@ -231,7 +231,7 @@ pub fn classify(fmt: ktx2::Format, color_space: crate::surface::ColorSpace) -> O
 
     // Promote 8-bit UNORM kinds to their sRGB-native counterparts when the
     // surface's color_space says the data is sRGB-encoded. Higher-bit formats
-    // have no sRGB-native kernel — callers apply a scalar EOTF/OETF post-pass.
+    // have no sRGB-native kernel — callers apply an in-place EOTF/OETF pass.
     if color_space == ColorSpace::Srgb {
         match kind {
             U8 => {

@@ -14,16 +14,6 @@ use super::alpha;
 use super::buffer::Buffer;
 use super::store_kernels as k;
 
-/// Scalar sRGB OETF for the pre-pass on non-sRGB-native FormatKinds whose
-/// target color_space is nonetheless `Srgb`.
-fn srgb_oetf_scalar(c: f32) -> f32 {
-    if c <= 0.0031308 {
-        c * 12.92
-    } else {
-        1.055 * c.clamp(0.0, 1.0).powf(1.0 / 2.4) - 0.055
-    }
-}
-
 /// Store a f32 buffer to a surface of `target_format`.
 ///
 /// The buffer is assumed to be in linear + premultiplied form (as loaders
@@ -64,16 +54,11 @@ pub fn store_f32(
     // For 16+ bit FormatKinds with target_color_space=Srgb we apply OETF in
     // a pre-pass and then write the linear kernel, since they have no sRGB
     // kernel variant.
-    let need_scalar_oetf =
+    let need_oetf_pass =
         target_color_space == ColorSpace::Srgb && !kind_is_srgb_native && !kind_has_srgb_variant;
 
-    if need_scalar_oetf {
-        profiling::scope!("srgb_oetf_scalar_f32");
-        for p in buf.pixels.iter_mut() {
-            p[0] = srgb_oetf_scalar(p[0]);
-            p[1] = srgb_oetf_scalar(p[1]);
-            p[2] = srgb_oetf_scalar(p[2]);
-        }
+    if need_oetf_pass {
+        k::srgb_oetf_in_place_f32(&mut buf.pixels);
     }
 
     let write_as_srgb =
@@ -285,4 +270,59 @@ pub fn store_u64(
         color_space: ColorSpace::Linear,
         alpha: target_alpha,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 16-bit targets with target_color_space=Srgb have no sRGB kernel
+    /// variant, so they must go through the in-place OETF pre-pass before
+    /// the linear u16 kernel.
+    #[test]
+    fn u16_srgb_target_runs_oetf_pre_pass() {
+        fn srgb_oetf_exact(c: f32) -> f32 {
+            if c < 0.0031308 {
+                c * 12.92
+            } else {
+                1.055 * c.powf(1.0 / 2.4) - 0.055
+            }
+        }
+
+        // 3 pixels also exercises a SIMD kernel tail behind the dispatch.
+        let lanes = [0.5f32, 0.25, 0.001, 0.5];
+        let buf = Buffer {
+            pixels: vec![lanes; 3],
+            width: 3,
+            height: 1,
+        };
+        let surface = store_f32(
+            buf,
+            ktx2::Format::R16G16B16A16_UNORM,
+            ColorSpace::Srgb,
+            AlphaMode::Opaque,
+        )
+        .unwrap();
+
+        let words: Vec<u16> = surface
+            .data
+            .chunks_exact(2)
+            .map(|c| u16::from_le_bytes([c[0], c[1]]))
+            .collect();
+        assert_eq!(words.len(), 12);
+
+        for pixel in words.chunks_exact(4) {
+            for c in 0..3 {
+                let want = (srgb_oetf_exact(lanes[c]) * 65535.0).round();
+                let got = pixel[c] as f32;
+                // Worst-case curve error is ~8e-4 ≈ 53 u16 steps.
+                assert!(
+                    (got - want).abs() <= 64.0,
+                    "lane {c}: got={got} want={want}"
+                );
+            }
+            // Alpha bypasses the OETF entirely.
+            assert_eq!(pixel[3], 32768, "alpha must be stored as straight unorm");
+        }
+    }
 }

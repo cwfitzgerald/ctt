@@ -10,7 +10,7 @@
 
 use std::hint::black_box;
 
-use criterion::{Criterion, Throughput, criterion_group, criterion_main};
+use criterion::{BatchSize, Criterion, Throughput, criterion_group, criterion_main};
 use ctt::bench_internals::Buffer;
 use ctt::{AlphaMode, ColorSpace, Format, Surface};
 
@@ -231,5 +231,165 @@ fn bench_store(c: &mut Criterion) {
     g.finish();
 }
 
-criterion_group!(benches, bench_load, bench_store);
+fn bench_oetf_in_place(c: &mut Criterion) {
+    let buf = make_buffer();
+
+    let mut g = c.benchmark_group("srgb_oetf_in_place");
+    g.throughput(Throughput::Elements(PIXEL_COUNT));
+
+    // The pass mutates its input, so every iteration gets a fresh clone via
+    // `iter_batched_ref`; the clone happens outside the timed region.
+    g.bench_function("serial", |b| {
+        b.iter_batched_ref(
+            || buf.pixels.clone(),
+            |pixels| ctt::bench_internals::srgb_oetf_in_place_f32_serial(pixels),
+            BatchSize::LargeInput,
+        );
+    });
+
+    #[cfg(target_arch = "x86_64")]
+    {
+        use ctt::bench_internals::{
+            srgb_oetf_in_place_f32_avx2_fma, srgb_oetf_in_place_f32_avx512,
+            srgb_oetf_in_place_f32_sse4_1,
+        };
+
+        if is_x86_feature_detected!("sse4.1") {
+            g.bench_function("sse4_1", |b| {
+                b.iter_batched_ref(
+                    || buf.pixels.clone(),
+                    // SAFETY: runtime feature check confirmed sse4.1 is available.
+                    |pixels| unsafe { srgb_oetf_in_place_f32_sse4_1(pixels) },
+                    BatchSize::LargeInput,
+                );
+            });
+        }
+        if is_x86_feature_detected!("avx2") && is_x86_feature_detected!("fma") {
+            g.bench_function("avx2_fma", |b| {
+                b.iter_batched_ref(
+                    || buf.pixels.clone(),
+                    // SAFETY: runtime feature check confirmed avx2+fma are available.
+                    |pixels| unsafe { srgb_oetf_in_place_f32_avx2_fma(pixels) },
+                    BatchSize::LargeInput,
+                );
+            });
+        }
+        if is_x86_feature_detected!("avx512f")
+            && is_x86_feature_detected!("avx512bw")
+            && is_x86_feature_detected!("avx512vl")
+        {
+            g.bench_function("avx512", |b| {
+                b.iter_batched_ref(
+                    || buf.pixels.clone(),
+                    // SAFETY: runtime feature check confirmed avx512f+bw+vl are available.
+                    |pixels| unsafe { srgb_oetf_in_place_f32_avx512(pixels) },
+                    BatchSize::LargeInput,
+                );
+            });
+        }
+    }
+
+    #[cfg(target_arch = "aarch64")]
+    {
+        use ctt::bench_internals::srgb_oetf_in_place_f32_neon;
+
+        if std::arch::is_aarch64_feature_detected!("neon") {
+            g.bench_function("neon", |b| {
+                b.iter_batched_ref(
+                    || buf.pixels.clone(),
+                    // SAFETY: runtime feature check confirmed NEON is available.
+                    |pixels| unsafe { srgb_oetf_in_place_f32_neon(pixels) },
+                    BatchSize::LargeInput,
+                );
+            });
+        }
+    }
+
+    g.finish();
+}
+
+fn bench_eotf_in_place(c: &mut Criterion) {
+    let buf = make_buffer();
+
+    let mut g = c.benchmark_group("srgb_eotf_in_place");
+    g.throughput(Throughput::Elements(PIXEL_COUNT));
+
+    // The pass mutates its input, so every iteration gets a fresh clone via
+    // `iter_batched_ref`; the clone happens outside the timed region.
+    g.bench_function("serial", |b| {
+        b.iter_batched_ref(
+            || buf.pixels.clone(),
+            |pixels| ctt::bench_internals::srgb_eotf_in_place_f32_serial(pixels),
+            BatchSize::LargeInput,
+        );
+    });
+
+    #[cfg(target_arch = "x86_64")]
+    {
+        use ctt::bench_internals::{
+            srgb_eotf_in_place_f32_avx2_fma, srgb_eotf_in_place_f32_avx512,
+            srgb_eotf_in_place_f32_sse4_1,
+        };
+
+        if is_x86_feature_detected!("sse4.1") {
+            g.bench_function("sse4_1", |b| {
+                b.iter_batched_ref(
+                    || buf.pixels.clone(),
+                    // SAFETY: runtime feature check confirmed sse4.1 is available.
+                    |pixels| unsafe { srgb_eotf_in_place_f32_sse4_1(pixels) },
+                    BatchSize::LargeInput,
+                );
+            });
+        }
+        if is_x86_feature_detected!("avx2") && is_x86_feature_detected!("fma") {
+            g.bench_function("avx2_fma", |b| {
+                b.iter_batched_ref(
+                    || buf.pixels.clone(),
+                    // SAFETY: runtime feature check confirmed avx2+fma are available.
+                    |pixels| unsafe { srgb_eotf_in_place_f32_avx2_fma(pixels) },
+                    BatchSize::LargeInput,
+                );
+            });
+        }
+        if is_x86_feature_detected!("avx512f")
+            && is_x86_feature_detected!("avx512bw")
+            && is_x86_feature_detected!("avx512vl")
+        {
+            g.bench_function("avx512", |b| {
+                b.iter_batched_ref(
+                    || buf.pixels.clone(),
+                    // SAFETY: runtime feature check confirmed avx512f+bw+vl are available.
+                    |pixels| unsafe { srgb_eotf_in_place_f32_avx512(pixels) },
+                    BatchSize::LargeInput,
+                );
+            });
+        }
+    }
+
+    #[cfg(target_arch = "aarch64")]
+    {
+        use ctt::bench_internals::srgb_eotf_in_place_f32_neon;
+
+        if std::arch::is_aarch64_feature_detected!("neon") {
+            g.bench_function("neon", |b| {
+                b.iter_batched_ref(
+                    || buf.pixels.clone(),
+                    // SAFETY: runtime feature check confirmed NEON is available.
+                    |pixels| unsafe { srgb_eotf_in_place_f32_neon(pixels) },
+                    BatchSize::LargeInput,
+                );
+            });
+        }
+    }
+
+    g.finish();
+}
+
+criterion_group!(
+    benches,
+    bench_load,
+    bench_store,
+    bench_oetf_in_place,
+    bench_eotf_in_place
+);
 criterion_main!(benches);

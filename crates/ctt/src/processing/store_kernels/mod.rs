@@ -16,7 +16,9 @@ pub use a2_10_10_10::{
 };
 pub use b10g11r11::store_b10g11r11_f32;
 pub use e5b9g9r9::store_e5b9g9r9_f32;
-pub use srgb::{store_bgr8_srgb_f32, store_bgra8_srgb_f32, store_srgb8_f32};
+pub use srgb::{
+    srgb_oetf_in_place_f32, store_bgr8_srgb_f32, store_bgra8_srgb_f32, store_srgb8_f32,
+};
 
 use half::f16;
 
