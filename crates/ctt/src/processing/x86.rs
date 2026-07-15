@@ -9,6 +9,15 @@ pub fn has_avx512() -> bool {
         && is_x86_feature_detected!("avx512bw")
 }
 
+/// Runtime check for the AVX2+FMA feature pair the kernels rely on.
+pub fn has_avx2_fma() -> bool {
+    is_x86_feature_detected!("avx2") && is_x86_feature_detected!("fma")
+}
+
+/// Lanes 3, 7, 11, 15 — alpha in the four-pixel `[R,G,B,A] × 4` layout of a
+/// `__m512`.
+pub(super) const ALPHA_LANES_512: __mmask16 = 0b1000_1000_1000_1000;
+
 /// Transpose four packed float vectors. The operation is its own inverse, so
 /// it serves both AoS-to-SoA and SoA-to-AoS conversions.
 #[target_feature(enable = "sse")]

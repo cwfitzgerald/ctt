@@ -2,10 +2,10 @@
 //!
 //! Shared state:
 //! * [`EOTF_LUT`] — 256-entry scalar lookup table (exact sRGB EOTF).
-//! * [`EOTF_INTERP_LUT`] — 4097-entry scalar lookup table over `[0, 1]` for
-//!   the linearly-interpolated fast scalar path.
-//! * [`SRGB_MINIMAX_A`]/[`SRGB_MINIMAX_B`]/[`SRGB_MINIMAX_C`] — piecewise
-//!   minimax approximation used by the SIMD fast paths.
+//! * [`EOTF_INTERP_LUT`] — interpolated lookup table over `[0, 1]` for the
+//!   fast scalar path.
+//! * [`SRGB_EOTF_MINIMAX_A`]/[`SRGB_EOTF_MINIMAX_B`]/[`SRGB_EOTF_MINIMAX_C`]
+//!   — piecewise minimax approximation used by the SIMD fast paths.
 //!
 //! The per-ISA `srgb_eotf_*` helpers evaluate the piecewise EOTF curve on a
 //! full vector register; the u8 load kernels and the f32 in-place post-pass
@@ -14,8 +14,12 @@
 use std::sync::LazyLock;
 
 use crate::error::Result;
+use crate::processing::curve_pass::{
+    INTERP_LUT_SIZE, build_interp_lut, in_place_curve_pass, sample_interp_lut,
+};
+use crate::processing::dispatch::dispatch_simd;
 #[cfg(target_arch = "x86_64")]
-use crate::processing::x86::has_avx512;
+use crate::processing::x86::ALPHA_LANES_512;
 use crate::surface::Surface;
 
 use super::{Buffer, read_pixels_f32};
@@ -45,28 +49,13 @@ fn srgb_eotf(c: f32) -> f32 {
     }
 }
 
-const EOTF_INTERP_LUT_SIZE: usize = 4096;
-
-/// sRGB EOTF lookup table — 4097 entries over [0, 1] for linear interpolation.
-static EOTF_INTERP_LUT: LazyLock<[f32; EOTF_INTERP_LUT_SIZE + 1]> = LazyLock::new(|| {
-    let mut table = [0.0f32; EOTF_INTERP_LUT_SIZE + 1];
-    for (i, entry) in table.iter_mut().enumerate() {
-        let c = i as f32 / EOTF_INTERP_LUT_SIZE as f32;
-        *entry = srgb_eotf(c);
-    }
-    table
-});
+/// sRGB EOTF lookup table over [0, 1] for linear interpolation.
+static EOTF_INTERP_LUT: LazyLock<[f32; INTERP_LUT_SIZE + 1]> =
+    LazyLock::new(|| build_interp_lut(srgb_eotf));
 
 #[inline(always)]
 fn srgb_eotf_fast(c: f32) -> f32 {
-    let c = c.clamp(0.0, 1.0);
-    let scaled = c * EOTF_INTERP_LUT_SIZE as f32;
-    let idx = scaled as usize;
-    if idx >= EOTF_INTERP_LUT_SIZE {
-        return EOTF_INTERP_LUT[EOTF_INTERP_LUT_SIZE];
-    }
-    let frac = scaled - idx as f32;
-    EOTF_INTERP_LUT[idx] + frac * (EOTF_INTERP_LUT[idx + 1] - EOTF_INTERP_LUT[idx])
+    sample_interp_lut(&EOTF_INTERP_LUT, c)
 }
 
 // Piecewise minimax approximation of the sRGB EOTF. The curve branch fits
@@ -75,36 +64,25 @@ fn srgb_eotf_fast(c: f32) -> f32 {
 // bit-exact versus the LUT path — and ≈ 1.5e-4 over the continuous `[0, 1]`
 // domain the f32 in-place post-pass feeds it. See `srgb-opt.py`.
 #[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
-const SRGB_MINIMAX_A: f32 = -0.983_177_1;
+const SRGB_EOTF_MINIMAX_A: f32 = -0.983_177_1;
 #[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
-const SRGB_MINIMAX_B: f32 = -0.083_670_19;
+const SRGB_EOTF_MINIMAX_B: f32 = -0.083_670_19;
 #[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
-const SRGB_MINIMAX_C: f32 = -0.121_285_7;
+const SRGB_EOTF_MINIMAX_C: f32 = -0.121_285_7;
 
 pub fn load_srgb8_f32(surface: &Surface, channels: usize) -> Result<Buffer<f32>> {
     profiling::scope!("load_srgb8_f32");
 
-    #[cfg(target_arch = "x86_64")]
-    {
-        if channels == 4 && has_avx512() {
-            // SAFETY: runtime check confirms avx512f + vl + bw are available.
-            return unsafe { load_srgb8_rgba_f32_avx512(surface) };
-        }
-        if channels == 4 && is_x86_feature_detected!("avx2") && is_x86_feature_detected!("fma") {
-            // SAFETY: runtime check confirms avx2 + fma are available.
-            return unsafe { load_srgb8_rgba_f32_avx2_fma(surface) };
-        }
-        if channels == 4 && is_x86_feature_detected!("sse4.1") {
-            // SAFETY: runtime check confirms sse4.1 is available.
-            return unsafe { load_srgb8_rgba_f32_sse4_1(surface) };
-        }
-    }
-
-    #[cfg(target_arch = "aarch64")]
-    {
-        if channels == 4 && std::arch::is_aarch64_feature_detected!("neon") {
-            // SAFETY: runtime check confirms NEON is available.
-            return unsafe { load_srgb8_rgba_f32_neon(surface) };
+    if channels == 4 {
+        dispatch_simd! {
+            x86_64: {
+                avx512: load_srgb8_rgba_f32_avx512(surface),
+                avx2_fma: load_srgb8_rgba_f32_avx2_fma(surface),
+                sse4_1: load_srgb8_rgba_f32_sse4_1(surface),
+            },
+            aarch64: {
+                neon: load_srgb8_rgba_f32_neon(surface),
+            },
         }
     }
 
@@ -163,22 +141,19 @@ pub fn load_bgr8_srgb_f32(surface: &Surface) -> Result<Buffer<f32>> {
 /// Piecewise form:
 /// * `x <= 0.04045`: `x / 12.92` (linear segment of the sRGB spec).
 /// * `x > 0.04045`: `(a·x + b)^2 * (c·x + sqrt(x))` — minimax fit of
-///   `((x + 0.055) / 1.055)^2.4` (see `SRGB_MINIMAX_*`). Max abs error
+///   `((x + 0.055) / 1.055)^2.4` (see `SRGB_EOTF_MINIMAX_*`). Max abs error
 ///   ≈ 1.28e-4 on the u8 byte lattice and ≈ 1.5e-4 over the continuous
 ///   domain.
-///
-/// # Safety
-/// * The SSE4.1 feature must be available (enforced by `target_feature`).
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "sse4.1")]
 #[inline]
-unsafe fn srgb_eotf_sse4_1(x: __m128) -> __m128 {
+fn srgb_eotf_sse4_1(x: __m128) -> __m128 {
     let t = _mm_sqrt_ps(x);
     let u = _mm_add_ps(
-        _mm_mul_ps(x, _mm_set1_ps(SRGB_MINIMAX_A)),
-        _mm_set1_ps(SRGB_MINIMAX_B),
+        _mm_mul_ps(x, _mm_set1_ps(SRGB_EOTF_MINIMAX_A)),
+        _mm_set1_ps(SRGB_EOTF_MINIMAX_B),
     );
-    let v = _mm_add_ps(_mm_mul_ps(x, _mm_set1_ps(SRGB_MINIMAX_C)), t);
+    let v = _mm_add_ps(_mm_mul_ps(x, _mm_set1_ps(SRGB_EOTF_MINIMAX_C)), t);
     let curve = _mm_mul_ps(_mm_mul_ps(u, u), v);
     let linear = _mm_mul_ps(x, _mm_set1_ps(1.0 / 12.92));
 
@@ -208,8 +183,7 @@ unsafe fn decode_srgb_pixel_sse4_1(bytes_ptr: *const u8) -> __m128 {
     let as_f32 = _mm_cvtepi32_ps(as_i32);
 
     let x_norm = _mm_mul_ps(as_f32, _mm_set1_ps(1.0 / 255.0));
-    // SAFETY: requires sse4.1, matched by the enclosing `target_feature`.
-    let rgb = unsafe { srgb_eotf_sse4_1(x_norm) };
+    let rgb = srgb_eotf_sse4_1(x_norm);
     // Lane 3 is the alpha channel in the [R,G,B,A] layout.
     let alpha_lane_mask = _mm_castsi128_ps(_mm_setr_epi32(0, 0, 0, -1));
     _mm_blendv_ps(rgb, x_norm, alpha_lane_mask)
@@ -275,20 +249,17 @@ pub unsafe fn load_srgb8_rgba_f32_sse4_1(surface: &Surface) -> Result<Buffer<f32
 
 /// AVX2+FMA counterpart of [`srgb_eotf_sse4_1`] — the same piecewise curve
 /// widened to 8 lanes.
-///
-/// # Safety
-/// * AVX2 and FMA must be available (enforced by `target_feature`).
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2,fma")]
 #[inline]
-unsafe fn srgb_eotf_avx2(x: __m256) -> __m256 {
+fn srgb_eotf_avx2(x: __m256) -> __m256 {
     let t = _mm256_sqrt_ps(x);
     let u = _mm256_fmadd_ps(
         x,
-        _mm256_set1_ps(SRGB_MINIMAX_A),
-        _mm256_set1_ps(SRGB_MINIMAX_B),
+        _mm256_set1_ps(SRGB_EOTF_MINIMAX_A),
+        _mm256_set1_ps(SRGB_EOTF_MINIMAX_B),
     );
-    let v = _mm256_fmadd_ps(x, _mm256_set1_ps(SRGB_MINIMAX_C), t);
+    let v = _mm256_fmadd_ps(x, _mm256_set1_ps(SRGB_EOTF_MINIMAX_C), t);
     let curve = _mm256_mul_ps(_mm256_mul_ps(u, u), v);
     let linear = _mm256_mul_ps(x, _mm256_set1_ps(1.0 / 12.92));
 
@@ -372,27 +343,19 @@ pub unsafe fn load_srgb8_rgba_f32_avx2_fma(surface: &Surface) -> Result<Buffer<f
     })
 }
 
-/// Lanes 3, 7, 11, 15 — alpha in the four-pixel `[R,G,B,A] × 4` layout of a
-/// `__m512`.
-#[cfg(target_arch = "x86_64")]
-const ALPHA_LANES_512: __mmask16 = 0b1000_1000_1000_1000;
-
 /// AVX-512 counterpart of [`srgb_eotf_sse4_1`] — the same piecewise curve
 /// widened to 16 lanes.
-///
-/// # Safety
-/// * AVX-512 F must be available (enforced by `target_feature`).
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx512f,avx512vl,avx512bw")]
 #[inline]
-unsafe fn srgb_eotf_avx512(x: __m512) -> __m512 {
+fn srgb_eotf_avx512(x: __m512) -> __m512 {
     let t = _mm512_sqrt_ps(x);
     let u = _mm512_fmadd_ps(
         x,
-        _mm512_set1_ps(SRGB_MINIMAX_A),
-        _mm512_set1_ps(SRGB_MINIMAX_B),
+        _mm512_set1_ps(SRGB_EOTF_MINIMAX_A),
+        _mm512_set1_ps(SRGB_EOTF_MINIMAX_B),
     );
-    let v = _mm512_fmadd_ps(x, _mm512_set1_ps(SRGB_MINIMAX_C), t);
+    let v = _mm512_fmadd_ps(x, _mm512_set1_ps(SRGB_EOTF_MINIMAX_C), t);
     let curve = _mm512_mul_ps(_mm512_mul_ps(u, u), v);
     let linear = _mm512_mul_ps(x, _mm512_set1_ps(1.0 / 12.92));
 
@@ -411,19 +374,15 @@ unsafe fn srgb_eotf_avx512(x: __m512) -> __m512 {
 /// Color lanes go through [`srgb_eotf_avx512`] (see [`srgb_eotf_sse4_1`]
 /// for the piecewise form and accuracy guarantees); the alpha lanes bypass
 /// the EOTF and are read as straight unorms.
-///
-/// # Safety
-/// * AVX-512 F must be available (enforced by `target_feature`).
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx512f,avx512vl,avx512bw")]
 #[inline]
-unsafe fn decode_srgb_pixels_avx512(bytes: __m128i) -> __m512 {
+fn decode_srgb_pixels_avx512(bytes: __m128i) -> __m512 {
     let as_i32 = _mm512_cvtepu8_epi32(bytes);
     let as_f32 = _mm512_cvtepi32_ps(as_i32);
 
     let x_norm = _mm512_mul_ps(as_f32, _mm512_set1_ps(1.0 / 255.0));
-    // SAFETY: requires avx512f, matched by the enclosing `target_feature`.
-    let rgb = unsafe { srgb_eotf_avx512(x_norm) };
+    let rgb = srgb_eotf_avx512(x_norm);
     _mm512_mask_blend_ps(ALPHA_LANES_512, rgb, x_norm)
 }
 
@@ -500,19 +459,16 @@ pub unsafe fn load_srgb8_rgba_f32_avx512(surface: &Surface) -> Result<Buffer<f32
 
 /// NEON counterpart of [`srgb_eotf_sse4_1`] — the same piecewise curve
 /// mapped to AArch64 NEON.
-///
-/// # Safety
-/// * The NEON feature must be available (enforced by `target_feature`).
 #[cfg(target_arch = "aarch64")]
 #[target_feature(enable = "neon")]
 #[inline]
-unsafe fn srgb_eotf_neon(x: float32x4_t) -> float32x4_t {
+fn srgb_eotf_neon(x: float32x4_t) -> float32x4_t {
     let t = vsqrtq_f32(x);
     let u = vaddq_f32(
-        vmulq_f32(x, vdupq_n_f32(SRGB_MINIMAX_A)),
-        vdupq_n_f32(SRGB_MINIMAX_B),
+        vmulq_f32(x, vdupq_n_f32(SRGB_EOTF_MINIMAX_A)),
+        vdupq_n_f32(SRGB_EOTF_MINIMAX_B),
     );
-    let v = vaddq_f32(vmulq_f32(x, vdupq_n_f32(SRGB_MINIMAX_C)), t);
+    let v = vaddq_f32(vmulq_f32(x, vdupq_n_f32(SRGB_EOTF_MINIMAX_C)), t);
     let curve = vmulq_f32(vmulq_f32(u, u), v);
     let linear = vmulq_f32(x, vdupq_n_f32(1.0 / 12.92));
 
@@ -525,17 +481,13 @@ unsafe fn srgb_eotf_neon(x: float32x4_t) -> float32x4_t {
 /// Color lanes go through [`srgb_eotf_neon`] (see [`srgb_eotf_sse4_1`] for
 /// the piecewise form and accuracy guarantees); the alpha lane bypasses the
 /// EOTF and is read as a straight unorm.
-///
-/// # Safety
-/// * The NEON feature must be available (enforced by `target_feature`).
 #[cfg(target_arch = "aarch64")]
 #[target_feature(enable = "neon")]
 #[inline]
-unsafe fn decode_srgb_lanes_neon(as_u32: uint32x4_t) -> float32x4_t {
+fn decode_srgb_lanes_neon(as_u32: uint32x4_t) -> float32x4_t {
     let as_f32 = vcvtq_f32_u32(as_u32);
     let x_norm = vmulq_f32(as_f32, vdupq_n_f32(1.0 / 255.0));
-    // SAFETY: requires NEON, matched by the enclosing `target_feature`.
-    let rgb = unsafe { srgb_eotf_neon(x_norm) };
+    let rgb = srgb_eotf_neon(x_norm);
     let alpha_lane_mask = vsetq_lane_u32::<3>(u32::MAX, vdupq_n_u32(0));
     vbslq_f32(alpha_lane_mask, x_norm, rgb)
 }
@@ -557,8 +509,7 @@ unsafe fn decode_srgb_pixel_neon(bytes_ptr: *const u8) -> float32x4_t {
         lanes = vsetq_lane_u32::<2>(*bytes_ptr.add(2) as u32, lanes);
         lanes = vsetq_lane_u32::<3>(*bytes_ptr.add(3) as u32, lanes);
     }
-    // SAFETY: same NEON target feature as this helper.
-    unsafe { decode_srgb_lanes_neon(lanes) }
+    decode_srgb_lanes_neon(lanes)
 }
 
 /// NEON path for `R8G8B8A8_SRGB` (and equivalent 4-channel sRGB layouts).
@@ -635,230 +586,30 @@ pub unsafe fn load_srgb8_rgba_f32_neon(surface: &Surface) -> Result<Buffer<f32>>
     })
 }
 
-/// Apply the sRGB EOTF in place to the RGB lanes of every pixel, leaving the
-/// alpha lane untouched.
-///
-/// Post-pass for loads from FormatKinds with no sRGB kernel variant (16+ bit
-/// formats) whose source color_space is nonetheless `Srgb`: the buffer is
-/// read through the format's linear kernel, then EOTF-decoded here.
-///
-/// RGB lanes are clamped to `[0, 1]` before decoding; alpha is preserved
-/// bit-exactly. The SIMD paths use the same piecewise minimax curve as the
-/// u8 load kernels (max abs error ≈ 1.5e-4, bit-exact inverted by the
-/// store-side OETF approximation); the serial path uses the interpolated
-/// `EOTF_INTERP_LUT`.
-pub fn srgb_eotf_in_place_f32(pixels: &mut [[f32; 4]]) {
-    profiling::scope!("srgb_eotf_in_place_f32");
-
-    #[cfg(target_arch = "x86_64")]
-    {
-        if has_avx512() {
-            // SAFETY: runtime check confirms avx512f + vl + bw are available.
-            return unsafe { srgb_eotf_in_place_f32_avx512(pixels) };
-        }
-        if is_x86_feature_detected!("avx2") && is_x86_feature_detected!("fma") {
-            // SAFETY: runtime check confirms avx2 + fma are available.
-            return unsafe { srgb_eotf_in_place_f32_avx2_fma(pixels) };
-        }
-        if is_x86_feature_detected!("sse4.1") {
-            // SAFETY: runtime check confirms sse4.1 is available.
-            return unsafe { srgb_eotf_in_place_f32_sse4_1(pixels) };
-        }
-    }
-
-    #[cfg(target_arch = "aarch64")]
-    {
-        if std::arch::is_aarch64_feature_detected!("neon") {
-            // SAFETY: runtime check confirms NEON is available.
-            return unsafe { srgb_eotf_in_place_f32_neon(pixels) };
-        }
-    }
-
-    srgb_eotf_in_place_f32_serial(pixels)
-}
-
-/// Serial LUT path for the in-place EOTF post-pass.
-///
-/// **Not part of the public API.** Exposed so benchmarks can compare the
-/// scalar implementation directly against each runtime-selectable SIMD mode.
-#[doc(hidden)]
-pub fn srgb_eotf_in_place_f32_serial(pixels: &mut [[f32; 4]]) {
-    profiling::scope!("srgb_eotf_in_place_f32_serial");
-    for p in pixels {
-        p[0] = srgb_eotf_fast(p[0]);
-        p[1] = srgb_eotf_fast(p[1]);
-        p[2] = srgb_eotf_fast(p[2]);
-    }
-}
-
-/// EOTF-decode one pixel's four f32 lanes in place at `p`, preserving the
-/// original (unclamped) alpha lane bit-exactly. Shared between the SSE4.1
-/// main loop and the AVX2 path's odd-pixel tail.
-///
-/// # Safety
-/// * The SSE4.1 feature must be available (enforced by `target_feature`).
-/// * `p` must be valid for 4 f32 reads and writes.
-#[cfg(target_arch = "x86_64")]
-#[target_feature(enable = "sse4.1")]
-#[inline]
-unsafe fn eotf_pixel_in_place_sse4_1(p: *mut f32) {
-    // SAFETY: `p` spans 4 f32 lanes per the caller; sse4.1 is matched by the
-    // enclosing `target_feature`.
-    unsafe {
-        let lanes = _mm_loadu_ps(p);
-        let x = _mm_max_ps(_mm_min_ps(lanes, _mm_set1_ps(1.0)), _mm_setzero_ps());
-        let rgb = srgb_eotf_sse4_1(x);
-        // Bit 3 selects the original alpha lane.
-        let out = _mm_blend_ps::<0b1000>(rgb, lanes);
-        _mm_storeu_ps(p, out);
-    }
-}
-
-/// SSE4.1 path for the in-place EOTF post-pass: one pixel (4 f32) per
-/// iteration via [`eotf_pixel_in_place_sse4_1`].
-///
-/// **Not part of the public API.** See [`load_srgb8_rgba_f32_sse4_1`] for
-/// the rationale; use [`srgb_eotf_in_place_f32`] for the stable,
-/// runtime-dispatched entry point.
-#[doc(hidden)]
-#[cfg(target_arch = "x86_64")]
-#[target_feature(enable = "sse4.1")]
-pub unsafe fn srgb_eotf_in_place_f32_sse4_1(pixels: &mut [[f32; 4]]) {
-    profiling::scope!("srgb_eotf_in_place_f32_sse4_1");
-
-    let total_pixels = pixels.len();
-    let base = pixels.as_mut_ptr() as *mut f32;
-
-    // SAFETY: `base` spans `total_pixels * 4` f32 lanes; sse4.1 is matched by
-    // the enclosing `target_feature`.
-    unsafe {
-        for i in 0..total_pixels {
-            eotf_pixel_in_place_sse4_1(base.add(i * 4));
-        }
-    }
-}
-
-/// AVX2 + FMA path for the in-place EOTF post-pass: two pixels (8 f32) per
-/// iteration, with an optional 1-pixel SSE4.1 tail.
-///
-/// **Not part of the public API.** See [`load_srgb8_rgba_f32_sse4_1`] for
-/// the rationale; use [`srgb_eotf_in_place_f32`] for the stable,
-/// runtime-dispatched entry point.
-#[doc(hidden)]
-#[cfg(target_arch = "x86_64")]
-#[target_feature(enable = "avx2,fma")]
-pub unsafe fn srgb_eotf_in_place_f32_avx2_fma(pixels: &mut [[f32; 4]]) {
-    profiling::scope!("srgb_eotf_in_place_f32_avx2_fma");
-
-    let total_pixels = pixels.len();
-    let base = pixels.as_mut_ptr() as *mut f32;
-
-    let pair_count = total_pixels / 2;
-
-    // SAFETY: `base` spans `total_pixels * 4` f32 lanes; avx2+fma (and the
-    // implied sse4.1 for the tail helper) are matched by the enclosing
-    // `target_feature`.
-    unsafe {
-        for i in 0..pair_count {
-            let p = base.add(i * 8);
-            let lanes = _mm256_loadu_ps(p);
-            let x = _mm256_max_ps(
-                _mm256_min_ps(lanes, _mm256_set1_ps(1.0)),
-                _mm256_setzero_ps(),
-            );
-            let rgb = srgb_eotf_avx2(x);
-            // Bits 3 and 7 select the original alpha lanes.
-            let out = _mm256_blend_ps::<0b1000_1000>(rgb, lanes);
-            _mm256_storeu_ps(p, out);
-        }
-        if total_pixels % 2 == 1 {
-            eotf_pixel_in_place_sse4_1(base.add(pair_count * 8));
-        }
-    }
-}
-
-/// AVX-512 path for the in-place EOTF post-pass: four pixels (16 f32) per
-/// iteration, with a 1-3 pixel masked tail.
-///
-/// **Not part of the public API.** See [`load_srgb8_rgba_f32_sse4_1`] for
-/// the rationale; use [`srgb_eotf_in_place_f32`] for the stable,
-/// runtime-dispatched entry point.
-#[doc(hidden)]
-#[cfg(target_arch = "x86_64")]
-#[target_feature(enable = "avx512f,avx512vl,avx512bw")]
-pub unsafe fn srgb_eotf_in_place_f32_avx512(pixels: &mut [[f32; 4]]) {
-    profiling::scope!("srgb_eotf_in_place_f32_avx512");
-
-    let total_pixels = pixels.len();
-    let base = pixels.as_mut_ptr() as *mut f32;
-
-    let quad_count = total_pixels / 4;
-    let tail_pixels = total_pixels % 4;
-
-    // SAFETY: `base` spans `total_pixels * 4` f32 lanes; avx512f+vl+bw are
-    // matched by the enclosing `target_feature`.
-    unsafe {
-        for i in 0..quad_count {
-            let p = base.add(i * 16);
-            let lanes = _mm512_loadu_ps(p);
-            let x = _mm512_max_ps(
-                _mm512_min_ps(lanes, _mm512_set1_ps(1.0)),
-                _mm512_setzero_ps(),
-            );
-            let rgb = srgb_eotf_avx512(x);
-            let out = _mm512_mask_blend_ps(ALPHA_LANES_512, rgb, lanes);
-            _mm512_storeu_ps(p, out);
-        }
-
-        // 1-3 pixel tail in a single masked AVX-512 iteration. The mask
-        // suppresses both the load and the store for lanes beyond the
-        // remaining pixel count, so the intervening math can run unmasked
-        // on zeros without touching memory.
-        if tail_pixels > 0 {
-            let p = base.add(quad_count * 16);
-            let mask: __mmask16 = (1u16 << (tail_pixels * 4)) - 1;
-
-            let lanes = _mm512_maskz_loadu_ps(mask, p);
-            let x = _mm512_max_ps(
-                _mm512_min_ps(lanes, _mm512_set1_ps(1.0)),
-                _mm512_setzero_ps(),
-            );
-            let rgb = srgb_eotf_avx512(x);
-            let out = _mm512_mask_blend_ps(ALPHA_LANES_512, rgb, lanes);
-            _mm512_mask_storeu_ps(p, mask, out);
-        }
-    }
-}
-
-/// NEON path for the in-place EOTF post-pass: one pixel (4 f32) per
-/// iteration via [`srgb_eotf_neon`], with the original (unclamped) alpha
-/// lane blended back so it is preserved bit-exactly.
-///
-/// **Not part of the public API.** See [`load_srgb8_rgba_f32_sse4_1`] for
-/// the rationale; use [`srgb_eotf_in_place_f32`] for the stable,
-/// runtime-dispatched entry point.
-#[doc(hidden)]
-#[cfg(target_arch = "aarch64")]
-#[target_feature(enable = "neon")]
-pub unsafe fn srgb_eotf_in_place_f32_neon(pixels: &mut [[f32; 4]]) {
-    profiling::scope!("srgb_eotf_in_place_f32_neon");
-
-    let total_pixels = pixels.len();
-    let base = pixels.as_mut_ptr() as *mut f32;
-
-    // SAFETY: `base` spans `total_pixels * 4` f32 lanes; NEON is matched by
-    // the enclosing `target_feature`.
-    unsafe {
-        for i in 0..total_pixels {
-            let p = base.add(i * 4);
-            let lanes = vld1q_f32(p);
-            let x = vmaxq_f32(vminq_f32(lanes, vdupq_n_f32(1.0)), vdupq_n_f32(0.0));
-            let rgb = srgb_eotf_neon(x);
-            let alpha_lane_mask = vsetq_lane_u32::<3>(u32::MAX, vdupq_n_u32(0));
-            let out = vbslq_f32(alpha_lane_mask, lanes, rgb);
-            vst1q_f32(p, out);
-        }
-    }
+in_place_curve_pass! {
+    /// Apply the sRGB EOTF in place to the RGB lanes of every pixel, leaving
+    /// the alpha lane untouched.
+    ///
+    /// Post-pass for loads from FormatKinds with no sRGB kernel variant (16+
+    /// bit formats) whose source color_space is nonetheless `Srgb`: the
+    /// buffer is read through the format's linear kernel, then EOTF-decoded
+    /// here.
+    ///
+    /// RGB lanes are clamped to `[0, 1]` before decoding; alpha is preserved
+    /// bit-exactly. The SIMD paths use the same piecewise minimax curve as
+    /// the u8 load kernels (max abs error ≈ 1.5e-4, bit-exact inverted by
+    /// the store-side OETF approximation); the serial path uses the
+    /// interpolated `EOTF_INTERP_LUT`.
+    ///
+    /// NaN color lanes are not handled consistently — the serial and NEON
+    /// paths propagate the NaN while the x86 paths decode it as 1.0 — so
+    /// callers must not rely on either behavior.
+    pub fn srgb_eotf_in_place_f32;
+    serial: srgb_eotf_in_place_f32_serial(srgb_eotf_fast);
+    sse4_1: srgb_eotf_in_place_f32_sse4_1(srgb_eotf_sse4_1);
+    avx2_fma: srgb_eotf_in_place_f32_avx2_fma(srgb_eotf_avx2);
+    avx512: srgb_eotf_in_place_f32_avx512(srgb_eotf_avx512);
+    neon: srgb_eotf_in_place_f32_neon(srgb_eotf_neon);
 }
 
 #[cfg(test)]
@@ -867,12 +618,7 @@ mod eotf_in_place_tests {
 
     /// Exact clamped EOTF the in-place post-pass approximates.
     pub(super) fn srgb_eotf_exact(c: f32) -> f32 {
-        let c = c.clamp(0.0, 1.0);
-        if c <= 0.04045 {
-            c / 12.92
-        } else {
-            ((c + 0.055) / 1.055).powf(2.4)
-        }
+        srgb_eotf(c.clamp(0.0, 1.0))
     }
 
     /// RGB lanes within the documented worst-case error of the exact EOTF;
@@ -913,12 +659,45 @@ mod eotf_in_place_tests {
         pixels
     }
 
+    /// One `[c, c, c, c]` pixel per u8 lattice point.
+    pub(super) fn u8_lattice_pixels() -> Vec<[f32; 4]> {
+        (0..=255u8)
+            .map(|b| {
+                let c = b as f32 / 255.0;
+                [c, c, c, c]
+            })
+            .collect()
+    }
+
+    /// Every u8 byte value, decoded by the in-place EOTF, must land back on
+    /// the same byte when re-encoded through the store-side in-place OETF —
+    /// the bit-exact roundtrip the two approximations were tuned for.
+    pub(super) fn assert_in_place_roundtrips(pixels: &[[f32; 4]]) {
+        for (b, p) in pixels.iter().enumerate() {
+            for (c, &lane) in p.iter().enumerate() {
+                assert_eq!(
+                    (lane * 255.0).round() as u8,
+                    b as u8,
+                    "lane {c} roundtrip failed for value {b}"
+                );
+            }
+        }
+    }
+
     #[test]
     fn serial_matches_exact_and_preserves_alpha() {
         let orig = eotf_test_pixels();
         let mut got = orig.clone();
         srgb_eotf_in_place_f32_serial(&mut got);
         assert_decoded_close(&got, &orig);
+    }
+
+    #[test]
+    fn serial_eotf_in_place_u8_roundtrip_is_exact() {
+        let mut pixels = u8_lattice_pixels();
+        srgb_eotf_in_place_f32_serial(&mut pixels);
+        crate::processing::store_kernels::srgb::srgb_oetf_in_place_f32_serial(&mut pixels);
+        assert_in_place_roundtrips(&pixels);
     }
 
     /// The dispatched entry point must agree with the exact EOTF for every
@@ -941,9 +720,12 @@ mod eotf_in_place_tests {
 
 #[cfg(all(test, target_arch = "x86_64"))]
 mod simd_tests {
-    use super::eotf_in_place_tests::{assert_decoded_close, eotf_test_pixels};
+    use super::eotf_in_place_tests::{
+        assert_decoded_close, assert_in_place_roundtrips, eotf_test_pixels, u8_lattice_pixels,
+    };
     use super::*;
     use crate::alpha::AlphaMode;
+    use crate::processing::x86::{has_avx2_fma, has_avx512};
     use crate::surface::{ColorSpace, Surface};
 
     fn srgb_surface(data: Vec<u8>, width: u32, height: u32, stride: u32) -> Surface {
@@ -1016,7 +798,7 @@ mod simd_tests {
 
     #[test]
     fn avx2_srgb_matches_lut_within_u8_tolerance() {
-        if !(is_x86_feature_detected!("avx2") && is_x86_feature_detected!("fma")) {
+        if !has_avx2_fma() {
             return;
         }
         let surface = full_domain_surface();
@@ -1036,7 +818,7 @@ mod simd_tests {
 
     #[test]
     fn avx2_srgb_odd_width_tail_matches_sse4_path() {
-        if !(is_x86_feature_detected!("avx2") && is_x86_feature_detected!("fma")) {
+        if !has_avx2_fma() {
             return;
         }
 
@@ -1062,7 +844,7 @@ mod simd_tests {
 
     #[test]
     fn avx2_srgb_stride_padding_is_skipped() {
-        if !(is_x86_feature_detected!("avx2") && is_x86_feature_detected!("fma")) {
+        if !has_avx2_fma() {
             return;
         }
 
@@ -1114,12 +896,6 @@ mod simd_tests {
         assert_eq!(simd.pixels.len(), 4);
         assert!((simd.pixels[0][3] - 40.0 / 255.0).abs() < 1e-6);
         assert!((simd.pixels[3][3] - 160.0 / 255.0).abs() < 1e-6);
-    }
-
-    fn has_avx512() -> bool {
-        is_x86_feature_detected!("avx512f")
-            && is_x86_feature_detected!("avx512bw")
-            && is_x86_feature_detected!("avx512vl")
     }
 
     #[test]
@@ -1219,7 +995,7 @@ mod simd_tests {
 
     #[test]
     fn avx2_eotf_in_place_matches_exact_across_tails() {
-        if !(is_x86_feature_detected!("avx2") && is_x86_feature_detected!("fma")) {
+        if !has_avx2_fma() {
             return;
         }
         let base = eotf_test_pixels();
@@ -1256,31 +1032,6 @@ mod simd_tests {
         assert_decoded_close(&got, &base);
     }
 
-    /// One `[c, c, c, c]` pixel per u8 lattice point.
-    fn u8_lattice_pixels() -> Vec<[f32; 4]> {
-        (0..=255u8)
-            .map(|b| {
-                let c = b as f32 / 255.0;
-                [c, c, c, c]
-            })
-            .collect()
-    }
-
-    /// Every u8 byte value, decoded by the in-place EOTF, must land back on
-    /// the same byte when re-encoded through the store-side in-place OETF —
-    /// the bit-exact roundtrip the two approximations were tuned for.
-    fn assert_in_place_roundtrips(pixels: &[[f32; 4]]) {
-        for (b, p) in pixels.iter().enumerate() {
-            for (c, &lane) in p.iter().enumerate() {
-                assert_eq!(
-                    (lane * 255.0).round() as u8,
-                    b as u8,
-                    "lane {c} roundtrip failed for value {b}"
-                );
-            }
-        }
-    }
-
     #[test]
     fn sse4_eotf_in_place_u8_roundtrip_is_exact() {
         if !is_x86_feature_detected!("sse4.1") {
@@ -1296,7 +1047,7 @@ mod simd_tests {
 
     #[test]
     fn avx2_eotf_in_place_u8_roundtrip_is_exact() {
-        if !(is_x86_feature_detected!("avx2") && is_x86_feature_detected!("fma")) {
+        if !has_avx2_fma() {
             return;
         }
         let mut pixels = u8_lattice_pixels();
@@ -1323,7 +1074,9 @@ mod simd_tests {
 
 #[cfg(all(test, target_arch = "aarch64"))]
 mod neon_tests {
-    use super::eotf_in_place_tests::{assert_decoded_close, eotf_test_pixels};
+    use super::eotf_in_place_tests::{
+        assert_decoded_close, assert_in_place_roundtrips, eotf_test_pixels, u8_lattice_pixels,
+    };
     use super::*;
     use crate::alpha::AlphaMode;
     use crate::surface::{ColorSpace, Surface};
@@ -1450,30 +1203,14 @@ mod neon_tests {
         assert_decoded_close(&got, &orig);
     }
 
-    /// Every u8 byte value, decoded by the in-place EOTF, must land back on
-    /// the same byte when re-encoded through the store-side in-place OETF —
-    /// the bit-exact roundtrip the two approximations were tuned for.
     #[test]
     fn neon_eotf_in_place_u8_roundtrip_is_exact() {
         if !has_neon() {
             return;
         }
-        let mut pixels: Vec<[f32; 4]> = (0..=255u8)
-            .map(|b| {
-                let c = b as f32 / 255.0;
-                [c, c, c, c]
-            })
-            .collect();
+        let mut pixels = u8_lattice_pixels();
         unsafe { srgb_eotf_in_place_f32_neon(&mut pixels) };
         unsafe { crate::processing::store_kernels::srgb::srgb_oetf_in_place_f32_neon(&mut pixels) };
-        for (b, p) in pixels.iter().enumerate() {
-            for (c, &lane) in p.iter().enumerate() {
-                assert_eq!(
-                    (lane * 255.0).round() as u8,
-                    b as u8,
-                    "lane {c} roundtrip failed for value {b}"
-                );
-            }
-        }
+        assert_in_place_roundtrips(&pixels);
     }
 }

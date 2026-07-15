@@ -1,6 +1,6 @@
 //! Micro-benchmarks for the sRGB load and store kernels.
 //!
-//! All benches run on the same 2048×2048 image. Kernels gated on CPU
+//! All benches run on the same [`SIDE`]×[`SIDE`] image. Kernels gated on CPU
 //! features are skipped if the host lacks the feature, so this bench is
 //! safe to run on x86_64 and aarch64 machines — the subset that fires is
 //! whatever the host can execute.
@@ -87,7 +87,7 @@ fn bench_load(c: &mut Criterion) {
     let rgba = make_rgba_surface();
     let bgr = make_bgr_surface();
 
-    let mut g = c.benchmark_group("srgb_load_2048x2048");
+    let mut g = c.benchmark_group(format!("srgb_load_{SIDE}x{SIDE}"));
     g.throughput(Throughput::Elements(PIXEL_COUNT));
 
     g.bench_function("load_srgb8_f32_serial_rgba", |b| {
@@ -157,7 +157,7 @@ fn bench_store(c: &mut Criterion) {
         height: SIDE,
     };
 
-    let mut g = c.benchmark_group("srgb_store_2048x2048");
+    let mut g = c.benchmark_group(format!("srgb_store_{SIDE}x{SIDE}"));
     g.throughput(Throughput::Elements(PIXEL_COUNT));
 
     g.bench_function("store_srgb8_f32_serial_rgba", |b| {
@@ -231,158 +231,88 @@ fn bench_store(c: &mut Criterion) {
     g.finish();
 }
 
-fn bench_oetf_in_place(c: &mut Criterion) {
+/// One runtime-selectable variant of an in-place pass.
+type InPlaceVariant = (&'static str, fn(&mut Vec<[f32; 4]>));
+
+/// Build the `(name, kernel)` list for one in-place pass: the serial path
+/// always, each SIMD kernel only when the host supports its ISA. The wrapper
+/// closures' `unsafe` is sound because a kernel is only listed after its
+/// runtime feature check passes.
+macro_rules! in_place_variants {
+    ($serial:path, $sse4_1:path, $avx2_fma:path, $avx512:path, $neon:path $(,)?) => {{
+        let mut variants: Vec<InPlaceVariant> = vec![("serial", |pixels| $serial(pixels))];
+
+        #[cfg(target_arch = "x86_64")]
+        {
+            if is_x86_feature_detected!("sse4.1") {
+                variants.push(("sse4_1", |pixels| unsafe { $sse4_1(pixels) }));
+            }
+            if is_x86_feature_detected!("avx2") && is_x86_feature_detected!("fma") {
+                variants.push(("avx2_fma", |pixels| unsafe { $avx2_fma(pixels) }));
+            }
+            if is_x86_feature_detected!("avx512f")
+                && is_x86_feature_detected!("avx512bw")
+                && is_x86_feature_detected!("avx512vl")
+            {
+                variants.push(("avx512", |pixels| unsafe { $avx512(pixels) }));
+            }
+        }
+
+        #[cfg(target_arch = "aarch64")]
+        {
+            if std::arch::is_aarch64_feature_detected!("neon") {
+                variants.push(("neon", |pixels| unsafe { $neon(pixels) }));
+            }
+        }
+
+        variants
+    }};
+}
+
+/// Bench every listed variant of an in-place pass. The pass mutates its
+/// input, so every iteration gets a fresh clone via `iter_batched_ref`; the
+/// clone happens outside the timed region.
+fn bench_in_place(c: &mut Criterion, group: &str, variants: &[InPlaceVariant]) {
     let buf = make_buffer();
 
-    let mut g = c.benchmark_group("srgb_oetf_in_place");
+    let mut g = c.benchmark_group(group);
     g.throughput(Throughput::Elements(PIXEL_COUNT));
-
-    // The pass mutates its input, so every iteration gets a fresh clone via
-    // `iter_batched_ref`; the clone happens outside the timed region.
-    g.bench_function("serial", |b| {
-        b.iter_batched_ref(
-            || buf.pixels.clone(),
-            |pixels| ctt::bench_internals::srgb_oetf_in_place_f32_serial(pixels),
-            BatchSize::LargeInput,
-        );
-    });
-
-    #[cfg(target_arch = "x86_64")]
-    {
-        use ctt::bench_internals::{
-            srgb_oetf_in_place_f32_avx2_fma, srgb_oetf_in_place_f32_avx512,
-            srgb_oetf_in_place_f32_sse4_1,
-        };
-
-        if is_x86_feature_detected!("sse4.1") {
-            g.bench_function("sse4_1", |b| {
-                b.iter_batched_ref(
-                    || buf.pixels.clone(),
-                    // SAFETY: runtime feature check confirmed sse4.1 is available.
-                    |pixels| unsafe { srgb_oetf_in_place_f32_sse4_1(pixels) },
-                    BatchSize::LargeInput,
-                );
-            });
-        }
-        if is_x86_feature_detected!("avx2") && is_x86_feature_detected!("fma") {
-            g.bench_function("avx2_fma", |b| {
-                b.iter_batched_ref(
-                    || buf.pixels.clone(),
-                    // SAFETY: runtime feature check confirmed avx2+fma are available.
-                    |pixels| unsafe { srgb_oetf_in_place_f32_avx2_fma(pixels) },
-                    BatchSize::LargeInput,
-                );
-            });
-        }
-        if is_x86_feature_detected!("avx512f")
-            && is_x86_feature_detected!("avx512bw")
-            && is_x86_feature_detected!("avx512vl")
-        {
-            g.bench_function("avx512", |b| {
-                b.iter_batched_ref(
-                    || buf.pixels.clone(),
-                    // SAFETY: runtime feature check confirmed avx512f+bw+vl are available.
-                    |pixels| unsafe { srgb_oetf_in_place_f32_avx512(pixels) },
-                    BatchSize::LargeInput,
-                );
-            });
-        }
+    for &(name, kernel) in variants {
+        g.bench_function(name, |b| {
+            b.iter_batched_ref(|| buf.pixels.clone(), kernel, BatchSize::LargeInput);
+        });
     }
-
-    #[cfg(target_arch = "aarch64")]
-    {
-        use ctt::bench_internals::srgb_oetf_in_place_f32_neon;
-
-        if std::arch::is_aarch64_feature_detected!("neon") {
-            g.bench_function("neon", |b| {
-                b.iter_batched_ref(
-                    || buf.pixels.clone(),
-                    // SAFETY: runtime feature check confirmed NEON is available.
-                    |pixels| unsafe { srgb_oetf_in_place_f32_neon(pixels) },
-                    BatchSize::LargeInput,
-                );
-            });
-        }
-    }
-
     g.finish();
 }
 
+fn bench_oetf_in_place(c: &mut Criterion) {
+    use ctt::bench_internals as k;
+    bench_in_place(
+        c,
+        "srgb_oetf_in_place",
+        &in_place_variants!(
+            k::srgb_oetf_in_place_f32_serial,
+            k::srgb_oetf_in_place_f32_sse4_1,
+            k::srgb_oetf_in_place_f32_avx2_fma,
+            k::srgb_oetf_in_place_f32_avx512,
+            k::srgb_oetf_in_place_f32_neon,
+        ),
+    );
+}
+
 fn bench_eotf_in_place(c: &mut Criterion) {
-    let buf = make_buffer();
-
-    let mut g = c.benchmark_group("srgb_eotf_in_place");
-    g.throughput(Throughput::Elements(PIXEL_COUNT));
-
-    // The pass mutates its input, so every iteration gets a fresh clone via
-    // `iter_batched_ref`; the clone happens outside the timed region.
-    g.bench_function("serial", |b| {
-        b.iter_batched_ref(
-            || buf.pixels.clone(),
-            |pixels| ctt::bench_internals::srgb_eotf_in_place_f32_serial(pixels),
-            BatchSize::LargeInput,
-        );
-    });
-
-    #[cfg(target_arch = "x86_64")]
-    {
-        use ctt::bench_internals::{
-            srgb_eotf_in_place_f32_avx2_fma, srgb_eotf_in_place_f32_avx512,
-            srgb_eotf_in_place_f32_sse4_1,
-        };
-
-        if is_x86_feature_detected!("sse4.1") {
-            g.bench_function("sse4_1", |b| {
-                b.iter_batched_ref(
-                    || buf.pixels.clone(),
-                    // SAFETY: runtime feature check confirmed sse4.1 is available.
-                    |pixels| unsafe { srgb_eotf_in_place_f32_sse4_1(pixels) },
-                    BatchSize::LargeInput,
-                );
-            });
-        }
-        if is_x86_feature_detected!("avx2") && is_x86_feature_detected!("fma") {
-            g.bench_function("avx2_fma", |b| {
-                b.iter_batched_ref(
-                    || buf.pixels.clone(),
-                    // SAFETY: runtime feature check confirmed avx2+fma are available.
-                    |pixels| unsafe { srgb_eotf_in_place_f32_avx2_fma(pixels) },
-                    BatchSize::LargeInput,
-                );
-            });
-        }
-        if is_x86_feature_detected!("avx512f")
-            && is_x86_feature_detected!("avx512bw")
-            && is_x86_feature_detected!("avx512vl")
-        {
-            g.bench_function("avx512", |b| {
-                b.iter_batched_ref(
-                    || buf.pixels.clone(),
-                    // SAFETY: runtime feature check confirmed avx512f+bw+vl are available.
-                    |pixels| unsafe { srgb_eotf_in_place_f32_avx512(pixels) },
-                    BatchSize::LargeInput,
-                );
-            });
-        }
-    }
-
-    #[cfg(target_arch = "aarch64")]
-    {
-        use ctt::bench_internals::srgb_eotf_in_place_f32_neon;
-
-        if std::arch::is_aarch64_feature_detected!("neon") {
-            g.bench_function("neon", |b| {
-                b.iter_batched_ref(
-                    || buf.pixels.clone(),
-                    // SAFETY: runtime feature check confirmed NEON is available.
-                    |pixels| unsafe { srgb_eotf_in_place_f32_neon(pixels) },
-                    BatchSize::LargeInput,
-                );
-            });
-        }
-    }
-
-    g.finish();
+    use ctt::bench_internals as k;
+    bench_in_place(
+        c,
+        "srgb_eotf_in_place",
+        &in_place_variants!(
+            k::srgb_eotf_in_place_f32_serial,
+            k::srgb_eotf_in_place_f32_sse4_1,
+            k::srgb_eotf_in_place_f32_avx2_fma,
+            k::srgb_eotf_in_place_f32_avx512,
+            k::srgb_eotf_in_place_f32_neon,
+        ),
+    );
 }
 
 criterion_group!(

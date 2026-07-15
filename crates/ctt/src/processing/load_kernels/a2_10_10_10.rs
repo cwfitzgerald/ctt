@@ -16,9 +16,10 @@
 //! reciprocal of each divisor (`1/1023`, `1/511`, `1/3`).
 
 use crate::error::Result;
+use crate::processing::dispatch::dispatch_simd;
 #[cfg(target_arch = "x86_64")]
 use crate::processing::x86::{
-    has_avx512, store_interleaved4_epi32, store_interleaved4_ps, store_interleaved16_epi32,
+    store_interleaved4_epi32, store_interleaved4_ps, store_interleaved16_epi32,
     store_interleaved16_mask_epi32, store_interleaved16_mask_ps, store_interleaved16_ps,
 };
 use crate::surface::Surface;
@@ -190,28 +191,15 @@ pub fn load_a2_sint_serial<const R_SHIFT: u32>(surface: &Surface) -> Result<Buff
 fn load_f32_dispatch<const R_SHIFT: u32, const SNORM: bool>(
     surface: &Surface,
 ) -> Result<Buffer<f32>> {
-    #[cfg(target_arch = "x86_64")]
-    {
-        if has_avx512() {
-            // SAFETY: runtime check confirms avx512f + vl + bw are available.
-            return unsafe { load_a2_f32_avx512::<R_SHIFT, SNORM>(surface) };
-        }
-        if is_x86_feature_detected!("avx2") {
-            // SAFETY: runtime check confirms avx2 is available.
-            return unsafe { load_a2_f32_avx2::<R_SHIFT, SNORM>(surface) };
-        }
-        if is_x86_feature_detected!("sse4.1") {
-            // SAFETY: runtime check confirms sse4.1 is available.
-            return unsafe { load_a2_f32_sse4_1::<R_SHIFT, SNORM>(surface) };
-        }
-    }
-
-    #[cfg(target_arch = "aarch64")]
-    {
-        if std::arch::is_aarch64_feature_detected!("neon") {
-            // SAFETY: runtime check confirms NEON is available.
-            return unsafe { load_a2_f32_neon::<R_SHIFT, SNORM>(surface) };
-        }
+    dispatch_simd! {
+        x86_64: {
+            avx512: load_a2_f32_avx512::<R_SHIFT, SNORM>(surface),
+            avx2: load_a2_f32_avx2::<R_SHIFT, SNORM>(surface),
+            sse4_1: load_a2_f32_sse4_1::<R_SHIFT, SNORM>(surface),
+        },
+        aarch64: {
+            neon: load_a2_f32_neon::<R_SHIFT, SNORM>(surface),
+        },
     }
 
     if SNORM {
@@ -225,28 +213,15 @@ fn load_f32_dispatch<const R_SHIFT: u32, const SNORM: bool>(
 fn load_u32_dispatch<const R_SHIFT: u32, const SINT: bool>(
     surface: &Surface,
 ) -> Result<Buffer<u32>> {
-    #[cfg(target_arch = "x86_64")]
-    {
-        if has_avx512() {
-            // SAFETY: runtime check confirms avx512f + vl + bw are available.
-            return unsafe { load_a2_u32_avx512::<R_SHIFT, SINT>(surface) };
-        }
-        if is_x86_feature_detected!("avx2") {
-            // SAFETY: runtime check confirms avx2 is available.
-            return unsafe { load_a2_u32_avx2::<R_SHIFT, SINT>(surface) };
-        }
-        if is_x86_feature_detected!("sse4.1") {
-            // SAFETY: runtime check confirms sse4.1 is available.
-            return unsafe { load_a2_u32_sse4_1::<R_SHIFT, SINT>(surface) };
-        }
-    }
-
-    #[cfg(target_arch = "aarch64")]
-    {
-        if std::arch::is_aarch64_feature_detected!("neon") {
-            // SAFETY: runtime check confirms NEON is available.
-            return unsafe { load_a2_u32_neon::<R_SHIFT, SINT>(surface) };
-        }
+    dispatch_simd! {
+        x86_64: {
+            avx512: load_a2_u32_avx512::<R_SHIFT, SINT>(surface),
+            avx2: load_a2_u32_avx2::<R_SHIFT, SINT>(surface),
+            sse4_1: load_a2_u32_sse4_1::<R_SHIFT, SINT>(surface),
+        },
+        aarch64: {
+            neon: load_a2_u32_neon::<R_SHIFT, SINT>(surface),
+        },
     }
 
     if SINT {
@@ -1116,6 +1091,8 @@ pub unsafe fn load_a2_u32_neon<const R_SHIFT: u32, const SINT: bool>(
 mod simd_tests {
     use super::*;
     use crate::alpha::AlphaMode;
+    #[cfg(target_arch = "x86_64")]
+    use crate::processing::x86::has_avx512;
     use crate::surface::{ColorSpace, Surface};
 
     fn a2_surface(data: Vec<u8>, width: u32, height: u32, stride: u32) -> Surface {

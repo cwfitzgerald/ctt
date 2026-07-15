@@ -6,9 +6,10 @@
 //! against that exponent. Alpha is dropped (the format has none).
 
 use crate::processing::buffer::Buffer;
+use crate::processing::dispatch::dispatch_simd;
 #[cfg(target_arch = "x86_64")]
 use crate::processing::x86::{
-    has_avx512, load_planar4_ps, load_planar8_ps, load_planar16_mask_ps, load_planar16_ps,
+    load_planar4_ps, load_planar8_ps, load_planar16_mask_ps, load_planar16_ps,
 };
 
 use super::write_pixels;
@@ -86,28 +87,15 @@ fn exp2i(n: i32) -> f32 {
 pub fn store_e5b9g9r9_f32(buf: &Buffer<f32>) -> Vec<u8> {
     profiling::scope!("store_e5b9g9r9_f32");
 
-    #[cfg(target_arch = "x86_64")]
-    {
-        if has_avx512() {
-            // SAFETY: runtime check confirms avx512f + vl + bw are available.
-            return unsafe { store_e5b9g9r9_f32_avx512(buf) };
-        }
-        if is_x86_feature_detected!("avx2") && is_x86_feature_detected!("fma") {
-            // SAFETY: runtime check confirms avx2 + fma are available.
-            return unsafe { store_e5b9g9r9_f32_avx2_fma(buf) };
-        }
-        if is_x86_feature_detected!("sse4.1") {
-            // SAFETY: runtime check confirms sse4.1 is available.
-            return unsafe { store_e5b9g9r9_f32_sse4_1(buf) };
-        }
-    }
-
-    #[cfg(target_arch = "aarch64")]
-    {
-        if std::arch::is_aarch64_feature_detected!("neon") {
-            // SAFETY: runtime check confirms NEON is available.
-            return unsafe { store_e5b9g9r9_f32_neon(buf) };
-        }
+    dispatch_simd! {
+        x86_64: {
+            avx512: store_e5b9g9r9_f32_avx512(buf),
+            avx2_fma: store_e5b9g9r9_f32_avx2_fma(buf),
+            sse4_1: store_e5b9g9r9_f32_sse4_1(buf),
+        },
+        aarch64: {
+            neon: store_e5b9g9r9_f32_neon(buf),
+        },
     }
 
     store_e5b9g9r9_f32_serial(buf)
@@ -502,6 +490,8 @@ pub unsafe fn store_e5b9g9r9_f32_neon(buf: &Buffer<f32>) -> Vec<u8> {
 #[cfg(test)]
 mod simd_tests {
     use super::*;
+    #[cfg(target_arch = "x86_64")]
+    use crate::processing::x86::has_avx512;
 
     fn buf_from(pixels: Vec<[f32; 4]>) -> Buffer<f32> {
         let width = pixels.len().max(1) as u32;
