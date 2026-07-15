@@ -86,6 +86,11 @@
  * used from different threads concurrently. The error-message slot is
  * thread-local.
  *
+ * Compression uses one process-wide worker pool shared by all concurrent
+ * conversions. Call `ctt_set_thread_count` before the first conversion to
+ * choose its size. If omitted, the first conversion lazily creates the pool
+ * using the platform-default logical worker count.
+ *
  *
  * Logging
  * -------
@@ -408,6 +413,7 @@ enum ctt_status
     CTT_STATUS_NULL_POINTER = -100,
     CTT_STATUS_ENCODER_NOT_COMPILED_IN = -101,
     CTT_STATUS_INVALID_ARGUMENT = -102,
+    CTT_STATUS_THREAD_POOL_ALREADY_INITIALIZED = -103,
     CTT_STATUS_INTERNAL = -200,
 };
 #ifndef __cplusplus
@@ -1708,6 +1714,17 @@ ctt_surface *ctt_surface_create(const uint8_t *data,
  * On failure returns `NULL` and sets the thread-local error message.
  */
  ctt_surface *ctt_surface_clone(const ctt_surface *s);
+
+/**
+ * Configure the process-wide compression worker pool used by the C API.
+ *
+ * A `count` of zero selects Rayon's platform default. Positive values
+ * request exactly that many workers; one worker is effectively serial. The
+ * pool is created once per process, so this function may succeed at most
+ * once and must be called before the first `ctt_convert`; afterwards it
+ * returns `CTT_STATUS_THREAD_POOL_ALREADY_INITIALIZED`.
+ */
+ ctt_status ctt_set_thread_count(size_t count);
 
 #ifdef __cplusplus
 }  // extern "C"

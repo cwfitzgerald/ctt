@@ -151,7 +151,13 @@ pub fn run(args: Args) -> Result<(), Box<dyn std::error::Error>> {
         mipmap_filter: map_mipmap_filter(args.mipmap_filter),
     };
 
-    let output_bytes = match ctt::convert(image, settings)? {
+    // With the default of zero workers, convert on Rayon's lazily initialized
+    // global pool instead of paying for a dedicated one.
+    let converted = match args.threads {
+        0 => ctt::convert(image, settings),
+        n => build_thread_pool(n)?.install(|| ctt::convert(image, settings)),
+    };
+    let output_bytes = match converted? {
         PipelineOutput::Encoded(bytes) => bytes,
         PipelineOutput::Raw(_) => {
             return Err(Error::OutputEncoding("unexpected raw output from CLI".into()).into());
@@ -167,6 +173,13 @@ pub fn run(args: Args) -> Result<(), Box<dyn std::error::Error>> {
         output_bytes.len()
     );
     Ok(())
+}
+
+fn build_thread_pool(threads: usize) -> Result<rayon::ThreadPool, Error> {
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(threads)
+        .build()
+        .map_err(|e| Error::Compression(format!("failed to create compression thread pool: {e}")))
 }
 
 /// Error out if `output` refers to the same file as any input path, so we
@@ -1040,4 +1053,17 @@ fn parse_swizzle(s: &str) -> Result<Swizzle, Error> {
     }
 
     Ok(Swizzle(channels))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::build_thread_pool;
+
+    #[test]
+    fn thread_pool_uses_requested_worker_count() {
+        for count in [1, 4] {
+            let pool = build_thread_pool(count).unwrap();
+            assert_eq!(pool.current_num_threads(), count);
+        }
+    }
 }

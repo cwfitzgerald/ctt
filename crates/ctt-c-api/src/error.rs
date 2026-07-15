@@ -30,6 +30,7 @@ pub enum Status {
     NullPointer = -100,
     EncoderNotCompiledIn = -101,
     InvalidArgument = -102,
+    ThreadPoolAlreadyInitialized = -103,
     Internal = -200,
 }
 

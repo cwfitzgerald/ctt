@@ -21,4 +21,5 @@ mod mipmap;
 mod passthrough;
 mod supercompression;
 mod swizzle;
+mod threading;
 mod volume;

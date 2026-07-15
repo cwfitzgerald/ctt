@@ -32,6 +32,7 @@ Per Keep a Changelog there are 6 main categories of changes:
 - C API: new example programs covering a real BC7 encode, error paths, and zero-initialized settings; all are compiled and run in CI.
 - CI now builds a matrix of encoder feature combinations, catching feature/link breakage.
 - README documents 2D-array assembly, cubemap arrays, 3D/volume passthrough, `--zlib` supercompression, and the per-encoder `--<encoder>-opts` / `--help-encoder` flags.
+- Feature-gated intra-image compression parallelism. The default-off Rust `rayon` feature uses the active Rayon pool; the CLI adds `--threads`, and the C API adds the process-wide `ctt_set_thread_count` configuration.
 
 ### Changed
 
