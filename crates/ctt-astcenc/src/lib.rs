@@ -311,6 +311,13 @@ fn check(code: astcenc_error) -> Result<(), Error> {
     }
 }
 
+fn parameter_error(message: impl Into<String>) -> Error {
+    Error {
+        code: astcenc_error_ASTCENC_ERR_BAD_PARAM,
+        message: message.into(),
+    }
+}
+
 // ── Config ─────────────────────────────────────────────────────────────────────
 
 /// Initialize an `astcenc_config` with codec defaults for the given parameters.
@@ -346,29 +353,53 @@ pub fn config_init(
 
 /// An opaque handle wrapping `astcenc_context`.
 ///
-/// Manages the lifecycle of the context (freed on drop). All methods take
-/// `&mut self` because the underlying C library mutates internal state during
-/// compression and decompression and provides **no** internal synchronization.
-///
-/// # Threading limitations
-///
-/// This wrapper currently hardcodes `thread_count = 1` and always uses
-/// `thread_index = 0`. The astcenc library supports a fork/join threading
-/// model where multiple threads call into the same context with distinct
-/// `thread_index` values. To support that in the future, one could:
-///
-/// - Accept a `thread_count` parameter in [`Context::new`].
-/// - Expose `thread_index` on `compress` / `decompress`.
-/// - Use an internal synchronization primitive (or `unsafe impl Sync`) to
-///   allow concurrent access with the required per-phase barriers that
-///   astcenc expects between compression stages.
+/// Manages the lifecycle of the context (freed on drop). The default
+/// constructor is single-threaded. With the `rayon` feature,
+/// [`Context::new_parallel`] allocates one compression slot per worker in the
+/// active Rayon pool and [`Context::compress`] fans out across the pool,
+/// safely wrapping astcenc's fork/join API.
 pub struct Context {
     ptr: *mut astcenc_context,
+    thread_count: u32,
 }
 
 // SAFETY: The raw pointer is not aliased — all methods require `&mut self`,
 // so only one thread can access the context at a time.
 unsafe impl Send for Context {}
+
+#[cfg(feature = "rayon")]
+struct ParallelCompressJob {
+    context: *mut astcenc_context,
+    image: *mut astcenc_image,
+    swizzle: astcenc_swizzle,
+    output: *mut u8,
+    output_len: usize,
+}
+
+// SAFETY: astcenc explicitly supports concurrent calls for one image when
+// each caller supplies a unique thread index. `compress_broadcast` creates
+// the job from exclusive borrows, broadcasts exactly once to each pool
+// worker, and does not return until every call has completed.
+#[cfg(feature = "rayon")]
+unsafe impl Send for ParallelCompressJob {}
+#[cfg(feature = "rayon")]
+unsafe impl Sync for ParallelCompressJob {}
+
+#[cfg(feature = "rayon")]
+impl ParallelCompressJob {
+    unsafe fn run(&self, thread_index: u32) -> astcenc_error {
+        unsafe {
+            (dispatch().compress_image)(
+                self.context,
+                self.image,
+                &self.swizzle,
+                self.output,
+                self.output_len,
+                thread_index,
+            )
+        }
+    }
+}
 
 impl Context {
     /// Allocate a new single-threaded context.
@@ -376,7 +407,29 @@ impl Context {
         let mut ctx: *mut astcenc_context = ptr::null_mut();
         let code = unsafe { (dispatch().context_alloc)(config, 1, &mut ctx, ptr::null()) };
         check(code)?;
-        Ok(Self { ptr: ctx })
+        Ok(Self {
+            ptr: ctx,
+            thread_count: 1,
+        })
+    }
+
+    /// Allocate a context sized for every worker in the active Rayon pool.
+    ///
+    /// With a one-worker pool this is equivalent to [`Context::new`];
+    /// [`Context::compress`] dispatches on the worker count.
+    #[cfg(feature = "rayon")]
+    pub fn new_parallel(config: &astcenc_config) -> Result<Self, Error> {
+        let thread_count = u32::try_from(rayon::current_num_threads()).map_err(|_| {
+            parameter_error("active Rayon pool has more workers than astcenc can address")
+        })?;
+        let mut ctx: *mut astcenc_context = ptr::null_mut();
+        let code =
+            unsafe { (dispatch().context_alloc)(config, thread_count, &mut ctx, ptr::null()) };
+        check(code)?;
+        Ok(Self {
+            ptr: ctx,
+            thread_count,
+        })
     }
 
     /// Compress an image into ASTC format.
@@ -384,17 +437,55 @@ impl Context {
     /// `swizzle` is applied to the input before compression.
     /// `output` must be large enough to hold the compressed data:
     /// `ceil(width / block_x) * ceil(height / block_y) * 16` bytes.
+    ///
+    /// A context from [`Context::new_parallel`] with more than one worker
+    /// compresses on the active Rayon pool, which must have the same size it
+    /// had when the context was created; all worker calls are joined before
+    /// this method returns.
     pub fn compress(
         &mut self,
         image: &mut astcenc_image,
         swizzle: Swizzle,
         output: &mut [u8],
     ) -> Result<(), Error> {
+        #[cfg(feature = "rayon")]
+        if self.thread_count > 1 {
+            return self.compress_broadcast(image, swizzle, output);
+        }
         let raw = swizzle.as_raw();
         let code = unsafe {
             (dispatch().compress_image)(self.ptr, image, &raw, output.as_mut_ptr(), output.len(), 0)
         };
         check(code)
+    }
+
+    /// Compress one image with every worker in the active Rayon pool calling
+    /// astcenc under its unique Rayon worker index.
+    #[cfg(feature = "rayon")]
+    fn compress_broadcast(
+        &mut self,
+        image: &mut astcenc_image,
+        swizzle: Swizzle,
+        output: &mut [u8],
+    ) -> Result<(), Error> {
+        if rayon::current_num_threads() != self.thread_count as usize {
+            return Err(parameter_error(
+                "active Rayon pool size changed after creating the astcenc context",
+            ));
+        }
+
+        let job = ParallelCompressJob {
+            context: self.ptr,
+            image,
+            swizzle: swizzle.as_raw(),
+            output: output.as_mut_ptr(),
+            output_len: output.len(),
+        };
+        let results = rayon::broadcast(|worker| unsafe { job.run(worker.index() as u32) });
+        for code in results {
+            check(code)?;
+        }
+        Ok(())
     }
 
     /// Reset the compressor state so another image can be compressed using the
@@ -412,6 +503,11 @@ impl Context {
         image_out: &mut astcenc_image,
         swizzle: Swizzle,
     ) -> Result<(), Error> {
+        if self.thread_count != 1 {
+            return Err(parameter_error(
+                "multi-threaded contexts cannot use single-threaded decompression",
+            ));
+        }
         let raw = swizzle.as_raw();
         let code = unsafe {
             (dispatch().decompress_image)(self.ptr, data.as_ptr(), data.len(), image_out, &raw, 0)

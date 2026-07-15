@@ -199,8 +199,11 @@ impl Encoder for AstcencEncoder {
             config.rgbm_m_scale = scale;
         }
 
-        let mut ctx = astc::Context::new(&config)
-            .map_err(|e| crate::error::Error::Compression(e.to_string()))?;
+        #[cfg(feature = "rayon")]
+        let ctx = astc::Context::new_parallel(&config);
+        #[cfg(not(feature = "rayon"))]
+        let ctx = astc::Context::new(&config);
+        let mut ctx = ctx.map_err(|e| crate::error::Error::Compression(e.to_string()))?;
 
         // astcenc_image has no row-stride field, so the C side assumes tightly
         // packed input. Repack when the surface carries padded rows; this costs
@@ -439,5 +442,20 @@ mod tests {
         )
         .unwrap();
         assert_eq!(a, b, "padded-stride encode must match tight encode");
+    }
+
+    #[cfg(feature = "rayon")]
+    #[test]
+    fn shared_context_matches_single_worker() {
+        let surface = patterned(19, 13, 19 * 4 + 12);
+        crate::encoders::assert_parallel_matches_serial(|| {
+            AstcencEncoder::compress(
+                &surface,
+                ktx2::Format::ASTC_4x4_UNORM_BLOCK,
+                Quality::Fast,
+                &AstcencSettings::default(),
+            )
+            .unwrap()
+        });
     }
 }

@@ -160,7 +160,7 @@ fn encode_with_edges(
     height: u32,
     stride: u32,
     bytes_per_block: u32,
-    encode: impl Fn(&[u8], u32, u32, &mut [u8]),
+    encode: impl Fn(&[u8], u32, u32, &mut [u8]) + Sync,
 ) -> Vec<u8> {
     // etcpak's fixed pixel layout is 4 bytes/pixel for every format it exposes.
     const BPP: u32 = 4;
@@ -171,35 +171,49 @@ fn encode_with_edges(
     let row_bytes = (bx * bytes_per_block) as usize;
     let mut out = vec![0u8; (bx as usize) * (by as usize) * block_bytes];
 
-    // Fully aligned and tight-packed: single zero-copy call.
+    // Fully aligned and tight-packed: zero-copy groups of block rows. Without
+    // the `rayon` feature this is one call covering the whole image.
     if width.is_multiple_of(4) && height.is_multiple_of(4) && stride == width * BPP {
-        encode(data, width, height, &mut out);
+        crate::encoders::parallel::for_each_row_chunk(
+            &mut out,
+            row_bytes,
+            |start_row, row_count, output| {
+                let src_start = start_row * 4 * width as usize * BPP as usize;
+                encode(&data[src_start..], width, (row_count * 4) as u32, output);
+            },
+        );
         return out;
     }
 
-    // Reusable per-row scratch: ceil_W × 4 tightly packed.
     let scratch_w = bx * 4;
-    let mut scratch = vec![0u8; (scratch_w * 4 * BPP) as usize];
-
-    for by_idx in 0..by {
-        edge::fill_clamped_block_row(
-            data,
-            width,
-            height,
-            stride,
-            BPP,
-            by_idx,
-            scratch_w,
-            &mut scratch,
-        );
-        let dst_start = by_idx as usize * row_bytes;
-        encode(
-            &scratch,
-            scratch_w,
-            4,
-            &mut out[dst_start..dst_start + row_bytes],
-        );
-    }
+    crate::encoders::parallel::for_each_row_chunk(
+        &mut out,
+        row_bytes,
+        |start_row, row_count, output| {
+            // Scratch is local to each worker so edge replication is race-free.
+            let mut scratch = vec![0u8; (scratch_w * 4 * BPP) as usize];
+            for local_row in 0..row_count {
+                let by_idx = (start_row + local_row) as u32;
+                edge::fill_clamped_block_row(
+                    data,
+                    width,
+                    height,
+                    stride,
+                    BPP,
+                    by_idx,
+                    scratch_w,
+                    &mut scratch,
+                );
+                let dst_start = local_row * row_bytes;
+                encode(
+                    &scratch,
+                    scratch_w,
+                    4,
+                    &mut output[dst_start..dst_start + row_bytes],
+                );
+            }
+        },
+    );
 
     out
 }
@@ -226,6 +240,57 @@ mod tests {
             color_space: ColorSpace::Linear,
             alpha: AlphaMode::Opaque,
         }
+    }
+
+    /// Build an RGBA8 surface with a non-uniform pattern and the given row
+    /// stride. Bytes between the packed row payload and `stride` are filled
+    /// with a sentinel so a stride-ignoring read would corrupt the result.
+    #[cfg(feature = "rayon")]
+    fn patterned(width: u32, height: u32, stride: u32) -> Surface {
+        assert!(stride >= width * 4);
+        let mut data = vec![0xABu8; (stride * height) as usize];
+        for y in 0..height {
+            for x in 0..width {
+                let off = (y * stride + x * 4) as usize;
+                let v = (x.wrapping_mul(7).wrapping_add(y.wrapping_mul(13)) & 0xff) as u8;
+                data[off..off + 4].copy_from_slice(&[
+                    v,
+                    v.wrapping_add(50),
+                    v.wrapping_add(100),
+                    255,
+                ]);
+            }
+        }
+        Surface {
+            data,
+            width,
+            height,
+            depth: 1,
+            stride,
+            slice_stride: 0,
+            format: ktx2::Format::R8G8B8A8_UNORM,
+            color_space: ColorSpace::Linear,
+            alpha: AlphaMode::Opaque,
+        }
+    }
+
+    #[cfg(feature = "rayon")]
+    #[test]
+    fn dithered_parallel_matches_single_worker() {
+        let surface = patterned(19, 13, 19 * 4 + 12);
+        let settings = EtcpakSettings {
+            dither: true,
+            ..Default::default()
+        };
+        crate::encoders::assert_parallel_matches_serial(|| {
+            EtcpakEncoder::compress(
+                &surface,
+                ktx2::Format::BC1_RGBA_UNORM_BLOCK,
+                Quality::Fast,
+                &settings,
+            )
+            .unwrap()
+        });
     }
 
     #[test]

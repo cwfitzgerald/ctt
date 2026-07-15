@@ -521,6 +521,7 @@ dependencies = [
  "log",
  "miniz_oxide",
  "profiling",
+ "rayon",
  "thiserror",
  "zstd",
 ]
@@ -532,6 +533,7 @@ dependencies = [
  "bitflags",
  "cc",
  "paste",
+ "rayon",
 ]
 
 [[package]]
@@ -556,6 +558,7 @@ dependencies = [
  "cc",
  "ctt",
  "log",
+ "rayon",
 ]
 
 [[package]]
@@ -573,6 +576,7 @@ dependencies = [
  "ktx2",
  "log",
  "profiling",
+ "rayon",
  "same-file",
  "tempfile",
  "zstd",

@@ -231,7 +231,7 @@ fn encode_unaligned(
     stride: u32,
     bpp: u32,
     bytes_per_block: u32,
-    encode_aligned: impl Fn(&[u8], u32, u32, u32, &mut [u8]),
+    encode_aligned: impl Fn(&[u8], u32, u32, u32, &mut [u8]) + Sync,
 ) -> Vec<u8> {
     let bx = width.div_ceil(4);
     let by = height.div_ceil(4);
@@ -242,72 +242,82 @@ fn encode_unaligned(
     let block_bytes = bytes_per_block as usize;
     let mut out = vec![0u8; (bx as usize) * (by as usize) * block_bytes];
 
-    // Fast path: fully aligned dimensions — single zero-copy call.
+    // Fully aligned input can be divided into zero-copy groups of block rows.
+    // Without the `rayon` feature this is one call covering the whole image.
     if fx == bx && fy == by {
-        encode_aligned(data, width, height, stride, &mut out);
+        crate::encoders::parallel::for_each_row_chunk(
+            &mut out,
+            row_bytes,
+            |start_row, row_count, output| {
+                let src_start = start_row * 4 * stride as usize;
+                encode_aligned(
+                    &data[src_start..],
+                    width,
+                    (row_count * 4) as u32,
+                    stride,
+                    output,
+                );
+            },
+        );
         return out;
     }
 
-    let edge_scratch_stride = 4 * bpp;
-    let mut edge_scratch = vec![0u8; (4 * 4 * bpp) as usize];
+    crate::encoders::parallel::for_each_row_chunk(
+        &mut out,
+        row_bytes,
+        |start_row, row_count, output| {
+            let edge_scratch_stride = 4 * bpp;
+            let mut edge_scratch = vec![0u8; (4 * 4 * bpp) as usize];
 
-    for by_idx in 0..fy {
-        let src_row = &data[(by_idx * 4 * stride) as usize..];
-        let dst_row = &mut out[by_idx as usize * row_bytes..(by_idx as usize + 1) * row_bytes];
+            for local_row in 0..row_count {
+                let by_idx = (start_row + local_row) as u32;
+                let dst_row = &mut output[local_row * row_bytes..(local_row + 1) * row_bytes];
 
-        // Interior portion: fx blocks, zero-copy from original.
-        if fx > 0 {
-            let interior_end = (fx * bytes_per_block) as usize;
-            encode_aligned(src_row, fx * 4, 4, stride, &mut dst_row[..interior_end]);
-        }
-
-        // Right-edge block (one per row) if the width isn't aligned.
-        if fx < bx {
-            edge::fill_clamped_block(
-                data,
-                width,
-                height,
-                stride,
-                bpp,
-                fx,
-                by_idx,
-                &mut edge_scratch,
-            );
-            let start = (fx * bytes_per_block) as usize;
-            encode_aligned(
-                &edge_scratch,
-                4,
-                4,
-                edge_scratch_stride,
-                &mut dst_row[start..],
-            );
-        }
-    }
-
-    // Bottom partial block-row (at most one), in a single call.
-    if fy < by {
-        let bottom_w = bx * 4;
-        let bottom_stride = bottom_w * bpp;
-        let mut bottom_scratch = vec![0u8; (bottom_w * 4 * bpp) as usize];
-        edge::fill_clamped_block_row(
-            data,
-            width,
-            height,
-            stride,
-            bpp,
-            fy,
-            bottom_w,
-            &mut bottom_scratch,
-        );
-        let dst_start = fy as usize * row_bytes;
-        encode_aligned(
-            &bottom_scratch,
-            bottom_w,
-            4,
-            bottom_stride,
-            &mut out[dst_start..],
-        );
-    }
+                if by_idx < fy {
+                    let src_row = &data[(by_idx * 4 * stride) as usize..];
+                    if fx > 0 {
+                        let interior_end = (fx * bytes_per_block) as usize;
+                        encode_aligned(src_row, fx * 4, 4, stride, &mut dst_row[..interior_end]);
+                    }
+                    if fx < bx {
+                        edge::fill_clamped_block(
+                            data,
+                            width,
+                            height,
+                            stride,
+                            bpp,
+                            fx,
+                            by_idx,
+                            &mut edge_scratch,
+                        );
+                        let start = (fx * bytes_per_block) as usize;
+                        encode_aligned(
+                            &edge_scratch,
+                            4,
+                            4,
+                            edge_scratch_stride,
+                            &mut dst_row[start..],
+                        );
+                    }
+                } else {
+                    let bottom_w = bx * 4;
+                    let bottom_stride = bottom_w * bpp;
+                    let mut bottom_scratch = vec![0u8; (bottom_w * 4 * bpp) as usize];
+                    edge::fill_clamped_block_row(
+                        data,
+                        width,
+                        height,
+                        stride,
+                        bpp,
+                        by_idx,
+                        bottom_w,
+                        &mut bottom_scratch,
+                    );
+                    encode_aligned(&bottom_scratch, bottom_w, 4, bottom_stride, dst_row);
+                }
+            }
+        },
+    );
 
     out
 }
@@ -373,6 +383,53 @@ mod tests {
             color_space: ColorSpace::Linear,
             alpha: AlphaMode::Opaque,
         }
+    }
+
+    /// Build an RGBA8 surface with a non-uniform pattern and the given row
+    /// stride. Bytes between the packed row payload and `stride` are filled
+    /// with a sentinel so a stride-ignoring read would corrupt the result.
+    #[cfg(feature = "rayon")]
+    fn patterned(width: u32, height: u32, stride: u32) -> Surface {
+        assert!(stride >= width * 4);
+        let mut data = vec![0xABu8; (stride * height) as usize];
+        for y in 0..height {
+            for x in 0..width {
+                let off = (y * stride + x * 4) as usize;
+                let v = (x.wrapping_mul(7).wrapping_add(y.wrapping_mul(13)) & 0xff) as u8;
+                data[off..off + 4].copy_from_slice(&[
+                    v,
+                    v.wrapping_add(50),
+                    v.wrapping_add(100),
+                    255,
+                ]);
+            }
+        }
+        Surface {
+            data,
+            width,
+            height,
+            depth: 1,
+            stride,
+            slice_stride: 0,
+            format: ktx2::Format::R8G8B8A8_UNORM,
+            color_space: ColorSpace::Linear,
+            alpha: AlphaMode::Opaque,
+        }
+    }
+
+    #[cfg(feature = "rayon")]
+    #[test]
+    fn parallel_matches_single_worker() {
+        let surface = patterned(19, 13, 19 * 4 + 12);
+        crate::encoders::assert_parallel_matches_serial(|| {
+            IspcEncoder::compress(
+                &surface,
+                ktx2::Format::BC7_UNORM_BLOCK,
+                Quality::Fast,
+                &IspcSettings::default(),
+            )
+            .unwrap()
+        });
     }
 
     #[cfg(feature = "encoder-etcpak")]

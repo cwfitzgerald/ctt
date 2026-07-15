@@ -35,8 +35,9 @@ ispc-prebuilt = ["ctt/ispc-prebuilt"]
 ispc-build-from-source = ["ctt/ispc-build-from-source"]
 
 [dependencies]
-ctt = { workspace = true }
+ctt = { workspace = true, features = ["rayon"] }
 log = { workspace = true }
+rayon = { workspace = true }
 
 [dev-dependencies]
 cc = { workspace = true }

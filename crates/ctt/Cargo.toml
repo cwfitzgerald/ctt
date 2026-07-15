@@ -33,6 +33,7 @@ ispc-build-from-source = [
   "ctt-intel-texture-compressor?/build-from-source",
   "ctt-bc7enc-rdo?/build-from-source",
 ]
+rayon = ["dep:rayon", "ctt-astcenc?/rayon"]
 
 [dependencies]
 bytemuck = { workspace = true, features = [
@@ -52,6 +53,7 @@ ktx2 = { workspace = true }
 log = { workspace = true }
 miniz_oxide = { workspace = true }
 profiling = { workspace = true }
+rayon = { workspace = true, optional = true }
 thiserror = { workspace = true }
 zstd = { workspace = true }
 

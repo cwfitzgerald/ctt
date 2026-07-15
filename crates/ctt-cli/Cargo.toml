@@ -38,6 +38,7 @@ ctt = { workspace = true, features = [
   "encoder-bc7enc",
   "encoder-etcpak",
   "encoder-intel",
+  "rayon",
 ] }
 clap = { workspace = true, features = ["wrap_help"] }
 image = { workspace = true, features = ["default"] }
@@ -46,6 +47,7 @@ facet = { workspace = true }
 facet-reflect = { workspace = true }
 fern = { workspace = true }
 profiling = { workspace = true }
+rayon = { workspace = true }
 same-file = { workspace = true }
 log = { workspace = true }
 zstd = { workspace = true }
