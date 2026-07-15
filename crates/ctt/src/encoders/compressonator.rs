@@ -157,7 +157,9 @@ impl Encoder for CompressonatorEncoder {
                 opts.set_channel_weights(weights[0], weights[1], weights[2])
                     .map_err(cmp_err)?;
                 opts.set_srgb(is_srgb).map_err(cmp_err)?;
-                cmp::bc1::compress_blocks(data, width, height, &opts).map_err(cmp_err)
+                compress_rows(data, width, height, 4, 8, |src, w, h, dst| {
+                    cmp::bc1::compress_blocks_into(src, w, h, &opts, dst)
+                })
             }
             F::BC2_UNORM_BLOCK => {
                 let mut opts = cmp::bc2::Options::new().map_err(cmp_err)?;
@@ -165,7 +167,9 @@ impl Encoder for CompressonatorEncoder {
                 opts.set_channel_weights(weights[0], weights[1], weights[2])
                     .map_err(cmp_err)?;
                 opts.set_srgb(is_srgb).map_err(cmp_err)?;
-                cmp::bc2::compress_blocks(data, width, height, &opts).map_err(cmp_err)
+                compress_rows(data, width, height, 4, 16, |src, w, h, dst| {
+                    cmp::bc2::compress_blocks_into(src, w, h, &opts, dst)
+                })
             }
             F::BC3_UNORM_BLOCK => {
                 let mut opts = cmp::bc3::Options::new().map_err(cmp_err)?;
@@ -173,29 +177,39 @@ impl Encoder for CompressonatorEncoder {
                 opts.set_channel_weights(weights[0], weights[1], weights[2])
                     .map_err(cmp_err)?;
                 opts.set_srgb(is_srgb).map_err(cmp_err)?;
-                cmp::bc3::compress_blocks(data, width, height, &opts).map_err(cmp_err)
+                compress_rows(data, width, height, 4, 16, |src, w, h, dst| {
+                    cmp::bc3::compress_blocks_into(src, w, h, &opts, dst)
+                })
             }
             F::BC4_UNORM_BLOCK => {
                 let mut opts = cmp::bc4::Options::new().map_err(cmp_err)?;
                 opts.set_quality(q).map_err(cmp_err)?;
-                cmp::bc4::compress_blocks(data, width, height, &opts).map_err(cmp_err)
+                compress_rows(data, width, height, 1, 8, |src, w, h, dst| {
+                    cmp::bc4::compress_blocks_into(src, w, h, &opts, dst)
+                })
             }
             F::BC4_SNORM_BLOCK => {
                 let mut opts = cmp::bc4::Options::new().map_err(cmp_err)?;
                 opts.set_quality(q).map_err(cmp_err)?;
                 let src: &[i8] = bytemuck::cast_slice(data);
-                cmp::bc4s::compress_blocks(src, width, height, &opts).map_err(cmp_err)
+                compress_rows(src, width, height, 1, 8, |src, w, h, dst| {
+                    cmp::bc4s::compress_blocks_into(src, w, h, &opts, dst)
+                })
             }
             F::BC5_UNORM_BLOCK => {
                 let mut opts = cmp::bc5::Options::new().map_err(cmp_err)?;
                 opts.set_quality(q).map_err(cmp_err)?;
-                cmp::bc5::compress_blocks(data, width, height, &opts).map_err(cmp_err)
+                compress_rows(data, width, height, 2, 16, |src, w, h, dst| {
+                    cmp::bc5::compress_blocks_into(src, w, h, &opts, dst)
+                })
             }
             F::BC5_SNORM_BLOCK => {
                 let mut opts = cmp::bc5::Options::new().map_err(cmp_err)?;
                 opts.set_quality(q).map_err(cmp_err)?;
                 let src: &[i8] = bytemuck::cast_slice(data);
-                cmp::bc5s::compress_blocks(src, width, height, &opts).map_err(cmp_err)
+                compress_rows(src, width, height, 2, 16, |src, w, h, dst| {
+                    cmp::bc5s::compress_blocks_into(src, w, h, &opts, dst)
+                })
             }
             F::BC6H_UFLOAT_BLOCK => {
                 let mut opts = cmp::bc6h::Options::new().map_err(cmp_err)?;
@@ -204,7 +218,9 @@ impl Encoder for CompressonatorEncoder {
                     opts.set_mask(mask).map_err(cmp_err)?;
                 }
                 let src = u16_slice(data);
-                cmp::bc6h::compress_blocks(&src, width, height, &opts).map_err(cmp_err)
+                compress_rows(&src, width, height, 3, 16, |src, w, h, dst| {
+                    cmp::bc6h::compress_blocks_into(src, w, h, &opts, dst)
+                })
             }
             F::BC6H_SFLOAT_BLOCK => {
                 let mut opts = cmp::bc6h::Options::new().map_err(cmp_err)?;
@@ -214,7 +230,9 @@ impl Encoder for CompressonatorEncoder {
                     opts.set_mask(mask).map_err(cmp_err)?;
                 }
                 let src = u16_slice(data);
-                cmp::bc6h::compress_blocks(&src, width, height, &opts).map_err(cmp_err)
+                compress_rows(&src, width, height, 3, 16, |src, w, h, dst| {
+                    cmp::bc6h::compress_blocks_into(src, w, h, &opts, dst)
+                })
             }
             F::BC7_UNORM_BLOCK => {
                 let mut opts = cmp::bc7::Options::new().map_err(cmp_err)?;
@@ -226,11 +244,41 @@ impl Encoder for CompressonatorEncoder {
                 if let Some(mask) = settings.bc7_mode_mask {
                     opts.set_mask(mask).map_err(cmp_err)?;
                 }
-                cmp::bc7::compress_blocks(data, width, height, &opts).map_err(cmp_err)
+                compress_rows(data, width, height, 4, 16, |src, w, h, dst| {
+                    cmp::bc7::compress_blocks_into(src, w, h, &opts, dst)
+                })
             }
             _ => unreachable!("format not in supported_formats()"),
         }
     }
+}
+
+fn compress_rows<T: Sync>(
+    data: &[T],
+    width: u32,
+    height: u32,
+    values_per_pixel: usize,
+    bytes_per_block: usize,
+    compress: impl Fn(&[T], u32, u32, &mut [u8]) -> std::result::Result<(), cmp::Error> + Send + Sync,
+) -> Result<Vec<u8>> {
+    let blocks_x = width.div_ceil(4) as usize;
+    let blocks_y = height.div_ceil(4) as usize;
+    let row_bytes = blocks_x * bytes_per_block;
+    let mut output = vec![0u8; blocks_y * row_bytes];
+
+    crate::encoders::parallel::try_for_each_row_chunk(
+        &mut output,
+        row_bytes,
+        |start_row, row_count, dst| {
+            let start_y = start_row * 4;
+            let chunk_height = (height as usize - start_y).min(row_count * 4) as u32;
+            let src_start = start_y * width as usize * values_per_pixel;
+            compress(&data[src_start..], width, chunk_height, dst)
+        },
+    )
+    .map_err(cmp_err)?;
+
+    Ok(output)
 }
 
 /// BT.601 luminance weights for color content; uniform for data/normals.
@@ -403,6 +451,21 @@ mod tests {
         )
         .unwrap();
         assert_eq!(a, b, "padded-stride encode must match tight encode");
+    }
+
+    #[cfg(feature = "rayon")]
+    #[test]
+    fn parallel_matches_single_worker() {
+        let surface = patterned(19, 13, 19 * 4 + 12);
+        crate::encoders::assert_parallel_matches_serial(|| {
+            CompressonatorEncoder::compress(
+                &surface,
+                ktx2::Format::BC1_RGBA_UNORM_BLOCK,
+                Quality::Fast,
+                &AmdSettings::default(),
+            )
+            .unwrap()
+        });
     }
 
     #[test]

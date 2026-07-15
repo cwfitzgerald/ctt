@@ -13,9 +13,14 @@ categories = ["graphics", "compression"]
 build = "build.rs"
 links = "astcenc"
 
+[features]
+default = []
+rayon = ["dep:rayon"]
+
 [dependencies]
 bitflags = { workspace = true }
 paste = { workspace = true }
+rayon = { workspace = true, optional = true }
 
 [build-dependencies]
 cc = { workspace = true, features = ["parallel"] }

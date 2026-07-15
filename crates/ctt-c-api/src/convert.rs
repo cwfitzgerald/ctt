@@ -855,7 +855,12 @@ pub unsafe extern "C" fn ctt_convert(
             mipmap_filter: settings.mipmap_filter.into(),
         };
 
-        match ctt::convert(image, inner) {
+        let converted = match crate::threading::install(|| ctt::convert(image, inner)) {
+            Ok(converted) => converted,
+            Err(status) => return status,
+        };
+
+        match converted {
             Ok(output) => {
                 let boxed = Box::into_raw(Box::new(PipelineOutput(Some(output))));
                 unsafe {

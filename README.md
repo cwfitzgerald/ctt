@@ -121,6 +121,17 @@ fn main() -> Result<(), ctt::Error> {
 
 See the [API documentation](https://docs.rs/ctt) for the full `ConvertSettings` options and the lower-level pipeline API.
 
+### Parallel compression
+
+The Rust library is serial unless its default-off `rayon` feature is enabled. With that feature, each compressed surface is split into block-row jobs on the active Rayon pool. `ctt` does not configure Rayon's global pool or add a thread count to `ConvertSettings`; callers that need a fixed worker budget can install conversion into their own pool:
+
+```rust,ignore
+let pool = rayon::ThreadPoolBuilder::new().num_threads(4).build()?;
+let output = pool.install(|| ctt::convert(image, settings))?;
+```
+
+Without an explicit `install`, Rayon uses its lazily initialized global pool.
+
 ## C API
 
 C bindings are available as a separate crate. See [`crates/ctt-c-api/README.md`](crates/ctt-c-api/README.md) for build, link, and usage instructions; the full API reference lives in the generated header at `crates/ctt-c-api/include/ctt.h`.
@@ -157,6 +168,12 @@ High quality:
 
 ```sh
 ctt diffuse.png -o diffuse.ktx2 -f bc7 --quality slow
+```
+
+Choose the compression worker count with `--threads` / `-t`. Zero (the default) uses Rayon's platform default, one is effectively serial, and positive values request that exact number of workers:
+
+```sh
+ctt diffuse.png -o diffuse.ktx2 -f bc7 --threads 4
 ```
 
 Cubemap from a cross layout. `--cubemap-layout cross` (the default) accepts

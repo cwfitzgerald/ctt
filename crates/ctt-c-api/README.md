@@ -53,6 +53,10 @@ Link against the import library (Windows) or shared object (macOS/Linux) and ens
 
 A minimal end-to-end example lives in [`examples/sanity_check.c`](examples/sanity_check.c); the integration test in `tests/c_examples.rs` shows the exact compiler invocations used in CI for each platform and linkage mode.
 
+### Threading
+
+Compression uses one process-wide worker pool shared by all concurrent C API conversions. Call `ctt_set_thread_count` before the first conversion to choose its size: zero selects the platform default, one is effectively serial, and a positive value requests exactly that many workers. If the setter is omitted, the first conversion lazily creates the pool at the platform default. The setter succeeds at most once and fails with `CTT_STATUS_THREAD_POOL_ALREADY_INITIALIZED` after the pool has been initialized.
+
 ## Documentation
 
 The full API reference lives inline in [`include/ctt.h`](include/ctt.h). The header opens with an overview of the encode and decode pipelines, the memory ownership model, error reporting, threading, and format conventions; per-function doc comments cover the rest.

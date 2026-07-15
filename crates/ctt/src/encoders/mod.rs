@@ -1,6 +1,13 @@
 pub(crate) use crate::quality::Quality;
 
 pub(crate) mod backend;
+#[cfg(any(
+    feature = "encoder-intel",
+    feature = "encoder-bc7enc",
+    feature = "encoder-etcpak",
+    feature = "encoder-amd",
+))]
+pub(crate) mod parallel;
 
 #[cfg(any(feature = "encoder-intel", feature = "encoder-etcpak"))]
 mod edge;
@@ -19,6 +26,31 @@ pub mod astcenc;
 
 #[cfg(feature = "encoder-amd")]
 pub mod compressonator;
+
+/// Assert that `encode` produces identical bytes on one- and two-worker
+/// Rayon pools.
+#[cfg(all(
+    test,
+    feature = "rayon",
+    any(
+        feature = "encoder-intel",
+        feature = "encoder-bc7enc",
+        feature = "encoder-etcpak",
+        feature = "encoder-amd",
+        feature = "encoder-astcenc",
+    )
+))]
+pub(crate) fn assert_parallel_matches_serial(encode: impl Fn() -> Vec<u8> + Sync) {
+    let pool = |threads| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(threads)
+            .build()
+            .unwrap()
+    };
+    let serial = pool(1).install(&encode);
+    let parallel = pool(2).install(&encode);
+    assert_eq!(parallel, serial);
+}
 
 /// User-facing encoder choice for [`TargetFormat::Compressed`](crate::TargetFormat).
 ///

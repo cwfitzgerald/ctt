@@ -84,6 +84,10 @@ pub struct Args {
     #[arg(long, default_value = "basic")]
     pub quality: QualityArg,
 
+    /// Compression worker threads. 0 uses the platform default, 1 is serial.
+    #[arg(short = 't', long, default_value_t = 0, value_name = "COUNT")]
+    pub threads: usize,
+
     /// List available encoder backends and their supported formats.
     #[arg(long)]
     pub list_encoders: bool,

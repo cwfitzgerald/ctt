@@ -18,6 +18,7 @@ mod input;
 mod logging;
 mod output;
 mod surface;
+mod threading;
 mod types;
 
 pub use convert::*;
@@ -29,4 +30,5 @@ pub use input::*;
 pub use logging::*;
 pub use output::*;
 pub use surface::*;
+pub use threading::*;
 pub use types::*;

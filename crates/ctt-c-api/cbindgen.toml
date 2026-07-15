@@ -88,6 +88,11 @@ header = """\
  * used from different threads concurrently. The error-message slot is
  * thread-local.
  *
+ * Compression uses one process-wide worker pool shared by all concurrent
+ * conversions. Call `ctt_set_thread_count` before the first conversion to
+ * choose its size. If omitted, the first conversion lazily creates the pool
+ * using the platform-default logical worker count.
+ *
  *
  * Logging
  * -------

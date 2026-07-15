@@ -136,12 +136,22 @@ impl Encoder for Bc7encEncoder {
             Ok(slice) => Cow::Borrowed(slice),
             Err(_) => Cow::Owned(bytemuck::pod_collect_to_vec(&pixels)),
         };
-        let num_blocks = surface
-            .width
-            .div_ceil(4)
-            .checked_mul(surface.height.div_ceil(4))
-            .expect("block count overflow") as usize;
-        let compressed = ctt_bc7enc_rdo::compress_blocks_alloc(num_blocks, &pixels, &params);
+        let blocks_x = surface.width.div_ceil(4) as usize;
+        let blocks_y = surface.height.div_ceil(4) as usize;
+        let num_blocks = blocks_x
+            .checked_mul(blocks_y)
+            .expect("block count overflow");
+        let mut compressed = vec![0u64; num_blocks * 2];
+        crate::encoders::parallel::for_each_row_chunk(
+            &mut compressed,
+            blocks_x * 2,
+            |start_row, row_count, output| {
+                let start_block = start_row * blocks_x;
+                let block_count = row_count * blocks_x;
+                let input = &pixels[start_block * 16..(start_block + block_count) * 16];
+                ctt_bc7enc_rdo::compress_blocks(output, input, &params);
+            },
+        );
         Ok(bytemuck::cast_slice(&compressed).to_vec())
     }
 }
@@ -168,6 +178,53 @@ mod tests {
             color_space: ColorSpace::Linear,
             alpha: AlphaMode::Opaque,
         }
+    }
+
+    /// Build an RGBA8 surface with a non-uniform pattern and the given row
+    /// stride. Bytes between the packed row payload and `stride` are filled
+    /// with a sentinel so a stride-ignoring read would corrupt the result.
+    #[cfg(feature = "rayon")]
+    fn patterned(width: u32, height: u32, stride: u32) -> Surface {
+        assert!(stride >= width * 4);
+        let mut data = vec![0xABu8; (stride * height) as usize];
+        for y in 0..height {
+            for x in 0..width {
+                let off = (y * stride + x * 4) as usize;
+                let v = (x.wrapping_mul(7).wrapping_add(y.wrapping_mul(13)) & 0xff) as u8;
+                data[off..off + 4].copy_from_slice(&[
+                    v,
+                    v.wrapping_add(50),
+                    v.wrapping_add(100),
+                    255,
+                ]);
+            }
+        }
+        Surface {
+            data,
+            width,
+            height,
+            depth: 1,
+            stride,
+            slice_stride: 0,
+            format: ktx2::Format::R8G8B8A8_UNORM,
+            color_space: ColorSpace::Linear,
+            alpha: AlphaMode::Opaque,
+        }
+    }
+
+    #[cfg(feature = "rayon")]
+    #[test]
+    fn parallel_matches_single_worker() {
+        let surface = patterned(19, 13, 19 * 4 + 12);
+        crate::encoders::assert_parallel_matches_serial(|| {
+            Bc7encEncoder::compress(
+                &surface,
+                ktx2::Format::BC7_UNORM_BLOCK,
+                Quality::Fast,
+                &Bc7encSettings::default(),
+            )
+            .unwrap()
+        });
     }
 
     #[test]
