@@ -89,15 +89,18 @@ pub(crate) mod vk_format;
 pub mod bench_internals {
     pub use crate::processing::Buffer;
 
-    pub use crate::processing::load_kernels::srgb::load_srgb8_f32_serial;
+    pub use crate::processing::load_kernels::srgb::{
+        load_srgb8_f32_serial, srgb_eotf_in_place_f32_serial,
+    };
     pub use crate::processing::load_kernels::{
-        load_bgr8_srgb_f32, load_bgra8_srgb_f32, load_srgb8_f32,
+        load_bgr8_srgb_f32, load_bgra8_srgb_f32, load_srgb8_f32, srgb_eotf_in_place_f32,
     };
     pub use crate::processing::store_kernels::srgb::{
-        store_bgra8_srgb_f32_serial, store_srgb8_f32_serial,
+        srgb_oetf_in_place_f32_serial, store_bgra8_srgb_f32_serial, store_srgb8_f32_serial,
     };
     pub use crate::processing::store_kernels::{
-        store_bgr8_srgb_f32, store_bgra8_srgb_f32, store_f16_f32, store_srgb8_f32,
+        srgb_oetf_in_place_f32, store_bgr8_srgb_f32, store_bgra8_srgb_f32, store_f16_f32,
+        store_srgb8_f32,
     };
 
     pub use crate::processing::load_kernels::load_f16_f32;
@@ -105,16 +108,24 @@ pub mod bench_internals {
     #[cfg(target_arch = "x86_64")]
     pub use crate::processing::load_kernels::srgb::{
         load_srgb8_rgba_f32_avx2_fma, load_srgb8_rgba_f32_avx512, load_srgb8_rgba_f32_sse4_1,
+        srgb_eotf_in_place_f32_avx2_fma, srgb_eotf_in_place_f32_avx512,
+        srgb_eotf_in_place_f32_sse4_1,
     };
     #[cfg(target_arch = "x86_64")]
     pub use crate::processing::store_kernels::srgb::{
-        store_srgb8_f32_avx2_fma, store_srgb8_f32_avx512, store_srgb8_f32_sse4_1,
+        srgb_oetf_in_place_f32_avx2_fma, srgb_oetf_in_place_f32_avx512,
+        srgb_oetf_in_place_f32_sse4_1, store_srgb8_f32_avx2_fma, store_srgb8_f32_avx512,
+        store_srgb8_f32_sse4_1,
     };
 
     #[cfg(target_arch = "aarch64")]
-    pub use crate::processing::load_kernels::srgb::load_srgb8_rgba_f32_neon;
+    pub use crate::processing::load_kernels::srgb::{
+        load_srgb8_rgba_f32_neon, srgb_eotf_in_place_f32_neon,
+    };
     #[cfg(target_arch = "aarch64")]
-    pub use crate::processing::store_kernels::srgb::store_srgb8_f32_neon;
+    pub use crate::processing::store_kernels::srgb::{
+        srgb_oetf_in_place_f32_neon, store_srgb8_f32_neon,
+    };
 
     // ---- Packed 32-bit formats ----
 

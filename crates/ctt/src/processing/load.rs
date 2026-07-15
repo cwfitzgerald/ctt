@@ -15,16 +15,6 @@ use super::alpha;
 use super::buffer::Buffer;
 use super::load_kernels as k;
 
-/// Scalar sRGB EOTF for the post-pass on non-sRGB-native FormatKinds whose
-/// `Surface::color_space` is nonetheless `Srgb`.
-fn srgb_eotf_scalar(c: f32) -> f32 {
-    if c <= 0.04045 {
-        c / 12.92
-    } else {
-        ((c + 0.055) / 1.055).powf(2.4)
-    }
-}
-
 /// Load a surface into the f32 pipeline (linear + premultiplied).
 pub fn load_f32(surface: &Surface) -> Result<Buffer<f32>> {
     profiling::scope!("load_f32");
@@ -72,12 +62,7 @@ pub fn load_f32(surface: &Surface) -> Result<Buffer<f32>> {
     // kinds are promoted to their sRGB variants by `classify` and decoded
     // through the LUT inside the kernel.
     if !srgb_decoded_by_kernel && surface.color_space == ColorSpace::Srgb {
-        profiling::scope!("srgb_eotf_scalar_f32");
-        for p in buf.pixels.iter_mut() {
-            p[0] = srgb_eotf_scalar(p[0]);
-            p[1] = srgb_eotf_scalar(p[1]);
-            p[2] = srgb_eotf_scalar(p[2]);
-        }
+        k::srgb_eotf_in_place_f32(&mut buf.pixels);
     }
 
     if surface.alpha == AlphaMode::Straight {
