@@ -6,6 +6,8 @@
 
 pub(crate) mod alpha;
 pub(crate) mod buffer;
+pub(crate) mod curve_pass;
+pub(crate) mod dispatch;
 pub(crate) mod encode;
 pub(crate) mod load;
 pub(crate) mod load_kernels;

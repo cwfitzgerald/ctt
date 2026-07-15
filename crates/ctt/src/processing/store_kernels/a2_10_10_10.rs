@@ -17,10 +17,11 @@
 //! which would diverge on the far more common exact-`.5` scale points.
 
 use crate::processing::buffer::Buffer;
+use crate::processing::dispatch::dispatch_simd;
 #[cfg(target_arch = "x86_64")]
 use crate::processing::x86::{
-    has_avx512, load_planar4_epi32, load_planar4_ps, load_planar8_epi32, load_planar8_ps,
-    load_planar16_epi32, load_planar16_mask_epi32, load_planar16_mask_ps, load_planar16_ps,
+    load_planar4_epi32, load_planar4_ps, load_planar8_epi32, load_planar8_ps, load_planar16_epi32,
+    load_planar16_mask_epi32, load_planar16_mask_ps, load_planar16_ps,
 };
 
 use super::{write_pixels, write_pixels_u32};
@@ -177,28 +178,15 @@ pub fn store_a2_sint_serial<const R_SHIFT: u32>(buf: &Buffer<u32>) -> Vec<u8> {
 
 #[inline]
 fn store_f32_dispatch<const R_SHIFT: u32, const SNORM: bool>(buf: &Buffer<f32>) -> Vec<u8> {
-    #[cfg(target_arch = "x86_64")]
-    {
-        if has_avx512() {
-            // SAFETY: runtime check confirms avx512f + vl + bw are available.
-            return unsafe { store_a2_f32_avx512::<R_SHIFT, SNORM>(buf) };
-        }
-        if is_x86_feature_detected!("avx2") && is_x86_feature_detected!("fma") {
-            // SAFETY: runtime check confirms avx2 + fma are available.
-            return unsafe { store_a2_f32_avx2_fma::<R_SHIFT, SNORM>(buf) };
-        }
-        if is_x86_feature_detected!("sse4.1") {
-            // SAFETY: runtime check confirms sse4.1 is available.
-            return unsafe { store_a2_f32_sse4_1::<R_SHIFT, SNORM>(buf) };
-        }
-    }
-
-    #[cfg(target_arch = "aarch64")]
-    {
-        if std::arch::is_aarch64_feature_detected!("neon") {
-            // SAFETY: runtime check confirms NEON is available.
-            return unsafe { store_a2_f32_neon::<R_SHIFT, SNORM>(buf) };
-        }
+    dispatch_simd! {
+        x86_64: {
+            avx512: store_a2_f32_avx512::<R_SHIFT, SNORM>(buf),
+            avx2_fma: store_a2_f32_avx2_fma::<R_SHIFT, SNORM>(buf),
+            sse4_1: store_a2_f32_sse4_1::<R_SHIFT, SNORM>(buf),
+        },
+        aarch64: {
+            neon: store_a2_f32_neon::<R_SHIFT, SNORM>(buf),
+        },
     }
 
     if SNORM {
@@ -210,28 +198,15 @@ fn store_f32_dispatch<const R_SHIFT: u32, const SNORM: bool>(buf: &Buffer<f32>) 
 
 #[inline]
 fn store_u32_dispatch<const R_SHIFT: u32, const SINT: bool>(buf: &Buffer<u32>) -> Vec<u8> {
-    #[cfg(target_arch = "x86_64")]
-    {
-        if has_avx512() {
-            // SAFETY: runtime check confirms avx512f + vl + bw are available.
-            return unsafe { store_a2_u32_avx512::<R_SHIFT, SINT>(buf) };
-        }
-        if is_x86_feature_detected!("avx2") {
-            // SAFETY: runtime check confirms avx2 is available.
-            return unsafe { store_a2_u32_avx2::<R_SHIFT, SINT>(buf) };
-        }
-        if is_x86_feature_detected!("sse4.1") {
-            // SAFETY: runtime check confirms sse4.1 is available.
-            return unsafe { store_a2_u32_sse4_1::<R_SHIFT, SINT>(buf) };
-        }
-    }
-
-    #[cfg(target_arch = "aarch64")]
-    {
-        if std::arch::is_aarch64_feature_detected!("neon") {
-            // SAFETY: runtime check confirms NEON is available.
-            return unsafe { store_a2_u32_neon::<R_SHIFT, SINT>(buf) };
-        }
+    dispatch_simd! {
+        x86_64: {
+            avx512: store_a2_u32_avx512::<R_SHIFT, SINT>(buf),
+            avx2: store_a2_u32_avx2::<R_SHIFT, SINT>(buf),
+            sse4_1: store_a2_u32_sse4_1::<R_SHIFT, SINT>(buf),
+        },
+        aarch64: {
+            neon: store_a2_u32_neon::<R_SHIFT, SINT>(buf),
+        },
     }
 
     if SINT {
@@ -920,6 +895,8 @@ pub unsafe fn store_a2_u32_neon<const R_SHIFT: u32, const SINT: bool>(
 #[cfg(test)]
 mod simd_tests {
     use super::*;
+    #[cfg(target_arch = "x86_64")]
+    use crate::processing::x86::has_avx512;
 
     fn buf_f32(pixels: Vec<[f32; 4]>) -> Buffer<f32> {
         let width = pixels.len() as u32;

@@ -9,9 +9,10 @@
 //! flush to 0, finite overflow and +Inf map to Inf, NaN maps to NaN.
 
 use crate::processing::buffer::Buffer;
+use crate::processing::dispatch::dispatch_simd;
 #[cfg(target_arch = "x86_64")]
 use crate::processing::x86::{
-    has_avx512, load_planar4_ps, load_planar8_ps, load_planar16_mask_ps, load_planar16_ps,
+    load_planar4_ps, load_planar8_ps, load_planar16_mask_ps, load_planar16_ps,
 };
 
 use super::write_pixels;
@@ -78,27 +79,17 @@ pub(crate) fn encode(rgb: [f32; 3]) -> u32 {
 pub fn store_b10g11r11_f32(buf: &Buffer<f32>) -> Vec<u8> {
     profiling::scope!("store_b10g11r11_f32");
 
-    #[cfg(target_arch = "x86_64")]
-    {
-        if has_avx512() {
-            // SAFETY: runtime check confirms avx512f + vl + bw are available.
-            return unsafe { store_b10g11r11_f32_avx512(buf) };
-        }
-        if is_x86_feature_detected!("avx2") {
-            // SAFETY: runtime check confirms avx2 is available.
-            return unsafe { store_b10g11r11_f32_avx2(buf) };
-        }
-        // No SSE4.1 tier: lacking a per-lane variable shift, the emulation
-        // benchmarks slower than scalar bit-packing here (AVX2's `srlv` is what
-        // makes the vector path win), so below AVX2 the scalar path handles it.
-    }
-
-    #[cfg(target_arch = "aarch64")]
-    {
-        if std::arch::is_aarch64_feature_detected!("neon") {
-            // SAFETY: runtime check confirms NEON is available.
-            return unsafe { store_b10g11r11_f32_neon(buf) };
-        }
+    // No SSE4.1 tier: lacking a per-lane variable shift, the emulation
+    // benchmarks slower than scalar bit-packing here (AVX2's `srlv` is what
+    // makes the vector path win), so below AVX2 the scalar path handles it.
+    dispatch_simd! {
+        x86_64: {
+            avx512: store_b10g11r11_f32_avx512(buf),
+            avx2: store_b10g11r11_f32_avx2(buf),
+        },
+        aarch64: {
+            neon: store_b10g11r11_f32_neon(buf),
+        },
     }
 
     store_b10g11r11_f32_serial(buf)
@@ -613,6 +604,8 @@ pub unsafe fn store_b10g11r11_f32_neon(buf: &Buffer<f32>) -> Vec<u8> {
 #[cfg(test)]
 mod simd_tests {
     use super::*;
+    #[cfg(target_arch = "x86_64")]
+    use crate::processing::x86::has_avx512;
 
     /// A broad set of per-channel f32 inputs spanning every encode branch.
     fn test_values() -> Vec<f32> {

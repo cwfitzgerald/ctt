@@ -6,9 +6,10 @@
 //! carry 6 mantissa bits, the 10-bit form 5. Alpha loads as 1.0.
 
 use crate::error::Result;
+use crate::processing::dispatch::dispatch_simd;
 #[cfg(target_arch = "x86_64")]
 use crate::processing::x86::{
-    has_avx512, store_interleaved_ps, store_interleaved16_mask_ps, store_interleaved16_ps,
+    store_interleaved_ps, store_interleaved16_mask_ps, store_interleaved16_ps,
 };
 use crate::surface::Surface;
 
@@ -52,28 +53,15 @@ pub(crate) fn decode(word: u32) -> [f32; 3] {
 pub fn load_b10g11r11_f32(surface: &Surface) -> Result<Buffer<f32>> {
     profiling::scope!("load_b10g11r11_f32");
 
-    #[cfg(target_arch = "x86_64")]
-    {
-        if has_avx512() {
-            // SAFETY: runtime check confirms avx512f + vl + bw are available.
-            return unsafe { load_b10g11r11_f32_avx512(surface) };
-        }
-        if is_x86_feature_detected!("avx2") && is_x86_feature_detected!("fma") {
-            // SAFETY: runtime check confirms avx2 + fma are available.
-            return unsafe { load_b10g11r11_f32_avx2_fma(surface) };
-        }
-        if is_x86_feature_detected!("sse4.1") {
-            // SAFETY: runtime check confirms sse4.1 is available.
-            return unsafe { load_b10g11r11_f32_sse4_1(surface) };
-        }
-    }
-
-    #[cfg(target_arch = "aarch64")]
-    {
-        if std::arch::is_aarch64_feature_detected!("neon") {
-            // SAFETY: runtime check confirms NEON is available.
-            return unsafe { load_b10g11r11_f32_neon(surface) };
-        }
+    dispatch_simd! {
+        x86_64: {
+            avx512: load_b10g11r11_f32_avx512(surface),
+            avx2_fma: load_b10g11r11_f32_avx2_fma(surface),
+            sse4_1: load_b10g11r11_f32_sse4_1(surface),
+        },
+        aarch64: {
+            neon: load_b10g11r11_f32_neon(surface),
+        },
     }
 
     load_b10g11r11_f32_serial(surface)
@@ -553,6 +541,8 @@ pub unsafe fn load_b10g11r11_f32_neon(surface: &Surface) -> Result<Buffer<f32>> 
 mod simd_tests {
     use super::*;
     use crate::alpha::AlphaMode;
+    #[cfg(target_arch = "x86_64")]
+    use crate::processing::x86::has_avx512;
     use crate::surface::{ColorSpace, Surface};
 
     fn b10_surface(data: Vec<u8>, width: u32, height: u32, stride: u32) -> Surface {
