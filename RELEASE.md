@@ -48,12 +48,17 @@ bump and before pushing anything.
 ```bash
 jj commit -m "Release vX.Y.Z"
 jj bookmark move trunk --to @-
-jj tag set vX.Y.Z -r @-
 jj git push
+git tag -s vX.Y.Z $(git rev-parse refs/heads/trunk) -m "vX.Y.Z"
 git push origin vX.Y.Z
 ```
 
 (`jj git push` pushes the bookmark but not tags, hence the extra `git push`.)
+
+Tag **after** `jj git push`, and tag the pushed trunk commit rather than a
+jj revision: `jj git push` may re-sign the commit, which changes its hash and
+would leave an earlier tag pointing at a stale commit. `jj tag set` cannot
+create signed tags, hence `git tag -s`.
 
 Pushing the `vX.Y.Z` tag triggers `.github/workflows/publish.yml`. That
 workflow runs CI, builds the release binaries (CLI + C API) for every target
