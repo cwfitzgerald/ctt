@@ -38,6 +38,15 @@
 //!
 //! Use [`parse_format`] to build a [`TargetFormat`] from a string like `"bc7"`,
 //! `"intel_bc7"`, or `"rgba8unorm"`.
+//!
+//! # Feature flags
+//!
+//! Each encoder backend is an independent feature, all enabled by default:
+//! `encoder-bc7enc`, `encoder-intel`, `encoder-etcpak`, `encoder-amd`, and
+//! `encoder-astcenc`. `ispc-prebuilt` (default) links prebuilt ISPC kernels;
+//! `ispc-build-from-source` compiles them instead and requires `ispc` on
+//! `PATH` — enable exactly one of the two. The default-off `rayon` feature
+//! parallelizes compression within each image on the active Rayon pool.
 
 /// Compile-checks the Rust code blocks in `README.md` as doctests so the
 /// library example there cannot drift out of sync with the current API.

@@ -6,80 +6,44 @@ This document describes how to publish a new release of `ctt`.
 
 - Push access to the default branch
 - A crates.io API token with publish rights for all workspace crates
-- `gh` CLI installed and authenticated (for creating the GitHub release)
+- Cargo 1.90+ (for workspace publishing)
 
 ## Steps
 
-### 1. Determine the new version
+Pick the new version number following cargo semver conventions. For this
+document, we'll use `X.Y.Z` as a placeholder.
 
-Pick the new version number following cargo semver conventions. For this document,
-we'll use `X.Y.Z` as a placeholder.
+### 1. Update CHANGELOG.md
 
-### 2. Update CHANGELOG.md
+Three edits:
 
-**a) Add the new version to the Table of Contents:**
+- Add `- [vX.Y.Z](#vXYZ)` to the Table of Contents, directly below the
+  `Unreleased` entry. (The anchor is the version with dots removed,
+  e.g. `v0.2.0` -> `#v020`.)
+- Add a `## vX.Y.Z` heading below `## Unreleased`, followed by
+  `Released YYYY-MM-DD`, and move all unreleased items under it.
+- In the `## Diffs` section at the bottom, point the `Unreleased` link at
+  `vX.Y.Z...HEAD` and add a new
+  `- [vX.Y.Z](https://github.com/cwfitzgerald/ctt/compare/vPREVIOUS...vX.Y.Z)`
+  entry below it.
 
-Find the line:
-```
-- [Unreleased](#unreleased)
-```
-Add a new entry directly below it:
-```
-- [vX.Y.Z](#vXYZ)
-```
-(The anchor is the version with dots removed, e.g. `v0.2.0` -> `#v020`)
+### 2. Update Cargo.toml
 
-**b) Add a version heading under Unreleased:**
+Set `version` in `[workspace.package]` to `X.Y.Z`, and update the `version`
+fields of the intra-workspace entries in `[workspace.dependencies]` (the
+`ctt*` and `ispc-build-utils` crates) if the major/minor changed.
 
-Find:
-```
-## Unreleased
-```
-Add a blank line and a new version section below it, moving all existing unreleased
-items under the new heading:
-```
-## Unreleased
-
-## vX.Y.Z
-
-Released YYYY-MM-DD
-
-- (move all previously unreleased items here)
-```
-
-**c) Update the Diffs section at the bottom:**
-
-Find the existing unreleased diff link:
-```
-- [Unreleased](https://github.com/cwfitzgerald/ctt/compare/vPREVIOUS...HEAD)
-```
-Update it and add a new entry:
-```
-- [Unreleased](https://github.com/cwfitzgerald/ctt/compare/vX.Y.Z...HEAD)
-- [vX.Y.Z](https://github.com/cwfitzgerald/ctt/compare/vPREVIOUS...vX.Y.Z)
-```
-
-### 3. Update Cargo.toml
-
-Set the `version` field in `[workspace.package]` to the new version:
-```toml
-version = "X.Y.Z"
-```
-
-Update any intra-workspace dependency versions as needed (e.g. `ctt`, `ctt-intel-texture-compressor`, `ctt-bc7enc-rdo` entries in `[workspace.dependencies]`).
-
-### 4. Update README.md
-
-Update any version references (dependency snippets, compatibility tables, etc.)
-to reflect the new version.
-
-### 5. Commit and tag
+### 3. Commit, tag, and push
 
 ```bash
 jj commit -m "Release vX.Y.Z"
-jj tag create vX.Y.Z
+jj bookmark move trunk --to @-
+jj tag set vX.Y.Z -r @-
 jj git push
+git push origin vX.Y.Z
 ```
+
+(`jj git push` pushes the bookmark but not tags, hence the extra `git push`.)
 
 Pushing the `vX.Y.Z` tag triggers `.github/workflows/publish.yml`. That
 workflow runs CI, builds the release binaries (CLI + C API) for every target
@@ -90,43 +54,22 @@ attached (`generate_release_notes: true`).
 > tag only produces the GitHub release and binaries. Publishing the crates is
 > the separate manual step below.
 
-### 6. Publish to crates.io
-
-This is a virtual workspace, so a bare `cargo publish` does not work — each
-crate must be published individually with `-p`, and they must go out in
-dependency order so every crate's dependencies already exist on crates.io when
-its verification build runs. Cargo waits for each freshly published crate to
-become available in the index, so the commands can be run back-to-back.
-
-Publish in this order:
+### 4. Publish to crates.io
 
 ```bash
-# 1. Leaf build utility (build-dependency of the prebuilt crates)
-cargo publish -p ispc-build-utils
-
-# 2. Prebuilt ISPC static-library crates
-cargo publish -p ctt-intel-texture-compressor-prebuilt
-cargo publish -p ctt-bc7enc-rdo-prebuilt
-
-# 3. Encoder binding crates
-cargo publish -p ctt-intel-texture-compressor
-cargo publish -p ctt-bc7enc-rdo
-cargo publish -p ctt-astcenc
-cargo publish -p ctt-compressonator
-cargo publish -p ctt-etcpak
-
-# 4. Core library
-cargo publish -p ctt
-
-# 5. Front-end crates
-cargo publish -p ctt-cli
-cargo publish -p ctt-c-api
+cargo publish --workspace
 ```
 
-The default (`prebuilt`) verification build links the shipped static libraries,
-so `ispc` does not need to be on `PATH` to publish.
+Cargo publishes every publishable crate in dependency order, waiting for each
+one to appear in the index before publishing its dependents. `xtask` and
+`regen-test-data` are `publish = false` and are skipped automatically.
+(`--workspace` is required because this is a virtual workspace.)
 
-### 7. Post-release
+The default (`prebuilt`) verification build links the static libraries
+committed under each prebuilt crate's `bins/`, so `ispc` does not need to be
+on `PATH` to publish.
+
+### 5. Post-release
 
 Verify:
 - [ ] The crates are visible at https://crates.io/crates/ctt/X.Y.Z

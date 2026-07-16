@@ -2,7 +2,7 @@
 
 [![docs.rs](https://img.shields.io/docsrs/ctt)](https://docs.rs/ctt)
 
-A Rust library with [C bindings](#c-api), and CLI for GPU texture compression. ctt provides a unified interface over multiple encoder backends.
+A Rust library with [C bindings](#c-api) and CLI for GPU texture compression. ctt provides a unified interface over multiple encoder backends.
 
 ## Encoders
 
@@ -51,9 +51,9 @@ astcenc    5            astc
 | EAC RG | `eac_rg` | Two channel 11-bit. |
 | ASTC | `astc_WxH` | Adaptive scalable texture compression. Variable block sizes (4x4 to 12x12). |
 
-All formats support quality presets from `ultra-fast` to `very-slow` where the encoder supports them.
+Compression accepts a quality preset from `ultra-fast` to `very-slow` (default `basic`); each encoder maps presets onto its native effort levels.
 
-Uncompressed formats are also supported using WebGPU names (e.g. `rgba8unorm`) or Vulkan names (e.g. `r8g8b8a8_unorm`).
+Uncompressed formats are also supported using WebGPU names (e.g. `rgba8unorm`, `rgb10a2unorm`) or Vulkan names (e.g. `r8g8b8a8_unorm`, `e5b9g9r9_ufloat_pack32`).
 
 ## Output containers
 

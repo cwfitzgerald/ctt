@@ -33,6 +33,8 @@ Per Keep a Changelog there are 6 main categories of changes:
 - CI now builds a matrix of encoder feature combinations, catching feature/link breakage.
 - README documents 2D-array assembly, cubemap arrays, 3D/volume passthrough, `--zlib` supercompression, and the per-encoder `--<encoder>-opts` / `--help-encoder` flags.
 - Feature-gated intra-image compression parallelism. The default-off Rust `rayon` feature uses the active Rayon pool; the CLI adds `--threads`, and the C API adds the process-wide `ctt_set_thread_count` configuration.
+- Conversion support for the packed 32-bit formats `E5B9G9R9_UFLOAT`, `B10G11R11_UFLOAT`, and `A2B10G10R10`/`A2R10G10B10` (unorm, snorm, uint, sint), with scalar, SSE4.1, AVX2, AVX-512, and NEON load/store kernels.
+- C API: `ctt_set_log_callback` and `ctt_set_log_level` deliver the library's log output to a caller-supplied callback.
 
 ### Changed
 
@@ -43,6 +45,8 @@ Per Keep a Changelog there are 6 main categories of changes:
 - Converting to an alpha-less format preserves straight-alpha RGB values by default; requesting premultiplied output still bakes alpha into RGB, and output alpha metadata now matches the requested mode.
 - `ctt-intel-texture-compressor` and `ctt-bc7enc-rdo` emit a clear `compile_error!` when built without an ISPC backend (`prebuilt` or `build-from-source`) instead of failing at link time.
 - The README library example and the crate-level quick start are now compile-checked doctests in CI.
+- The in-place sRGB OETF/EOTF passes now dispatch to SSE4.1/AVX2/AVX-512/NEON kernels.
+- Third-party C/C++ sources are vendored from pinned upstream commits recorded in `vendor.lock`; `cargo xtask vendor` re-vendors or updates them.
 
 ### Removed
 
@@ -68,7 +72,6 @@ Per Keep a Changelog there are 6 main categories of changes:
 - C API: Rust panics in decode/convert/encode entry points are contained at the FFI boundary and reported as `CTT_STATUS_INTERNAL` instead of aborting the host process.
 - C API: documented the enum/bool validity contract (out-of-range values are undefined behavior) and the zero-initialization guarantee in the generated header.
 - **CLI:** I/O errors now include the file path; the CLI refuses to overwrite an input file with the output; `--cubemap-layout` errors when combined with multiple inputs instead of being silently ignored.
-- README: fixed the stale (pre-0.4) library example and corrected the documented MSRV to 1.90; RELEASE.md now describes the actual publish process.
 
 ### Security
 
