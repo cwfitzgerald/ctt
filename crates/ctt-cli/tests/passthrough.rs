@@ -57,47 +57,70 @@ fn assert_uncompressed_ktx2_passthrough(format: Format, color_space: ColorSpace)
     );
 }
 
-/// BC7 KTX2 in → KTX2 out (no `-f`): output bytes must match input bytes
-/// exactly. Container metadata (linear color space) flows through without
-/// the user needing to pass `--input-color-space`.
+/// BC7 KTX2 in → KTX2 out (no `-f`): passthrough must be byte-stable.
+/// Container metadata (linear color space) flows through without the user
+/// needing to pass `--input-color-space`.
+///
+/// The checked-in fixture was written by an older ctt whose `KTXwriter`
+/// entry embeds that version, so the first pass rewrites the writer stamp.
+/// Byte-identity is asserted between two consecutive passes instead of
+/// against the fixture; strict fixture byte-identity lives in the
+/// synthesized-input tests above.
 #[test]
-fn bc7_ktx2_to_ktx2_byte_equal() {
+fn bc7_ktx2_to_ktx2_byte_stable() {
     let f = TestFixture::new();
     let input = f.data_file("bc7_4x4.ktx2");
-    let output = f.output_file("out.ktx2");
+    let pass1 = f.output_file("pass1.ktx2");
+    let pass2 = f.output_file("pass2.ktx2");
 
     run_cli([
         "ctt",
         input.to_str().unwrap(),
         "-o",
-        output.to_str().unwrap(),
+        pass1.to_str().unwrap(),
+    ])
+    .expect("run succeeded");
+    run_cli([
+        "ctt",
+        pass1.to_str().unwrap(),
+        "-o",
+        pass2.to_str().unwrap(),
     ])
     .expect("run succeeded");
 
     assert_eq!(
-        read(&input),
-        read(&output),
+        read(&pass1),
+        read(&pass2),
         "passthrough must be byte-identical"
     );
 }
 
-/// RGBA8 sRGB KTX2 in → KTX2 out: byte-identical when the container
-/// metadata is honored (the default).
+/// RGBA8 sRGB KTX2 in → KTX2 out: byte-stable when the container
+/// metadata is honored (the default). Two passes, as above, because the
+/// fixture's `KTXwriter` entry embeds the ctt version that wrote it.
 #[test]
-fn rgba8_srgb_ktx2_to_ktx2_byte_equal() {
+fn rgba8_srgb_ktx2_to_ktx2_byte_stable() {
     let f = TestFixture::new();
     let input = f.data_file("rgba8_16x16_srgb.ktx2");
-    let output = f.output_file("out.ktx2");
+    let pass1 = f.output_file("pass1.ktx2");
+    let pass2 = f.output_file("pass2.ktx2");
 
     run_cli([
         "ctt",
         input.to_str().unwrap(),
         "-o",
-        output.to_str().unwrap(),
+        pass1.to_str().unwrap(),
+    ])
+    .expect("run succeeded");
+    run_cli([
+        "ctt",
+        pass1.to_str().unwrap(),
+        "-o",
+        pass2.to_str().unwrap(),
     ])
     .expect("run succeeded");
 
-    assert_eq!(read(&input), read(&output));
+    assert_eq!(read(&pass1), read(&pass2));
 }
 
 /// KTX2 cubemap input → KTX2 out (no `--cubemap`): the cubemap nature

@@ -33,7 +33,17 @@ Set `version` in `[workspace.package]` to `X.Y.Z`, and update the `version`
 fields of the intra-workspace entries in `[workspace.dependencies]` (the
 `ctt*` and `ispc-build-utils` crates) if the major/minor changed.
 
-### 3. Commit, tag, and push
+### 3. Run the test suite
+
+```bash
+cargo nextest run --workspace
+```
+
+The version bump itself can break tests (anything sensitive to
+`CARGO_PKG_VERSION`, e.g. KTX2 `KTXwriter` metadata), so run this after the
+bump and before pushing anything.
+
+### 4. Commit, tag, and push
 
 ```bash
 jj commit -m "Release vX.Y.Z"
@@ -54,7 +64,7 @@ attached (`generate_release_notes: true`).
 > tag only produces the GitHub release and binaries. Publishing the crates is
 > the separate manual step below.
 
-### 4. Publish to crates.io
+### 5. Publish to crates.io
 
 ```bash
 cargo publish --workspace
@@ -69,7 +79,7 @@ The default (`prebuilt`) verification build links the static libraries
 committed under each prebuilt crate's `bins/`, so `ispc` does not need to be
 on `PATH` to publish.
 
-### 5. Post-release
+### 6. Post-release
 
 Verify:
 - [ ] The crates are visible at https://crates.io/crates/ctt/X.Y.Z
