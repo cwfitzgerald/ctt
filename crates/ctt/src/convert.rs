@@ -5,10 +5,10 @@ use crate::encoders::Quality;
 use crate::error::{Error, Result};
 use crate::format::TargetFormat;
 use crate::processing::{
-    self, Buffer, PipelineOutput, Swizzle, Variant, encode, load, mipmap, passthrough, store,
-    swizzle,
+    self, Buffer, PipelineOutput, Swizzle, Variant, encode, load, map_nested, mipmap, par_map,
+    passthrough, store, swizzle,
 };
-use crate::surface::{ColorSpace, Image};
+use crate::surface::{ColorSpace, Image, Surface};
 use crate::vk_format::FormatExt;
 
 /// Output container format.
@@ -238,6 +238,23 @@ fn alpha_less_load_store(target_alpha: AlphaMode, src_alpha: AlphaMode) -> (Alph
     }
 }
 
+/// Pick the `(load, store)` alpha modes for one surface. An alpha-bearing
+/// final target converts directly from the surface's mode to the target's.
+/// An alpha-less final target must not force the premultiplied round-trip —
+/// it zeros RGB wherever alpha=0 — so it applies only the single direct
+/// conversion from [`alpha_less_load_store`].
+fn load_store_alpha(
+    final_has_alpha: bool,
+    target_alpha: AlphaMode,
+    surface_alpha: AlphaMode,
+) -> (AlphaMode, AlphaMode) {
+    if final_has_alpha {
+        (surface_alpha, target_alpha)
+    } else {
+        alpha_less_load_store(target_alpha, surface_alpha)
+    }
+}
+
 /// Resolve the final output format and optional encoder step from settings.
 ///
 /// Returns the format the store step should produce (= encoder input for
@@ -274,69 +291,64 @@ fn convert_f32(
         .unwrap_or(input_base.color_space);
     let target_alpha = settings.output_alpha.unwrap_or(input_base.alpha);
 
-    let mut out_layers = Vec::with_capacity(image.surfaces.len());
-    for layer in image.surfaces {
-        profiling::scope!("convert_f32_layer");
-
-        let mips = if settings.mipmap {
+    let out_layers = if settings.mipmap {
+        // Layers run in parallel; within a layer, loads and stores of
+        // individual mips run in parallel around the inherently serial
+        // level-from-previous-level resize chain.
+        par_map(image.surfaces, |layer| {
+            profiling::scope!("convert_f32_layer");
             let target_count = settings
                 .mipmap_count
                 .unwrap_or_else(|| mipmap::full_mip_count(layer[0].width, layer[0].height));
-            let mut bufs = Vec::with_capacity(layer.len().min(target_count));
-            let mut store_alphas = Vec::with_capacity(bufs.capacity());
-            for mut surface in layer.into_iter().take(target_count) {
-                // An alpha-less final target must not force the premultiplied
-                // round-trip: it zeros RGB wherever alpha=0. Apply only the
-                // single direct conversion the effective output mode requires.
-                let (load_alpha, store_alpha) = if final_has_alpha {
-                    (surface.alpha, target_alpha)
-                } else {
-                    alpha_less_load_store(target_alpha, surface.alpha)
-                };
-                surface.alpha = load_alpha;
-                let mut buf: Buffer<f32> = load::load_f32(&surface)?;
-                if let Some(sw) = &settings.swizzle {
-                    swizzle::apply_f32(&mut buf, sw);
-                }
-                bufs.push(buf);
-                store_alphas.push(store_alpha);
-            }
+            let loaded = par_map(
+                layer
+                    .into_iter()
+                    .take(target_count)
+                    .collect::<Vec<Surface>>(),
+                |mut surface| {
+                    let (load_alpha, store_alpha) =
+                        load_store_alpha(final_has_alpha, target_alpha, surface.alpha);
+                    surface.alpha = load_alpha;
+                    let mut buf: Buffer<f32> = load::load_f32(&surface)?;
+                    if let Some(sw) = &settings.swizzle {
+                        swizzle::apply_f32(&mut buf, sw);
+                    }
+                    Ok((buf, store_alpha))
+                },
+            )?;
+            let (bufs, mut store_alphas): (Vec<_>, Vec<_>) = loaded.into_iter().unzip();
             let generated_store_alpha = *store_alphas
                 .last()
                 .ok_or_else(|| Error::UnsupportedFormat("mipmap count must be >= 1".into()))?;
             let bufs = mipmap::complete(bufs, settings.mipmap_filter, settings.mipmap_count)?;
             store_alphas.resize(bufs.len(), generated_store_alpha);
-            let mut mips = Vec::with_capacity(bufs.len());
-            for (b, store_alpha) in bufs.into_iter().zip(store_alphas) {
-                let mut surface = store::store_f32(b, target_fmt, target_color_space, store_alpha)?;
-                surface.alpha = target_alpha;
-                mips.push(surface);
+            par_map(
+                bufs.into_iter().zip(store_alphas).collect(),
+                |(b, store_alpha)| {
+                    let mut surface =
+                        store::store_f32(b, target_fmt, target_color_space, store_alpha)?;
+                    surface.alpha = target_alpha;
+                    Ok(surface)
+                },
+            )
+        })?
+    } else {
+        // Convert every existing mip level (matching the f64/integer
+        // paths) so an input mip chain isn't silently dropped.
+        map_nested(image.surfaces, |mut base| {
+            profiling::scope!("convert_f32_surface");
+            let (load_alpha, store_alpha) =
+                load_store_alpha(final_has_alpha, target_alpha, base.alpha);
+            base.alpha = load_alpha;
+            let mut buf: Buffer<f32> = load::load_f32(&base)?;
+            if let Some(sw) = &settings.swizzle {
+                swizzle::apply_f32(&mut buf, sw);
             }
-            mips
-        } else {
-            // Convert every existing mip level (matching the f64/integer
-            // paths) so an input mip chain isn't silently dropped.
-            let mut mips = Vec::with_capacity(layer.len());
-            for mut base in layer {
-                let (load_alpha, store_alpha) = if final_has_alpha {
-                    (base.alpha, target_alpha)
-                } else {
-                    alpha_less_load_store(target_alpha, base.alpha)
-                };
-                base.alpha = load_alpha;
-                let mut buf: Buffer<f32> = load::load_f32(&base)?;
-                if let Some(sw) = &settings.swizzle {
-                    swizzle::apply_f32(&mut buf, sw);
-                }
-                let mut surface =
-                    store::store_f32(buf, target_fmt, target_color_space, store_alpha)?;
-                surface.alpha = target_alpha;
-                mips.push(surface);
-            }
-            mips
-        };
-        out_layers.push(mips);
-    }
+            let mut surface = store::store_f32(buf, target_fmt, target_color_space, store_alpha)?;
+            surface.alpha = target_alpha;
+            Ok(surface)
+        })?
+    };
 
     let processed = Image {
         surfaces: out_layers,
@@ -370,29 +382,18 @@ fn convert_f64(
         .unwrap_or(input_base.color_space);
     let target_alpha = settings.output_alpha.unwrap_or(input_base.alpha);
 
-    let mut out_layers = Vec::with_capacity(image.surfaces.len());
-    for layer in image.surfaces {
-        profiling::scope!("convert_f64_layer");
-        let mut mips = Vec::with_capacity(layer.len());
-        for mut base in layer {
-            // See `convert_f32`: an alpha-less target skips the destructive
-            // premultiplied round-trip.
-            let (load_alpha, store_alpha) = if final_has_alpha {
-                (base.alpha, target_alpha)
-            } else {
-                alpha_less_load_store(target_alpha, base.alpha)
-            };
-            base.alpha = load_alpha;
-            let mut buf = load::load_f64(&base)?;
-            if let Some(sw) = &settings.swizzle {
-                swizzle::apply_f64(&mut buf, sw);
-            }
-            let mut surface = store::store_f64(buf, target_fmt, target_color_space, store_alpha)?;
-            surface.alpha = target_alpha;
-            mips.push(surface);
+    let out_layers = map_nested(image.surfaces, |mut base| {
+        profiling::scope!("convert_f64_surface");
+        let (load_alpha, store_alpha) = load_store_alpha(final_has_alpha, target_alpha, base.alpha);
+        base.alpha = load_alpha;
+        let mut buf = load::load_f64(&base)?;
+        if let Some(sw) = &settings.swizzle {
+            swizzle::apply_f64(&mut buf, sw);
         }
-        out_layers.push(mips);
-    }
+        let mut surface = store::store_f64(buf, target_fmt, target_color_space, store_alpha)?;
+        surface.alpha = target_alpha;
+        Ok(surface)
+    })?;
 
     let processed = Image {
         surfaces: out_layers,
@@ -417,19 +418,14 @@ fn convert_u32(
     check_uint_unsupported(&settings, input_alpha)?;
     let target_alpha = settings.output_alpha.unwrap_or(input_alpha);
 
-    let mut out_layers = Vec::with_capacity(image.surfaces.len());
-    for layer in image.surfaces {
-        profiling::scope!("convert_u32_layer");
-        let mut mips = Vec::with_capacity(layer.len());
-        for base in layer {
-            let mut buf = load::load_u32(&base)?;
-            if let Some(sw) = &settings.swizzle {
-                swizzle::apply_u32(&mut buf, sw);
-            }
-            mips.push(store::store_u32(buf, target_fmt, target_alpha)?);
+    let out_layers = map_nested(image.surfaces, |base| {
+        profiling::scope!("convert_u32_surface");
+        let mut buf = load::load_u32(&base)?;
+        if let Some(sw) = &settings.swizzle {
+            swizzle::apply_u32(&mut buf, sw);
         }
-        out_layers.push(mips);
-    }
+        store::store_u32(buf, target_fmt, target_alpha)
+    })?;
 
     let processed = Image {
         surfaces: out_layers,
@@ -455,19 +451,14 @@ fn convert_u64(
     check_uint_unsupported(&settings, input_alpha)?;
     let target_alpha = settings.output_alpha.unwrap_or(input_alpha);
 
-    let mut out_layers = Vec::with_capacity(image.surfaces.len());
-    for layer in image.surfaces {
-        profiling::scope!("convert_u64_layer");
-        let mut mips = Vec::with_capacity(layer.len());
-        for base in layer {
-            let mut buf = load::load_u64(&base)?;
-            if let Some(sw) = &settings.swizzle {
-                swizzle::apply_u64(&mut buf, sw);
-            }
-            mips.push(store::store_u64(buf, target_fmt, target_alpha)?);
+    let out_layers = map_nested(image.surfaces, |base| {
+        profiling::scope!("convert_u64_surface");
+        let mut buf = load::load_u64(&base)?;
+        if let Some(sw) = &settings.swizzle {
+            swizzle::apply_u64(&mut buf, sw);
         }
-        out_layers.push(mips);
-    }
+        store::store_u64(buf, target_fmt, target_alpha)
+    })?;
 
     let processed = Image {
         surfaces: out_layers,
