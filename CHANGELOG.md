@@ -26,6 +26,7 @@ Per Keep a Changelog there are 6 main categories of changes:
 ### Changed
 
 - With the `rayon` feature, all mips and layers of an image now encode concurrently instead of one surface at a time, improving worker utilization on images with many small surfaces.
+- CLI: input images are read and decoded in parallel. `--threads` now governs input decoding as well as compression.
 
 ## v0.5.0
 

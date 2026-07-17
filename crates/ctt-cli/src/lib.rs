@@ -88,13 +88,22 @@ pub fn run(args: Args) -> Result<(), Box<dyn std::error::Error>> {
     let standard_image_color_space = input_color_space_override.unwrap_or(ColorSpace::Srgb);
     let standard_image_alpha = input_alpha_override.unwrap_or(AlphaMode::Straight);
 
+    // With the default of zero workers, run on Rayon's lazily initialized
+    // global pool instead of paying for a dedicated one.
+    let pool = match args.threads {
+        0 => None,
+        n => Some(build_thread_pool(n)?),
+    };
+
     log::info!("Loading {} input image(s)", args.input.len());
-    let images = load_images(
-        &args.input,
-        overrides,
-        standard_image_color_space,
-        standard_image_alpha,
-    )?;
+    let images = install_in(&pool, || {
+        load_images(
+            &args.input,
+            overrides,
+            standard_image_color_space,
+            standard_image_alpha,
+        )
+    })?;
 
     let image = if args.cubemap {
         let layout = args.cubemap_layout.unwrap_or(CubemapLayoutArg::Cross);
@@ -151,12 +160,7 @@ pub fn run(args: Args) -> Result<(), Box<dyn std::error::Error>> {
         mipmap_filter: map_mipmap_filter(args.mipmap_filter),
     };
 
-    // With the default of zero workers, convert on Rayon's lazily initialized
-    // global pool instead of paying for a dedicated one.
-    let converted = match args.threads {
-        0 => ctt::convert(image, settings),
-        n => build_thread_pool(n)?.install(|| ctt::convert(image, settings)),
-    };
+    let converted = install_in(&pool, || ctt::convert(image, settings));
     let output_bytes = match converted? {
         PipelineOutput::Encoded(bytes) => bytes,
         PipelineOutput::Raw(_) => {
@@ -179,7 +183,16 @@ fn build_thread_pool(threads: usize) -> Result<rayon::ThreadPool, Error> {
     rayon::ThreadPoolBuilder::new()
         .num_threads(threads)
         .build()
-        .map_err(|e| Error::Compression(format!("failed to create compression thread pool: {e}")))
+        .map_err(|e| Error::Compression(format!("failed to create thread pool: {e}")))
+}
+
+/// Run `f` on the dedicated `--threads` pool when one exists, otherwise on
+/// the current (global) pool.
+fn install_in<T: Send>(pool: &Option<rayon::ThreadPool>, f: impl FnOnce() -> T + Send) -> T {
+    match pool {
+        Some(pool) => pool.install(f),
+        None => f(),
+    }
 }
 
 /// Error out if `output` refers to the same file as any input path, so we
@@ -366,50 +379,55 @@ pub fn encoder_table_string() -> String {
     out
 }
 
+/// Read and decode every input image, in parallel on the active Rayon pool.
 fn load_images(
     paths: &[std::path::PathBuf],
     overrides: InputOverrides,
     color_space: ColorSpace,
     alpha: AlphaMode,
-) -> Result<Vec<Image>, Box<dyn std::error::Error>> {
+) -> Result<Vec<Image>, Error> {
+    use rayon::prelude::*;
+
     profiling::scope!("load_images");
-    let mut images = Vec::with_capacity(paths.len());
-    for path in paths {
-        profiling::scope!("load image", &path.display().to_string());
-        let data = fs::read(path)
-            .map_err(|e| Error::InputDecoding(format!("failed to read {}: {e}", path.display())))?;
+    paths
+        .par_iter()
+        .map(|path| {
+            profiling::scope!("load image", &path.display().to_string());
+            let data = fs::read(path).map_err(|e| {
+                Error::InputDecoding(format!("failed to read {}: {e}", path.display()))
+            })?;
 
-        let image = if let Some(img) = decode_container(&data, overrides)? {
-            img
-        } else {
-            let surface = load_standard_image(&data, color_space, alpha)?;
-            Image {
-                surfaces: vec![vec![surface]],
-                kind: TextureKind::Texture2D,
-            }
-        };
+            let image = if let Some(img) = decode_container(&data, overrides)? {
+                img
+            } else {
+                let surface = load_standard_image(&data, color_space, alpha)?;
+                Image {
+                    surfaces: vec![vec![surface]],
+                    kind: TextureKind::Texture2D,
+                }
+            };
 
-        let first = &image.surfaces[0][0];
-        log::debug!(
-            "Loaded {}: {}x{}, {:?}, {} layer(s), {} mip(s)",
-            path.display(),
-            first.width,
-            first.height,
-            first.format,
-            image.surfaces.len(),
-            image.surfaces[0].len(),
-        );
-        images.push(image);
-    }
-    Ok(images)
+            let first = &image.surfaces[0][0];
+            log::debug!(
+                "Loaded {}: {}x{}, {:?}, {} layer(s), {} mip(s)",
+                path.display(),
+                first.width,
+                first.height,
+                first.format,
+                image.surfaces.len(),
+                image.surfaces[0].len(),
+            );
+            Ok(image)
+        })
+        .collect()
 }
 
 fn load_standard_image(
     data: &[u8],
     color_space: ColorSpace,
     alpha: AlphaMode,
-) -> Result<Surface, Box<dyn std::error::Error>> {
-    let img = image::load_from_memory(data)?;
+) -> Result<Surface, Error> {
+    let img = image::load_from_memory(data).map_err(|e| Error::InputDecoding(e.to_string()))?;
 
     let surface = match img {
         image::DynamicImage::ImageLuma8(buf) => {
