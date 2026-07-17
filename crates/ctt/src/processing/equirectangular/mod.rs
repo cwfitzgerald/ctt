@@ -18,21 +18,19 @@
 //! back into the LOD, which over-blurs only a few texels at the very center
 //! of the ±Y faces.
 //!
-//! Every kernel (serial and SIMD) computes the same algorithm; the SIMD
-//! paths approximate `atan2` and `log2` with polynomials whose error is far
-//! below one source texel (see `ATAN_COEFFS` / `LOG2_COEFFS`).
-
-#[cfg(target_arch = "aarch64")]
-pub(crate) mod neon;
-#[cfg(target_arch = "x86_64")]
-pub(crate) mod x86;
+//! The projection runs entirely through the width-generic kernels in
+//! [`kernels::equirectangular`](crate::processing::kernels::equirectangular)
+//! (scalar `Fallback` included, so every architecture is covered); they
+//! approximate `atan2` and `log2` with polynomials whose error is far below one
+//! source texel (see [`ATAN_COEFFS`] / [`LOG2_COEFFS`]). This module holds the
+//! geometry, the public types, and the band scheduler the kernels drive.
 
 use std::f32::consts::PI;
 
 use crate::error::{Error, Result};
+use crate::processing::kernels::equirectangular as kernel;
 
 use super::buffer::Buffer;
-use super::dispatch::dispatch_simd;
 use super::mipmap::{self, MipmapFilter};
 
 /// Cap on anisotropic taps per output texel: `2^MAX_ANISO_LOG2 = 16`.
@@ -227,70 +225,6 @@ pub(crate) struct TexelCmd {
     pub taps_log2: u32,
 }
 
-/// One prefiltered level, unpacked for the SIMD kernels' narrow phase.
-#[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
-pub(crate) struct LevelInfo<'a> {
-    pub px: &'a [[f32; 4]],
-    pub w: i32,
-    pub h: i32,
-    pub wf: f32,
-    pub hf: f32,
-}
-
-#[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
-pub(crate) fn level_table(pyr: &EquirectangularPyramid) -> Vec<LevelInfo<'_>> {
-    pyr.levels()
-        .iter()
-        .map(|l| LevelInfo {
-            px: &l.pixels,
-            w: l.width as i32,
-            h: l.height as i32,
-            wf: l.width as f32,
-            hf: l.height as f32,
-        })
-        .collect()
-}
-
-/// Wide-phase output for one SIMD lane bundle, spilled to the stack for the
-/// narrow phase.
-#[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
-pub(crate) struct LaneCmds<const N: usize> {
-    pub u: [f32; N],
-    pub v: [f32; N],
-    pub lod: [f32; N],
-    pub step_u: [f32; N],
-    pub step_v: [f32; N],
-    pub taps_log2: [i32; N],
-}
-
-#[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
-impl<const N: usize> LaneCmds<N> {
-    #[inline]
-    pub fn zeroed() -> Self {
-        Self {
-            u: [0.0; N],
-            v: [0.0; N],
-            lod: [0.0; N],
-            step_u: [0.0; N],
-            step_v: [0.0; N],
-            taps_log2: [0; N],
-        }
-    }
-
-    /// Reassemble lane `i` as a scalar [`TexelCmd`] for the narrow phase.
-    #[inline]
-    pub fn get(&self, i: usize) -> TexelCmd {
-        TexelCmd {
-            u: self.u[i],
-            v: self.v[i],
-            lod: self.lod[i],
-            step_u: self.step_u[i],
-            step_v: self.step_v[i],
-            taps_log2: self.taps_log2[i] as u32,
-        }
-    }
-}
-
 /// Constants shared by every texel of one projection run.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct ProjectParams {
@@ -321,7 +255,8 @@ impl ProjectParams {
 }
 
 /// Project an equirectangular pyramid onto the six cube faces (`face_size` ×
-/// `face_size` each), dispatching to the best available SIMD kernel.
+/// `face_size` each), dispatching to the best available SIMD level (scalar
+/// fallback included, so this runs on every architecture).
 pub fn project_f32(
     pyr: &EquirectangularPyramid,
     face_size: u32,
@@ -329,16 +264,7 @@ pub fn project_f32(
 ) -> Result<[Buffer<f32>; 6]> {
     profiling::scope!("equirectangular::project_f32");
     validate_face_size(face_size)?;
-    dispatch_simd! {
-        x86_64: {
-            avx512: Ok(x86::project_f32_avx512(pyr, face_size, orientation)),
-            avx2_fma: Ok(x86::project_f32_avx2_fma(pyr, face_size, orientation)),
-        },
-        aarch64: {
-            neon: Ok(neon::project_f32_neon(pyr, face_size, orientation)),
-        },
-    }
-    Ok(project_f32_serial(pyr, face_size, orientation))
+    Ok(kernel::project_f32(pyr, face_size, orientation))
 }
 
 /// The Vulkan face bases with the panorama orientation baked in: the
@@ -352,27 +278,13 @@ pub(crate) fn oriented_bases(orientation: EquirectangularOrientation) -> [FaceBa
     })
 }
 
-fn validate_face_size(face_size: u32) -> Result<()> {
+pub(crate) fn validate_face_size(face_size: u32) -> Result<()> {
     if face_size == 0 || face_size > MAX_FACE_SIZE {
         return Err(Error::InvalidDimensions(format!(
             "cubemap face size must be in 1..={MAX_FACE_SIZE}, got {face_size}"
         )));
     }
     Ok(())
-}
-
-/// Serial reference projection.
-///
-/// **Not part of the public API.** Exposed so benchmarks and tests can
-/// compare the scalar implementation against the SIMD kernels.
-#[doc(hidden)]
-pub fn project_f32_serial(
-    pyr: &EquirectangularPyramid,
-    face_size: u32,
-    orientation: EquirectangularOrientation,
-) -> [Buffer<f32>; 6] {
-    profiling::scope!("equirectangular::project_f32_serial");
-    project_with(pyr, face_size, orientation, project_band_serial)
 }
 
 /// Run one projection: allocate the six faces and hand every
@@ -427,175 +339,94 @@ where
     faces
 }
 
-/// Scalar projection of one row band of one face.
-pub(crate) fn project_band_serial(
-    pyr: &EquirectangularPyramid,
-    basis: &FaceBasis,
-    face_size: u32,
-    y_start: u32,
-    out: &mut [[f32; 4]],
-) {
-    let params = ProjectParams::new(pyr, face_size);
-    let inv_n = 1.0 / face_size as f32;
-    for (r, row) in out.chunks_exact_mut(face_size as usize).enumerate() {
-        let b = (2 * (y_start + r as u32) + 1) as f32 * inv_n - 1.0;
-        for (x, px) in row.iter_mut().enumerate() {
-            let a = (2 * x + 1) as f32 * inv_n - 1.0;
-            let cmd = map_texel(basis, a, b, &params);
-            *px = sample_aniso(&pyr.levels, &cmd);
+/// Test sources and absolute property checks for the projection: every backend
+/// must satisfy the same seam-continuity and pole-averaging guarantees, so the
+/// fixtures live in one place.
+#[cfg(test)]
+pub(crate) mod test_support {
+    use std::f32::consts::PI;
+
+    use super::Buffer;
+
+    /// Face size for the seam-continuity check.
+    pub(crate) const SEAM_FACE_SIZE: u32 = 32;
+    /// Face size for the pole-averaging check.
+    pub(crate) const POLE_FACE_SIZE: u32 = 64;
+
+    /// Smooth longitude-only pattern; must cross the ±π seam (center of the
+    /// −Z face) without a jump.
+    pub(crate) fn seam_source() -> Buffer<f32> {
+        let (w, h) = (128u32, 64u32);
+        let mut pixels = Vec::with_capacity((w * h) as usize);
+        for _y in 0..h {
+            for x in 0..w {
+                let u = (x as f32 + 0.5) / w as f32;
+                let phi = (u - 0.5) * 2.0 * PI;
+                pixels.push([phi.sin() * 0.5 + 0.5, phi.cos() * 0.5 + 0.5, 0.0, 1.0]);
+            }
+        }
+        Buffer {
+            pixels,
+            width: w,
+            height: h,
         }
     }
-}
 
-/// Map one face texel (face coords `a, b ∈ [-1, 1]`) to its sample command.
-/// This is the scalar reference for the SIMD coordinate phases.
-pub(crate) fn map_texel(basis: &FaceBasis, a: f32, b: f32, p: &ProjectParams) -> TexelCmd {
-    let [ox, oy, oz] = basis.axis;
-    let [ux, uy, uz] = basis.u;
-    let [vx, vy, vz] = basis.v;
-    let x = ox + a * ux + b * vx;
-    let y = oy + a * uy + b * vy;
-    let z = oz + a * uz + b * vz;
-
-    let xz2 = x * x + z * z;
-    let hyp = xz2.sqrt();
-    let len2 = xz2 + y * y;
-
-    // Longitude φ ∈ (-π, π], colatitude θ ∈ [0, π]. Both are
-    // scale-invariant in the direction, so it is never normalized.
-    let phi = x.atan2(z);
-    let theta = hyp.atan2(y);
-    let u = phi * (0.5 / PI) + 0.5;
-    let v = theta * (1.0 / PI);
-
-    // Analytic gradients of the source coordinate (in mip-0 texels) per
-    // output texel, for both face axes. `xz2 → 0` only at the exact ±Y
-    // pole, where the footprint is genuinely unbounded; the guard keeps the
-    // math finite and the LOD clamp does the rest.
-    let inv_xz2 = 1.0 / xz2.max(f32::MIN_POSITIVE);
-    let inv_len2 = 1.0 / len2;
-    let inv_hyp = hyp * inv_xz2; // hyp/xz² = 1/hyp, reusing the guard
-    let dphi_da = (z * ux - x * uz) * inv_xz2;
-    let dphi_db = (z * vx - x * vz) * inv_xz2;
-    let dtheta_da = (y * (x * ux + z * uz) * inv_hyp - hyp * uy) * inv_len2;
-    let dtheta_db = (y * (x * vx + z * vz) * inv_hyp - hyp * vy) * inv_len2;
-
-    let gua = (dphi_da * p.ku).clamp(-GRAD_MAX, GRAD_MAX);
-    let gva = (dtheta_da * p.kv).clamp(-GRAD_MAX, GRAD_MAX);
-    let gub = (dphi_db * p.ku).clamp(-GRAD_MAX, GRAD_MAX);
-    let gvb = (dtheta_db * p.kv).clamp(-GRAD_MAX, GRAD_MAX);
-
-    // The footprint ellipse axes are the singular values of the Jacobian
-    // J = [[gua, gub], [gva, gvb]] — the face-axis gradient vectors
-    // themselves are *not* the principal axes (near the poles both are
-    // huge and nearly parallel, which would fake isotropy). For the 2×2
-    // case the singular values and the major eigenvector of J·Jᵀ have a
-    // closed form.
-    let am = gua * gua + gub * gub;
-    let bm = gva * gva + gvb * gvb;
-    let cm = gua * gva + gub * gvb;
-    let half_diff = 0.5 * (am - bm);
-    let disc = (half_diff * half_diff + cm * cm).sqrt();
-    let mean = 0.5 * (am + bm);
-    let smax2 = mean + disc;
-    let smin2 = (mean - disc).max(f32::MIN_POSITIVE);
-    // Major-axis direction: eigenvector of [[am, cm], [cm, bm]] for the
-    // larger eigenvalue, picking the numerically larger of the two
-    // equivalent forms. Degenerate (isotropic) footprints give a ~zero
-    // vector, which the guarded normalization below turns into a zero step.
-    let (dir_u, dir_v) = if am >= bm {
-        (disc + half_diff, cm)
-    } else {
-        (cm, disc - half_diff)
-    };
-    let norm2 = dir_u * dir_u + dir_v * dir_v;
-    let scale = (smax2 / norm2.max(smax2 * DIR_NORM_GUARD).max(f32::MIN_POSITIVE)).sqrt();
-    let gu = dir_u * scale;
-    let gv = dir_v * scale;
-
-    let lod_minor = 0.5 * smin2.log2();
-    let lod_major = 0.5 * smax2.max(f32::MIN_POSITIVE).log2();
-    // Power-of-two tap count covering the anisotropy ratio, capped; the
-    // remainder is folded back into the LOD.
-    let delta = (lod_major - lod_minor).max(0.0);
-    let taps_log2 = (delta.ceil() as u32).min(MAX_ANISO_LOG2);
-    let lod = (lod_minor + (delta - taps_log2 as f32).max(0.0)).clamp(0.0, p.max_lod);
-
-    // Tap step along the major gradient, converted to normalized source
-    // units and divided among the taps. One normalized unit already spans
-    // the whole source, so the clamp only tames the unbounded gradients at
-    // the exact ±Y poles (where every longitude is equivalent anyway).
-    let inv_taps = 1.0 / (1u32 << taps_log2) as f32;
-    TexelCmd {
-        u,
-        v,
-        lod,
-        step_u: (gu * p.inv_w0 * inv_taps).clamp(-1.0, 1.0),
-        step_v: (gv * p.inv_h0 * inv_taps).clamp(-1.0, 1.0),
-        taps_log2,
-    }
-}
-
-/// Accumulate the anisotropic tap line for one texel.
-pub(crate) fn sample_aniso(levels: &[Buffer<f32>], cmd: &TexelCmd) -> [f32; 4] {
-    let taps = 1u32 << cmd.taps_log2;
-    let center = 0.5 * (taps - 1) as f32;
-    let mut acc = [0.0f32; 4];
-    for k in 0..taps {
-        let t = k as f32 - center;
-        let s = sample_trilinear(
-            levels,
-            cmd.u + t * cmd.step_u,
-            cmd.v + t * cmd.step_v,
-            cmd.lod,
-        );
-        for (a, s) in acc.iter_mut().zip(s) {
-            *a += s;
+    /// Alternating columns — the worst horizontal-aliasing case.
+    pub(crate) fn stripe_source() -> Buffer<f32> {
+        let (w, h) = (256u32, 128u32);
+        let mut pixels = Vec::with_capacity((w * h) as usize);
+        for _y in 0..h {
+            for x in 0..w {
+                let u = (x as f32 + 0.5) / w as f32;
+                let stripe = if ((u * 256.0) as u32).is_multiple_of(2) {
+                    1.0
+                } else {
+                    0.0
+                };
+                pixels.push([stripe, stripe, stripe, 1.0]);
+            }
+        }
+        Buffer {
+            pixels,
+            width: w,
+            height: h,
         }
     }
-    let inv = 1.0 / taps as f32;
-    acc.map(|c| c * inv)
-}
 
-fn sample_trilinear(levels: &[Buffer<f32>], u: f32, v: f32, lod: f32) -> [f32; 4] {
-    let l0 = lod as usize;
-    let frac = lod - l0 as f32;
-    let c0 = sample_bilinear(&levels[l0], u, v);
-    if frac <= 0.0 {
-        return c0;
+    /// Adjacent texels along the −Z face equator must not jump across the seam.
+    pub(crate) fn assert_neg_z_seam_continuous(faces: &[Buffer<f32>; 6], n: u32, what: &str) {
+        let face = &faces[5]; // −Z spans the seam
+        let y = n / 2;
+        for x in 0..n - 1 {
+            let a = face.pixels[(y * n + x) as usize];
+            let b = face.pixels[(y * n + x + 1) as usize];
+            for c in 0..2 {
+                assert!(
+                    (a[c] - b[c]).abs() < 0.1,
+                    "{what}: seam jump at x={x} chan {c}: {} -> {}",
+                    a[c],
+                    b[c],
+                );
+            }
+        }
     }
-    let c1 = sample_bilinear(&levels[(l0 + 1).min(levels.len() - 1)], u, v);
-    std::array::from_fn(|i| c0[i] + (c1[i] - c0[i]) * frac)
-}
 
-/// Bilinear tap with horizontal wrap and vertical clamp. `u` may lie
-/// outside `[0, 1]` (anisotropic tap lines cross the seam); it wraps.
-fn sample_bilinear(level: &Buffer<f32>, u: f32, v: f32) -> [f32; 4] {
-    let w = level.width as i32;
-    let h = level.height as i32;
-    let up = u * level.width as f32 - 0.5;
-    let vp = v * level.height as f32 - 0.5;
-    let x0f = up.floor();
-    let y0f = vp.floor();
-    let fx = up - x0f;
-    let fy = vp - y0f;
-    let x0 = (x0f as i32).rem_euclid(w);
-    let x1 = (x0 + 1) % w;
-    let y0 = (y0f as i32).clamp(0, h - 1);
-    let y1 = (y0f as i32 + 1).clamp(0, h - 1);
-
-    let row0 = y0 as usize * w as usize;
-    let row1 = y1 as usize * w as usize;
-    let p00 = level.pixels[row0 + x0 as usize];
-    let p01 = level.pixels[row0 + x1 as usize];
-    let p10 = level.pixels[row1 + x0 as usize];
-    let p11 = level.pixels[row1 + x1 as usize];
-
-    std::array::from_fn(|i| {
-        let top = p00[i] + (p01[i] - p00[i]) * fx;
-        let bot = p10[i] + (p11[i] - p10[i]) * fx;
-        top + (bot - top) * fy
-    })
+    /// The central quarter of the +Y face looks at the pole cap; each output
+    /// texel covers many stripes, so it must converge to their mean.
+    pub(crate) fn assert_pole_region_averaged(faces: &[Buffer<f32>; 6], n: u32, what: &str) {
+        let face = &faces[2]; // +Y pole cap
+        for y in (n / 2 - 8)..(n / 2 + 8) {
+            for x in (n / 2 - 8)..(n / 2 + 8) {
+                let px = face.pixels[(y * n + x) as usize];
+                assert!(
+                    (px[0] - 0.5).abs() < 0.15,
+                    "{what}: pole texel ({x},{y}) not averaged: {}",
+                    px[0],
+                );
+            }
+        }
+    }
 }
 
 #[cfg(test)]

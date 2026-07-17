@@ -10,8 +10,8 @@ use crate::format_kind::{FormatFamily, FormatKind, classify};
 use crate::surface::{ColorSpace, Surface};
 use crate::vk_format::FormatExt;
 
-use super::alpha;
 use super::buffer::Buffer;
+use super::kernels::alpha;
 use super::store_kernels as k;
 
 /// Store a f32 buffer to a surface of `target_format`.
@@ -92,11 +92,9 @@ pub fn store_f32(
         }
     };
 
-    let bpp = target_format.bytes_per_pixel().ok_or_else(|| {
-        Error::UnsupportedFormat(format!(
-            "cannot determine bytes_per_pixel for {target_format:?}"
-        ))
-    })?;
+    let bpp = target_format
+        .bytes_per_pixel()
+        .expect("classified uncompressed kind has known bytes-per-pixel");
     let stride = buf.width * bpp as u32;
 
     Ok(Surface {
@@ -146,11 +144,9 @@ pub fn store_f64(
         }
     };
 
-    let bpp = target_format.bytes_per_pixel().ok_or_else(|| {
-        Error::UnsupportedFormat(format!(
-            "cannot determine bytes_per_pixel for {target_format:?}"
-        ))
-    })?;
+    let bpp = target_format
+        .bytes_per_pixel()
+        .expect("classified uncompressed kind has known bytes-per-pixel");
     let stride = buf.width * bpp as u32;
 
     Ok(Surface {
@@ -204,11 +200,9 @@ pub fn store_u32(
         }
     };
 
-    let bpp = target_format.bytes_per_pixel().ok_or_else(|| {
-        Error::UnsupportedFormat(format!(
-            "cannot determine bytes_per_pixel for {target_format:?}"
-        ))
-    })?;
+    let bpp = target_format
+        .bytes_per_pixel()
+        .expect("classified uncompressed kind has known bytes-per-pixel");
     let stride = buf.width * bpp as u32;
 
     Ok(Surface {
@@ -252,11 +246,9 @@ pub fn store_u64(
         }
     };
 
-    let bpp = target_format.bytes_per_pixel().ok_or_else(|| {
-        Error::UnsupportedFormat(format!(
-            "cannot determine bytes_per_pixel for {target_format:?}"
-        ))
-    })?;
+    let bpp = target_format
+        .bytes_per_pixel()
+        .expect("classified uncompressed kind has known bytes-per-pixel");
     let stride = buf.width * bpp as u32;
 
     Ok(Surface {
@@ -281,13 +273,7 @@ mod tests {
     /// the linear u16 kernel.
     #[test]
     fn u16_srgb_target_runs_oetf_pre_pass() {
-        fn srgb_oetf_exact(c: f32) -> f32 {
-            if c < 0.0031308 {
-                c * 12.92
-            } else {
-                1.055 * c.powf(1.0 / 2.4) - 0.055
-            }
-        }
+        use crate::processing::srgb_test_support::oetf_exact;
 
         // 3 pixels also exercises a SIMD kernel tail behind the dispatch.
         let lanes = [0.5f32, 0.25, 0.001, 0.5];
@@ -313,7 +299,7 @@ mod tests {
 
         for pixel in words.chunks_exact(4) {
             for c in 0..3 {
-                let want = (srgb_oetf_exact(lanes[c]) * 65535.0).round();
+                let want = (oetf_exact(lanes[c]) * 65535.0).round();
                 let got = pixel[c] as f32;
                 // Worst-case curve error is ~8e-4 ≈ 53 u16 steps.
                 assert!(

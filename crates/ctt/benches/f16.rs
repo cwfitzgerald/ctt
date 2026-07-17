@@ -1,8 +1,16 @@
 //! Micro-benchmarks for f16 ↔ f32 load/store kernels.
 //!
-//! The benchmark calls the public `load_f16_f32` / `store_f16_f32` dispatch,
-//! so swapping the kernel between the scalar and `half`-bulk paths changes
-//! what's measured. Run with `--save-baseline` on each variant and compare.
+//! These are not `processing::kernels` kernels: the f16 conversions come from the
+//! `half` crate, which converts a whole slice at once for 4-channel pixels
+//! (`load_f16_f32` / `store_f16_f32` hand the slice straight over) and per lane
+//! for 1/2-channel pixels, where lane defaults have to be filled in. So there is
+//! no level to force — each row measures one production strategy:
+//!
+//!   * `*_ch1` / `*_ch2` — the per-pixel path (sub-4-channel formats).
+//!   * `*_ch4` — the bulk-slice path.
+//!
+//! Comparing `ch4` against `ch1`/`ch2` per element is what shows the bulk path's
+//! win; run with `--save-baseline` when changing either strategy.
 //!
 //! Throughput is reported in pixels/second.
 
@@ -13,8 +21,9 @@ use ctt::bench_internals::{Buffer, load_f16_f32, store_f16_f32};
 use ctt::{AlphaMode, ColorSpace, Format, Surface};
 use half::f16;
 
-const SIDE: u32 = 1024;
-const PIXEL_COUNT: u64 = (SIDE as u64) * (SIDE as u64);
+mod common;
+
+use common::{PIXEL_COUNT, SIDE};
 
 /// Build an f16 surface with `channels` channels and the matching
 /// `Format::*_SFLOAT`. Pattern covers a range of values so neither the

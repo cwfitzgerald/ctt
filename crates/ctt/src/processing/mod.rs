@@ -3,13 +3,15 @@
 //! The public entry point is [`crate::convert::convert`]. Everything here is
 //! a collection of plain functions over [`Buffer`][buffer::Buffer] and
 //! [`Surface`][crate::surface::Surface].
+//!
+//! Every explicitly vectorized kernel lives behind [`kernels`], which is the
+//! crate's only SIMD-library boundary; see that module for the contract, which
+//! a `grep` over this tree enforces.
 
-pub(crate) mod alpha;
 pub(crate) mod buffer;
-pub(crate) mod curve_pass;
-pub(crate) mod dispatch;
 pub(crate) mod encode;
 pub(crate) mod equirectangular;
+pub(crate) mod kernels;
 pub(crate) mod load;
 pub(crate) mod load_kernels;
 pub(crate) mod mipmap;
@@ -17,8 +19,6 @@ pub(crate) mod passthrough;
 pub(crate) mod store;
 pub(crate) mod store_kernels;
 pub(crate) mod swizzle;
-#[cfg(target_arch = "x86_64")]
-pub(crate) mod x86;
 
 pub use buffer::{Buffer, Variant};
 pub use mipmap::MipmapFilter;
@@ -137,8 +137,7 @@ pub fn pick_variant(input: ktx2::Format, target: ktx2::Format) -> Option<Variant
 
 /// Check whether an input and target format are in compatible families.
 ///
-/// The new pipeline does not bridge integer ↔ float; mismatches error at
-/// settings resolution.
+/// Integer ↔ float is not bridged; mismatches error at settings resolution.
 pub fn families_compatible(input: ktx2::Format, target: ktx2::Format) -> bool {
     // sRGB-ness doesn't change the integer-vs-float decision.
     let i = classify(input, ColorSpace::Linear).map(|i| i.family);
@@ -149,6 +148,116 @@ pub fn families_compatible(input: ktx2::Format, target: ktx2::Format) -> bool {
         // routed through the float pipeline, so only float-side inputs are valid.
         (Some(a), None) => a.is_float_side(),
         _ => true,
+    }
+}
+
+/// Exact sRGB transfer-function oracles and shared pixel grids for the sRGB
+/// kernel tests.
+///
+/// The load/store kernels approximate these curves (LUT decode, minimax SIMD
+/// encode) and every kernel test compares against these exact references. One
+/// home so the load, store, and in-place-pass test modules agree.
+#[cfg(test)]
+pub(crate) mod srgb_test_support {
+    /// Exact sRGB EOTF (decode), input assumed in `[0, 1]`.
+    pub(crate) fn eotf_exact(c: f32) -> f32 {
+        if c <= 0.040_45 {
+            c / 12.92
+        } else {
+            ((c + 0.055) / 1.055).powf(2.4)
+        }
+    }
+
+    /// Exact sRGB OETF (encode), input assumed in `[0, 1]`.
+    pub(crate) fn oetf_exact(c: f32) -> f32 {
+        if c <= 0.003_130_8 {
+            c * 12.92
+        } else {
+            1.055 * c.powf(1.0 / 2.4) - 0.055
+        }
+    }
+
+    /// [`eotf_exact`] with the input clamped to `[0, 1]` first.
+    pub(crate) fn eotf_exact_clamped(c: f32) -> f32 {
+        eotf_exact(c.clamp(0.0, 1.0))
+    }
+
+    /// [`oetf_exact`] with the input clamped to `[0, 1]` first.
+    pub(crate) fn oetf_exact_clamped(c: f32) -> f32 {
+        oetf_exact(c.clamp(0.0, 1.0))
+    }
+
+    /// One `R=G=B` pixel per u8 lattice point: the exact-EOTF linear value on
+    /// the color lanes, the raw unorm on alpha.
+    pub(crate) fn u8_roundtrip_pixels() -> Vec<[f32; 4]> {
+        (0..=255u8)
+            .map(|b| {
+                let lin = eotf_exact(b as f32 / 255.0);
+                [lin, lin, lin, b as f32 / 255.0]
+            })
+            .collect()
+    }
+
+    /// Grid over `[0, 1]` plus out-of-range RGB (which must clamp) and
+    /// adversarial alpha (negative, > 1, NaN) that the curve passes must
+    /// carry through untouched.
+    pub(crate) fn curve_test_pixels() -> Vec<[f32; 4]> {
+        let n = 1024usize;
+        let mut pixels: Vec<[f32; 4]> = (0..n)
+            .map(|i| {
+                let x = i as f32 / (n - 1) as f32;
+                [x, (x * 0.5 + 0.2).clamp(0.0, 1.0), x * x, x]
+            })
+            .collect();
+        pixels.push([-0.5, 2.0, 0.001, -1.0]);
+        pixels.push([1.5, -1.0, 0.5, 2.0]);
+        pixels.push([0.25, 0.75, 1.0, f32::NAN]);
+        pixels
+    }
+
+    /// Deterministic pixels spanning `[0, 1]` and beyond (color lanes must
+    /// clamp) with adversarial alpha (negative, NaN) that must survive intact.
+    pub(crate) fn in_place_pixels(n: usize) -> Vec<[f32; 4]> {
+        (0..n)
+            .map(|i| {
+                let x = i as f32 / (n.max(2) - 1) as f32;
+                let alpha = if i % 7 == 0 {
+                    f32::NAN
+                } else if i % 3 == 0 {
+                    -0.5
+                } else {
+                    x
+                };
+                [x * 1.2 - 0.1, x * 0.5 + 0.2, 1.0 - x, alpha]
+            })
+            .collect()
+    }
+
+    /// RGB lanes of an in-place curve pass within `tol` of `exact`; alpha
+    /// preserved bit-exactly.
+    pub(crate) fn assert_curve_close(
+        got: &[[f32; 4]],
+        orig: &[[f32; 4]],
+        exact: fn(f32) -> f32,
+        tol: f32,
+        label: &str,
+    ) {
+        assert_eq!(got.len(), orig.len(), "{label}: pixel count");
+        for (i, (g, o)) in got.iter().zip(orig).enumerate() {
+            for c in 0..3 {
+                let want = exact(o[c]);
+                assert!(
+                    (g[c] - want).abs() <= tol,
+                    "{label}: pixel {i} lane {c}: got {} want {want}",
+                    g[c],
+                );
+            }
+            assert_eq!(
+                g[3].to_bits(),
+                o[3].to_bits(),
+                "{label}: pixel {i} alpha must be preserved bit-exactly"
+            );
+        }
     }
 }
 
