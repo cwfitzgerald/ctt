@@ -23,6 +23,10 @@ Per Keep a Changelog there are 6 main categories of changes:
 
 ## Unreleased
 
+### Changed
+
+- With the `rayon` feature, all mips and layers of an image now encode concurrently instead of one surface at a time, improving worker utilization on images with many small surfaces.
+
 ## v0.5.0
 
 Released 2026-07-16

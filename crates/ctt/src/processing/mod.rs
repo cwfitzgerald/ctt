@@ -23,6 +23,7 @@ pub use buffer::{Buffer, Variant};
 pub use mipmap::MipmapFilter;
 pub use swizzle::{Swizzle, SwizzleChannel};
 
+use crate::error::Result;
 use crate::format_kind::{FormatFamily, classify};
 use crate::surface::{ColorSpace, Image};
 
@@ -33,6 +34,37 @@ pub enum PipelineOutput {
     Encoded(Vec<u8>),
     /// Raw image (when the caller requested [`crate::convert::Container::Raw`]).
     Raw(Image),
+}
+
+/// Map a fallible transform over owned items, in parallel with the `rayon`
+/// feature. Output order matches input order.
+pub(crate) fn par_map<T: Send, U: Send>(
+    items: Vec<T>,
+    f: impl Fn(T) -> Result<U> + Sync + Send,
+) -> Result<Vec<U>> {
+    #[cfg(feature = "rayon")]
+    let mapped = {
+        use rayon::prelude::*;
+        items.into_par_iter().map(f).collect()
+    };
+    #[cfg(not(feature = "rayon"))]
+    let mapped = items.into_iter().map(f).collect();
+    mapped
+}
+
+/// Map a fallible transform over every item of a nested list, in parallel
+/// with the `rayon` feature, preserving the outer structure.
+pub(crate) fn map_nested<T: Send, U: Send>(
+    nested: Vec<Vec<T>>,
+    f: impl Fn(T) -> Result<U> + Sync + Send,
+) -> Result<Vec<Vec<U>>> {
+    let lens: Vec<usize> = nested.iter().map(Vec::len).collect();
+    let flat = par_map(nested.into_iter().flatten().collect(), f)?;
+    let mut flat = flat.into_iter();
+    Ok(lens
+        .into_iter()
+        .map(|len| flat.by_ref().take(len).collect())
+        .collect())
 }
 
 /// Pick the internal representation to use for a run, based on input + target formats.

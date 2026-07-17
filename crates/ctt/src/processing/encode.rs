@@ -37,43 +37,55 @@ impl EncoderStep {
 }
 
 /// Run the encoder across every surface of the image.
+///
+/// With the `rayon` feature, all surfaces encode concurrently as one flat job
+/// list, so small mips from different layers fill workers left idle by the
+/// row-chunk jobs of larger surfaces.
 pub fn encode_all(image: Image, step: &EncoderStep) -> Result<Image> {
     profiling::scope!("encode_all");
 
-    let mut new_surfaces = Vec::with_capacity(image.surfaces.len());
-    for (layer_idx, layer) in image.surfaces.iter().enumerate() {
-        let mut new_mips = Vec::with_capacity(layer.len());
-        for (mip_idx, surface) in layer.iter().enumerate() {
-            profiling::scope!("encode_mip", encoder_name(&step.encoder));
-            log::debug!(
-                "Compressing layer {layer_idx}, mip {mip_idx}: {}x{} to {:?} using {}",
-                surface.width,
-                surface.height,
-                step.target_format,
-                encoder_name(&step.encoder),
-            );
+    let indexed: Vec<Vec<(usize, usize, Surface)>> = image
+        .surfaces
+        .into_iter()
+        .enumerate()
+        .map(|(layer_idx, layer)| {
+            layer
+                .into_iter()
+                .enumerate()
+                .map(|(mip_idx, surface)| (layer_idx, mip_idx, surface))
+                .collect()
+        })
+        .collect();
 
-            let output_format = step.target_format.denormalize(surface.color_space);
-            let data = compress_with(&step.encoder, surface, output_format, step.quality)?;
+    let new_surfaces = super::map_nested(indexed, |(layer_idx, mip_idx, surface)| {
+        profiling::scope!("encode_mip", encoder_name(&step.encoder));
+        log::debug!(
+            "Compressing layer {layer_idx}, mip {mip_idx}: {}x{} to {:?} using {}",
+            surface.width,
+            surface.height,
+            step.target_format,
+            encoder_name(&step.encoder),
+        );
 
-            let bpp_block = step.target_format.bytes_per_block().unwrap_or(16) as u32;
-            let (bw, _bh) = step.target_format.block_size().unwrap_or((4, 4));
-            let blocks_x = surface.width.div_ceil(bw as u32);
+        let output_format = step.target_format.denormalize(surface.color_space);
+        let data = compress_with(&step.encoder, &surface, output_format, step.quality)?;
 
-            new_mips.push(Surface {
-                data,
-                width: surface.width,
-                height: surface.height,
-                depth: surface.depth,
-                stride: blocks_x * bpp_block,
-                slice_stride: surface.slice_stride,
-                format: step.target_format,
-                color_space: surface.color_space,
-                alpha: surface.alpha,
-            });
-        }
-        new_surfaces.push(new_mips);
-    }
+        let bpp_block = step.target_format.bytes_per_block().unwrap_or(16) as u32;
+        let (bw, _bh) = step.target_format.block_size().unwrap_or((4, 4));
+        let blocks_x = surface.width.div_ceil(bw as u32);
+
+        Ok(Surface {
+            data,
+            width: surface.width,
+            height: surface.height,
+            depth: surface.depth,
+            stride: blocks_x * bpp_block,
+            slice_stride: surface.slice_stride,
+            format: step.target_format,
+            color_space: surface.color_space,
+            alpha: surface.alpha,
+        })
+    })?;
 
     Ok(Image {
         surfaces: new_surfaces,
