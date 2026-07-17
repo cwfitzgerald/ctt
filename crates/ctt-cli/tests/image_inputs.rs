@@ -122,6 +122,41 @@ fn rgba16_loads_as_r16g16b16a16_unorm() {
     );
 }
 
+/// EXR input without `--ic` must default to linear: HDR values above 1.0
+/// survive a passthrough conversion untouched (the sRGB EOTF would clamp
+/// and bend them).
+#[test]
+fn exr_defaults_to_linear_and_preserves_hdr_values() {
+    let f = TestFixture::new();
+    let input = f.output_file("hdr.exr");
+    let values: Vec<f32> = (0..(W * H * 4) as usize)
+        .map(|i| if i % 4 == 3 { 1.0 } else { i as f32 * 0.5 })
+        .collect();
+    write_image_bytes(
+        &input,
+        W,
+        H,
+        image::ExtendedColorType::Rgba32F,
+        bytemuck::cast_slice(&values),
+    );
+    let output = f.output_file("out.ktx2");
+
+    run_cli([
+        "ctt",
+        input.to_str().unwrap(),
+        "-o",
+        output.to_str().unwrap(),
+    ])
+    .expect("run succeeded");
+
+    let decoded = assert::decode(&read(&output));
+    let s = &decoded.surfaces[0][0];
+    assert_eq!(s.format, F::R32G32B32A32_SFLOAT);
+    assert_eq!(s.color_space, ctt::ColorSpace::Linear);
+    let got: &[f32] = bytemuck::cast_slice(&s.data);
+    assert_eq!(got, values.as_slice(), "HDR values must pass through");
+}
+
 #[test]
 fn rgb32f_loads_as_r32g32b32_sfloat() {
     assert_loads_as(

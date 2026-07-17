@@ -54,8 +54,9 @@ pub struct Args {
     /// Override the input color space.
     ///
     /// Container formats (KTX2, DDS) carry color-space metadata, which is
-    /// honored by default. For formats without metadata (PNG, JPEG, …) the
-    /// fallback is sRGB. Pass this flag to override either.
+    /// honored by default. For formats without metadata the fallback is
+    /// sRGB for integer images (PNG, JPEG, …) and linear for float images
+    /// (EXR, HDR). Pass this flag to override either.
     #[arg(long, visible_alias = "ic")]
     pub input_color_space: Option<ColorSpaceArg>,
 

@@ -85,7 +85,6 @@ pub fn run(args: Args) -> Result<(), Box<dyn std::error::Error>> {
         color_space: input_color_space_override,
         alpha: input_alpha_override,
     };
-    let standard_image_color_space = input_color_space_override.unwrap_or(ColorSpace::Srgb);
     let standard_image_alpha = input_alpha_override.unwrap_or(AlphaMode::Straight);
 
     // With the default of zero workers, run on Rayon's lazily initialized
@@ -100,7 +99,7 @@ pub fn run(args: Args) -> Result<(), Box<dyn std::error::Error>> {
         load_images(
             &args.input,
             overrides,
-            standard_image_color_space,
+            input_color_space_override,
             standard_image_alpha,
         )
     })?;
@@ -380,10 +379,14 @@ pub fn encoder_table_string() -> String {
 }
 
 /// Read and decode every input image, in parallel on the active Rayon pool.
+///
+/// `color_space_override` is the explicit `--input-color-space` override,
+/// if any; standard images without one fall back per format family (sRGB
+/// for integer images, linear for float images like EXR).
 fn load_images(
     paths: &[std::path::PathBuf],
     overrides: InputOverrides,
-    color_space: ColorSpace,
+    color_space_override: Option<ColorSpace>,
     alpha: AlphaMode,
 ) -> Result<Vec<Image>, Error> {
     use rayon::prelude::*;
@@ -400,7 +403,7 @@ fn load_images(
             let image = if let Some(img) = decode_container(&data, overrides)? {
                 img
             } else {
-                let surface = load_standard_image(&data, color_space, alpha)?;
+                let surface = load_standard_image(&data, color_space_override, alpha)?;
                 Image {
                     surfaces: vec![vec![surface]],
                     kind: TextureKind::Texture2D,
@@ -424,10 +427,20 @@ fn load_images(
 
 fn load_standard_image(
     data: &[u8],
-    color_space: ColorSpace,
+    color_space_override: Option<ColorSpace>,
     alpha: AlphaMode,
 ) -> Result<Surface, Error> {
     let img = image::load_from_memory(data).map_err(|e| Error::InputDecoding(e.to_string()))?;
+
+    // Without an explicit override, integer images default to sRGB while
+    // float images (EXR, Radiance HDR) are linear by convention — running
+    // the sRGB EOTF over HDR data would clamp and distort it.
+    let color_space = color_space_override.unwrap_or(match img {
+        image::DynamicImage::ImageRgb32F(_) | image::DynamicImage::ImageRgba32F(_) => {
+            ColorSpace::Linear
+        }
+        _ => ColorSpace::Srgb,
+    });
 
     let surface = match img {
         image::DynamicImage::ImageLuma8(buf) => {
