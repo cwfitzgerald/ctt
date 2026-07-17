@@ -1,5 +1,9 @@
 use crate::error::{Error, Result};
-use crate::surface::Surface;
+use crate::processing::equirectangular::{
+    self, EquirectangularOrientation, EquirectangularPyramid,
+};
+use crate::processing::{load, store};
+use crate::surface::{ColorSpace, Surface};
 use crate::vk_format::FormatExt;
 
 /// Input for cubemap face extraction.
@@ -11,6 +15,19 @@ pub enum CubemapInput {
     Cross(Surface),
     /// A horizontal strip of 6 faces side by side.
     Strip(Surface),
+    /// An equirectangular (lat-long) panorama, projected onto six faces
+    /// with anisotropic filtering. Faces follow the Vulkan/KTX2 cube map
+    /// orientation; the panorama convention (which axis the image center
+    /// faces, longitude direction) is set by `orientation`. Faces come
+    /// out as `R32G32B32A32_SFLOAT` in linear space.
+    Equirectangular {
+        surface: Surface,
+        /// Face edge length. Defaults to a quarter of the source width,
+        /// which matches sampling rates at the equator.
+        face_size: Option<u32>,
+        /// Panorama orientation convention; see [`EquirectangularOrientation`].
+        orientation: EquirectangularOrientation,
+    },
 }
 
 /// Split a cubemap input into its 6 individual faces.
@@ -30,7 +47,60 @@ pub fn split_cubemap(input: CubemapInput) -> Result<[Surface; 6]> {
             log::debug!("Strip source: {}x{}", surface.width, surface.height);
             split_strip(&surface)
         }
+        CubemapInput::Equirectangular {
+            surface,
+            face_size,
+            orientation,
+        } => {
+            log::debug!("Splitting cubemap: equirectangular input ({orientation:?})");
+            log::debug!(
+                "Equirectangular source: {}x{}",
+                surface.width,
+                surface.height
+            );
+            project_equirectangular(surface, face_size, orientation)
+        }
     }
+}
+
+/// Project an equirectangular panorama onto six cube faces.
+///
+/// The projection runs on the linear f32 pipeline: sRGB sources are
+/// linearized and straight alpha is premultiplied for filtering, then both
+/// are undone on the way out. Faces are stored as `R32G32B32A32_SFLOAT`
+/// tagged linear, so no precision is lost after the filter itself.
+fn project_equirectangular(
+    surface: Surface,
+    face_size: Option<u32>,
+    orientation: EquirectangularOrientation,
+) -> Result<[Surface; 6]> {
+    profiling::scope!("project_equirectangular");
+    validate_source(&surface)?;
+    let alpha = surface.alpha;
+    let buf = load::load_f32(&surface)?;
+    drop(surface);
+    let pyramid = EquirectangularPyramid::new(buf)?;
+    let n = face_size.unwrap_or_else(|| pyramid.default_face_size());
+    log::debug!(
+        "Equirectangular {}x{} → 6 × {n}x{n} faces",
+        pyramid.width(),
+        pyramid.height(),
+    );
+    let faces = equirectangular::project_f32(&pyramid, n, orientation)?;
+    drop(pyramid);
+
+    let faces: Vec<Surface> = faces
+        .into_iter()
+        .map(|face| {
+            store::store_f32(
+                face,
+                ktx2::Format::R32G32B32A32_SFLOAT,
+                ColorSpace::Linear,
+                alpha,
+            )
+        })
+        .collect::<Result<_>>()?;
+    Ok(faces.try_into().unwrap_or_else(|_| unreachable!()))
 }
 
 fn validate_uniform_faces(faces: &[Surface; 6]) -> Result<()> {

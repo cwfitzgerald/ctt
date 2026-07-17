@@ -3,10 +3,15 @@
 use std::arch::x86_64::*;
 
 /// Runtime check for the AVX-512 feature set the kernels rely on.
+///
+/// DQ is required by the equirectangular kernel (`vrangeps`, `vpmovd2m`); every
+/// CPU shipping F+VL+BW also ships DQ, so the extra check does not narrow
+/// dispatch in practice.
 pub fn has_avx512() -> bool {
     is_x86_feature_detected!("avx512f")
         && is_x86_feature_detected!("avx512vl")
         && is_x86_feature_detected!("avx512bw")
+        && is_x86_feature_detected!("avx512dq")
 }
 
 /// Runtime check for the AVX2+FMA feature pair the kernels rely on.

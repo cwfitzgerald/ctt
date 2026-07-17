@@ -12,13 +12,15 @@ use std::sync::OnceLock;
 use ctt::encoders::{Encoder, EncoderInfo, compiled_in_encoders};
 use ctt::input::{InputOverrides, decode_container};
 use ctt::{
-    AlphaMode, ColorSpace, Container, ConvertSettings, CubemapInput, Error, Format, FormatExt,
-    Image, Ktx2Supercompression, MipmapFilter, PipelineOutput, Quality, Surface, Swizzle,
-    SwizzleChannel, TargetFormat, TextureKind, format_short_name, parse_format, split_cubemap,
+    AlphaMode, ColorSpace, Container, ConvertSettings, CubemapInput, EquirectangularFront,
+    EquirectangularOrientation, Error, Format, FormatExt, Image, Ktx2Supercompression,
+    MipmapFilter, PipelineOutput, Quality, Surface, Swizzle, SwizzleChannel, TargetFormat,
+    TextureKind, format_short_name, parse_format, split_cubemap,
 };
 
 pub use args::{
-    AlphaModeArg, Args, ColorSpaceArg, ContainerArg, CubemapLayoutArg, MipmapFilterArg, QualityArg,
+    AlphaModeArg, Args, ColorSpaceArg, ContainerArg, CubemapLayoutArg, EquirectangularFrontArg,
+    MipmapFilterArg, QualityArg,
 };
 
 /// Initialize the logger at the requested verbosity. The `OnceLock` makes
@@ -75,6 +77,8 @@ pub fn run(args: Args) -> Result<(), Box<dyn std::error::Error>> {
         .into());
     }
 
+    let cubemap_layout = resolve_cubemap_layout(&args)?;
+
     // Container formats (KTX2, DDS) carry color-space and alpha metadata,
     // so leave the override `None` unless the user explicitly passes a flag.
     // Standard images (PNG, JPEG, …) have no such metadata; fall back to
@@ -105,9 +109,8 @@ pub fn run(args: Args) -> Result<(), Box<dyn std::error::Error>> {
     })?;
 
     let image = if args.cubemap {
-        let layout = args.cubemap_layout.unwrap_or(CubemapLayoutArg::Cross);
-        log::info!("Cubemap mode, layout: {layout:?}");
-        build_cubemap_image(images, layout)?
+        log::info!("Cubemap mode, layout: {cubemap_layout:?}");
+        build_cubemap_image(images, cubemap_layout)?
     } else if args.volume {
         log::info!("Volume mode: stacking {} slices", images.len());
         build_volume_image(images, &args.input)?
@@ -603,9 +606,58 @@ fn load_standard_image(
     Ok(surface)
 }
 
+/// Cubemap layout selection with the equirectangular-only flags resolved into
+/// their variant.
+#[derive(Debug, Clone, Copy)]
+enum CubemapLayout {
+    Cross,
+    Strip,
+    Equirectangular {
+        face_size: Option<u32>,
+        orientation: EquirectangularOrientation,
+    },
+}
+
+/// Resolve `--cubemap-layout` and the equirectangular-only flags, rejecting the
+/// latter when the layout is not equirectangular.
+fn resolve_cubemap_layout(args: &Args) -> Result<CubemapLayout, Error> {
+    if args.cubemap_layout != Some(CubemapLayoutArg::Equirectangular) {
+        for (flag, given) in [
+            ("--cubemap-face-size", args.cubemap_face_size.is_some()),
+            (
+                "--equirectangular-front",
+                args.equirectangular_front.is_some(),
+            ),
+            ("--equirectangular-mirror", args.equirectangular_mirror),
+        ] {
+            if given {
+                return Err(Error::UnsupportedFormat(format!(
+                    "{flag} requires --cubemap-layout equirectangular"
+                )));
+            }
+        }
+    }
+    Ok(
+        match args.cubemap_layout.unwrap_or(CubemapLayoutArg::Cross) {
+            CubemapLayoutArg::Cross => CubemapLayout::Cross,
+            CubemapLayoutArg::Strip => CubemapLayout::Strip,
+            CubemapLayoutArg::Equirectangular => CubemapLayout::Equirectangular {
+                face_size: args.cubemap_face_size,
+                orientation: EquirectangularOrientation {
+                    front: map_equirectangular_front(
+                        args.equirectangular_front
+                            .unwrap_or(EquirectangularFrontArg::PosZ),
+                    ),
+                    mirror: args.equirectangular_mirror,
+                },
+            },
+        },
+    )
+}
+
 fn build_cubemap_image(
     images: Vec<Image>,
-    layout_arg: CubemapLayoutArg,
+    layout: CubemapLayout,
 ) -> Result<Image, Box<dyn std::error::Error>> {
     // Single already-cubemap input (single cube or cube array): passthrough.
     if images.len() == 1 && matches!(images[0].kind, TextureKind::Cubemap) {
@@ -684,9 +736,17 @@ fn build_cubemap_image(
             .into_iter()
             .next()
             .unwrap();
-        let cubemap_input = match layout_arg {
-            CubemapLayoutArg::Cross => CubemapInput::Cross(surface),
-            CubemapLayoutArg::Strip => CubemapInput::Strip(surface),
+        let cubemap_input = match layout {
+            CubemapLayout::Cross => CubemapInput::Cross(surface),
+            CubemapLayout::Strip => CubemapInput::Strip(surface),
+            CubemapLayout::Equirectangular {
+                face_size,
+                orientation,
+            } => CubemapInput::Equirectangular {
+                surface,
+                face_size,
+                orientation,
+            },
         };
         let faces = split_cubemap(cubemap_input)?;
         let surfaces = faces.into_iter().map(|face| vec![face]).collect();
@@ -1058,6 +1118,15 @@ fn map_alpha_mode(a: AlphaModeArg) -> AlphaMode {
         AlphaModeArg::Straight => AlphaMode::Straight,
         AlphaModeArg::Premultiplied => AlphaMode::Premultiplied,
         AlphaModeArg::Opaque => AlphaMode::Opaque,
+    }
+}
+
+fn map_equirectangular_front(f: EquirectangularFrontArg) -> EquirectangularFront {
+    match f {
+        EquirectangularFrontArg::PosZ => EquirectangularFront::PosZ,
+        EquirectangularFrontArg::NegZ => EquirectangularFront::NegZ,
+        EquirectangularFrontArg::PosX => EquirectangularFront::PosX,
+        EquirectangularFrontArg::NegX => EquirectangularFront::NegX,
     }
 }
 

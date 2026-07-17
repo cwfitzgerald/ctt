@@ -15,6 +15,7 @@ mod edge_cases;
 mod encode_matrix;
 mod encoder_opts;
 mod encoder_select;
+mod equirectangular;
 mod errors;
 mod image_inputs;
 mod mipmap;

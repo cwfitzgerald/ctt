@@ -63,6 +63,7 @@ pub use convert::{Container, ConvertSettings, Ktx2Supercompression, convert};
 pub use cubemap::{CubemapInput, split_cubemap};
 pub use error::{Error, Result};
 pub use format::{TargetFormat, format_short_name, parse_format};
+pub use processing::equirectangular::{EquirectangularFront, EquirectangularOrientation};
 pub use processing::{MipmapFilter, PipelineOutput, Swizzle, SwizzleChannel};
 pub use quality::Quality;
 pub use surface::{ColorSpace, Image, Surface, TextureKind};
@@ -167,6 +168,21 @@ pub mod bench_internals {
     pub use crate::processing::store_kernels::e5b9g9r9::{
         store_e5b9g9r9_f32_avx2_fma, store_e5b9g9r9_f32_avx512, store_e5b9g9r9_f32_sse4_1,
     };
+
+    // ---- Equirectangular → cubemap projection ----
+
+    pub use crate::processing::equirectangular::{
+        EquirectangularPyramid, project_f32, project_f32_serial,
+    };
+
+    #[cfg(target_arch = "x86_64")]
+    pub use crate::processing::equirectangular::x86::{project_f32_avx2_fma, project_f32_avx512};
+
+    #[cfg(target_arch = "aarch64")]
+    pub use crate::processing::equirectangular::neon::project_f32_neon;
+
+    #[cfg(target_arch = "x86_64")]
+    pub use crate::processing::x86::has_avx2_fma;
 
     #[cfg(target_arch = "aarch64")]
     pub use crate::processing::load_kernels::a2_10_10_10::load_a2_f32_neon;

@@ -36,8 +36,30 @@ pub struct Args {
 
     /// Cubemap layout when splitting a single input image (default: cross).
     /// Applies only to a single input; rejected with multiple inputs.
+    /// `equirectangular` (alias `equirect`) projects a lat-long panorama onto
+    /// six faces (Vulkan/KTX2 orientation, anisotropically filtered, linear
+    /// rgba32float faces).
     #[arg(long, requires = "cubemap")]
     pub cubemap_layout: Option<CubemapLayoutArg>,
+
+    /// Face edge length when projecting an equirectangular panorama. Defaults to a
+    /// quarter of the panorama width. Only valid with `--cubemap-layout
+    /// equirectangular`.
+    #[arg(long, requires = "cubemap", value_name = "SIZE")]
+    pub cubemap_face_size: Option<u32>,
+
+    /// Which world axis the equirectangular panorama center faces (default:
+    /// pos-z, which matches Filament's cmgen). Combined with
+    /// `--equirectangular-mirror`, `pos-x` matches three.js and the Khronos glTF
+    /// IBL sampler. Only valid with `--cubemap-layout equirectangular`.
+    #[arg(long, visible_alias = "equirect-front", requires = "cubemap")]
+    pub equirectangular_front: Option<EquirectangularFrontArg>,
+
+    /// Reverse the equirectangular longitude direction (mirror-image panorama).
+    /// Without it, longitude runs along the +Z → +X → -Z → -X yaw cycle.
+    /// Only valid with `--cubemap-layout equirectangular`.
+    #[arg(long, visible_alias = "equirect-mirror", requires = "cubemap")]
+    pub equirectangular_mirror: bool,
 
     /// Treat each input as a Z slice of a 3D (volume) texture, stacked in
     /// argv order. Mip generation is unsupported for 3D textures.
@@ -191,10 +213,20 @@ pub enum ContainerArg {
     Ktx2,
 }
 
-#[derive(Debug, Clone, Copy, clap::ValueEnum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
 pub enum CubemapLayoutArg {
     Cross,
     Strip,
+    #[value(alias = "equirect")]
+    Equirectangular,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+pub enum EquirectangularFrontArg {
+    PosZ,
+    NegZ,
+    PosX,
+    NegX,
 }
 
 #[derive(Debug, Clone, Copy, clap::ValueEnum)]

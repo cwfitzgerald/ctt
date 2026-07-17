@@ -9,6 +9,7 @@ pub(crate) mod buffer;
 pub(crate) mod curve_pass;
 pub(crate) mod dispatch;
 pub(crate) mod encode;
+pub(crate) mod equirectangular;
 pub(crate) mod load;
 pub(crate) mod load_kernels;
 pub(crate) mod mipmap;

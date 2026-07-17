@@ -72,5 +72,9 @@ harness = false
 name = "packed"
 harness = false
 
+[[bench]]
+name = "equirectangular"
+harness = false
+
 [lints]
 workspace = true
