@@ -48,6 +48,11 @@
 //! `PATH` — enable exactly one of the two. The default-off `rayon` feature
 //! parallelizes compression within each image on the active Rayon pool.
 
+// Pixel decode/encode paths reinterpret little-endian file bytes in place and
+// index whole images with `usize`.
+#[cfg(any(target_endian = "big", target_pointer_width = "16"))]
+compile_error!("ctt only supports little-endian targets with 32-bit or wider pointers");
+
 /// Compile-checks the Rust code blocks in `README.md` as doctests so the
 /// library example there cannot drift out of sync with the current API.
 #[cfg(doctest)]
@@ -88,25 +93,23 @@ mod quality;
 mod surface;
 pub(crate) mod vk_format;
 
-/// **Not part of the public API.** Re-exports the internal sRGB kernels so
-/// that `benches/` (a separate crate) can measure them directly without
-/// going through the public dispatch layer. Items here have no stability
-/// guarantees — they may be renamed, removed, or behave differently across
-/// patch releases. Real callers should go through the crate's normal
-/// public entry points (`convert`, etc.), which dispatch to the best
-/// available kernel at runtime.
+/// **Not part of the public API.** Re-exports internal kernels so `benches/`
+/// (a separate crate) can measure them directly; no stability guarantees.
 #[doc(hidden)]
 pub mod bench_internals {
     pub use crate::processing::Buffer;
+    pub use crate::processing::kernels::{Fallback, Level, constructible_levels};
 
-    pub use crate::processing::load_kernels::srgb::{
-        load_srgb8_f32_serial, srgb_eotf_in_place_f32_serial,
+    // ---- sRGB ----
+
+    #[cfg(target_arch = "x86_64")]
+    pub use crate::processing::kernels::srgb::store_srgb8_f32_avx512_escape;
+    pub use crate::processing::kernels::srgb::{
+        load_srgb8_f32_at, srgb_eotf_in_place_f32_at, srgb_oetf_in_place_f32_at,
+        store_srgb8_f32_at, store_srgb8_f32_generic_at,
     };
     pub use crate::processing::load_kernels::{
         load_bgr8_srgb_f32, load_bgra8_srgb_f32, load_srgb8_f32, srgb_eotf_in_place_f32,
-    };
-    pub use crate::processing::store_kernels::srgb::{
-        srgb_oetf_in_place_f32_serial, store_bgra8_srgb_f32_serial, store_srgb8_f32_serial,
     };
     pub use crate::processing::store_kernels::{
         srgb_oetf_in_place_f32, store_bgr8_srgb_f32, store_bgra8_srgb_f32, store_f16_f32,
@@ -115,83 +118,26 @@ pub mod bench_internals {
 
     pub use crate::processing::load_kernels::load_f16_f32;
 
-    #[cfg(target_arch = "x86_64")]
-    pub use crate::processing::load_kernels::srgb::{
-        load_srgb8_rgba_f32_avx2_fma, load_srgb8_rgba_f32_avx512, load_srgb8_rgba_f32_sse4_1,
-        srgb_eotf_in_place_f32_avx2_fma, srgb_eotf_in_place_f32_avx512,
-        srgb_eotf_in_place_f32_sse4_1,
-    };
-    #[cfg(target_arch = "x86_64")]
-    pub use crate::processing::store_kernels::srgb::{
-        srgb_oetf_in_place_f32_avx2_fma, srgb_oetf_in_place_f32_avx512,
-        srgb_oetf_in_place_f32_sse4_1, store_srgb8_f32_avx2_fma, store_srgb8_f32_avx512,
-        store_srgb8_f32_sse4_1,
-    };
-
-    #[cfg(target_arch = "aarch64")]
-    pub use crate::processing::load_kernels::srgb::{
-        load_srgb8_rgba_f32_neon, srgb_eotf_in_place_f32_neon,
-    };
-    #[cfg(target_arch = "aarch64")]
-    pub use crate::processing::store_kernels::srgb::{
-        srgb_oetf_in_place_f32_neon, store_srgb8_f32_neon,
-    };
-
     // ---- Packed 32-bit formats ----
 
-    pub use crate::processing::load_kernels::a2_10_10_10::{A2B_R_SHIFT, load_a2_unorm_serial};
-    pub use crate::processing::load_kernels::b10g11r11::load_b10g11r11_f32_serial;
-    pub use crate::processing::store_kernels::a2_10_10_10::store_a2_unorm_serial;
-    pub use crate::processing::store_kernels::b10g11r11::store_b10g11r11_f32_serial;
-    pub use crate::processing::store_kernels::e5b9g9r9::store_e5b9g9r9_f32_serial;
-
-    #[cfg(target_arch = "x86_64")]
-    pub use crate::processing::x86::has_avx512;
-
-    #[cfg(target_arch = "x86_64")]
-    pub use crate::processing::load_kernels::a2_10_10_10::{
-        load_a2_f32_avx2, load_a2_f32_avx512, load_a2_f32_sse4_1,
+    pub use crate::processing::kernels::a2_10_10_10::{
+        A2B_R_SHIFT, load_a2_f32_at, load_a2_u32_at, store_a2_f32_at, store_a2_u32_at,
     };
-    #[cfg(target_arch = "x86_64")]
-    pub use crate::processing::load_kernels::b10g11r11::{
-        load_b10g11r11_f32_avx2_fma, load_b10g11r11_f32_avx512, load_b10g11r11_f32_sse4_1,
+    pub use crate::processing::kernels::b10g11r11::{
+        load_b10g11r11_f32_at, store_b10g11r11_f32_at,
     };
-    #[cfg(target_arch = "x86_64")]
-    pub use crate::processing::store_kernels::a2_10_10_10::{
-        store_a2_f32_avx2_fma, store_a2_f32_avx512, store_a2_f32_sse4_1,
+    pub use crate::processing::kernels::e5b9g9r9::{load_e5b9g9r9_f32_at, store_e5b9g9r9_f32_at};
+    pub use crate::processing::load_kernels::{
+        load_a2b10g10r10_sint_u32, load_a2b10g10r10_snorm_f32, load_a2b10g10r10_uint_u32,
+        load_a2b10g10r10_unorm_f32, load_b10g11r11_f32, load_e5b9g9r9_f32,
     };
-    #[cfg(target_arch = "x86_64")]
-    pub use crate::processing::store_kernels::b10g11r11::{
-        store_b10g11r11_f32_avx2, store_b10g11r11_f32_avx512,
-    };
-    #[cfg(target_arch = "x86_64")]
-    pub use crate::processing::store_kernels::e5b9g9r9::{
-        store_e5b9g9r9_f32_avx2_fma, store_e5b9g9r9_f32_avx512, store_e5b9g9r9_f32_sse4_1,
+    pub use crate::processing::store_kernels::{
+        store_a2b10g10r10_sint_u32, store_a2b10g10r10_snorm_f32, store_a2b10g10r10_uint_u32,
+        store_a2b10g10r10_unorm_f32, store_b10g11r11_f32, store_e5b9g9r9_f32,
     };
 
     // ---- Equirectangular → cubemap projection ----
 
-    pub use crate::processing::equirectangular::{
-        EquirectangularPyramid, project_f32, project_f32_serial,
-    };
-
-    #[cfg(target_arch = "x86_64")]
-    pub use crate::processing::equirectangular::x86::{project_f32_avx2_fma, project_f32_avx512};
-
-    #[cfg(target_arch = "aarch64")]
-    pub use crate::processing::equirectangular::neon::project_f32_neon;
-
-    #[cfg(target_arch = "x86_64")]
-    pub use crate::processing::x86::has_avx2_fma;
-
-    #[cfg(target_arch = "aarch64")]
-    pub use crate::processing::load_kernels::a2_10_10_10::load_a2_f32_neon;
-    #[cfg(target_arch = "aarch64")]
-    pub use crate::processing::load_kernels::b10g11r11::load_b10g11r11_f32_neon;
-    #[cfg(target_arch = "aarch64")]
-    pub use crate::processing::store_kernels::a2_10_10_10::store_a2_f32_neon;
-    #[cfg(target_arch = "aarch64")]
-    pub use crate::processing::store_kernels::b10g11r11::store_b10g11r11_f32_neon;
-    #[cfg(target_arch = "aarch64")]
-    pub use crate::processing::store_kernels::e5b9g9r9::store_e5b9g9r9_f32_neon;
+    pub use crate::processing::equirectangular::{EquirectangularPyramid, project_f32};
+    pub use crate::processing::kernels::equirectangular::project_f32_at;
 }

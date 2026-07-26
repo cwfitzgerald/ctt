@@ -1,9 +1,19 @@
 //! Micro-benchmarks for the sRGB load and store kernels.
 //!
-//! All benches run on the same [`SIDE`]×[`SIDE`] image. Kernels gated on CPU
-//! features are skipped if the host lacks the feature, so this bench is
-//! safe to run on x86_64 and aarch64 machines — the subset that fires is
-//! whatever the host can execute.
+//! All benches run on the same [`SIDE`]×[`SIDE`] image, one row per
+//! constructible SIMD level. Levels the host cannot execute are skipped, so this
+//! bench is safe to run on x86_64 and aarch64 machines — the subset that fires
+//! is whatever the host can execute.
+//!
+//! Groups:
+//!   * `srgb_load_*` — 4-channel sRGB8 → linear f32, `_bgra` for the swapped
+//!     byte order, plus `bgr8` for the 3-channel scalar production path (no
+//!     packed-word kernel exists at 3 bytes per pixel).
+//!   * `srgb_store_*` — the inverse, with the AVX-512 tier split into the
+//!     generic-rsqrt kernel and the `rsqrt14` intrinsic escape, and `bgr8` for
+//!     the 3-channel scalar production path.
+//!   * `srgb_{oetf,eotf}_in_place` — the f32 curve passes used by the 16+ bit
+//!     formats.
 //!
 //! Throughput is reported in pixels/second via
 //! `Throughput::Elements(pixel_count)`.
@@ -11,11 +21,12 @@
 use std::hint::black_box;
 
 use criterion::{BatchSize, Criterion, Throughput, criterion_group, criterion_main};
-use ctt::bench_internals::Buffer;
+use ctt::bench_internals::{Buffer, Level};
 use ctt::{AlphaMode, ColorSpace, Format, Surface};
 
-const SIDE: u32 = 1024;
-const PIXEL_COUNT: u64 = (SIDE as u64) * (SIDE as u64);
+mod common;
+
+use common::{PIXEL_COUNT, SIDE};
 
 /// Build a 4-channel sRGB8 surface with a deterministic pattern that
 /// exercises both the linear (`byte <= 10`) and curve branches of the
@@ -84,235 +95,123 @@ fn make_buffer() -> Buffer<f32> {
 }
 
 fn bench_load(c: &mut Criterion) {
+    use ctt::bench_internals as k;
     let rgba = make_rgba_surface();
     let bgr = make_bgr_surface();
 
     let mut g = c.benchmark_group(format!("srgb_load_{SIDE}x{SIDE}"));
     g.throughput(Throughput::Elements(PIXEL_COUNT));
 
-    g.bench_function("load_srgb8_f32_serial_rgba", |b| {
-        b.iter(|| ctt::bench_internals::load_srgb8_f32_serial(black_box(&rgba), 4).unwrap());
+    // RGBA sweep — `load_srgb8_f32` (4 channels) routes through this path.
+    common::bench_levels(&mut g, "", |b, level| {
+        b.iter(|| k::load_srgb8_f32_at::<false>(level, black_box(&rgba)).unwrap());
+    });
+    // BGRA sweep — `load_bgra8_srgb_f32` routes through this path.
+    common::bench_levels(&mut g, "_bgra", |b, level| {
+        b.iter(|| k::load_srgb8_f32_at::<true>(level, black_box(&rgba)).unwrap());
     });
 
-    // Scalar comparison paths that are not covered by the 4-channel SIMD
-    // specializations.
-    g.bench_function("scalar_bgra", |b| {
-        b.iter(|| ctt::bench_internals::load_bgra8_srgb_f32(black_box(&rgba)).unwrap());
+    // 3 bytes per pixel is not one packed word, so this production path is
+    // per-pixel scalar at every level — one row, not a level sweep.
+    g.bench_function("bgr8_scalar", |b| {
+        b.iter(|| k::load_bgr8_srgb_f32(black_box(&bgr)).unwrap());
     });
-    g.bench_function("scalar_bgr", |b| {
-        b.iter(|| ctt::bench_internals::load_bgr8_srgb_f32(black_box(&bgr)).unwrap());
-    });
-
-    #[cfg(target_arch = "x86_64")]
-    {
-        use ctt::bench_internals::{
-            load_srgb8_rgba_f32_avx2_fma, load_srgb8_rgba_f32_avx512, load_srgb8_rgba_f32_sse4_1,
-        };
-
-        if is_x86_feature_detected!("sse4.1") {
-            g.bench_function("sse4_1", |b| {
-                // SAFETY: runtime feature check confirmed sse4.1 is available.
-                b.iter(|| unsafe { load_srgb8_rgba_f32_sse4_1(black_box(&rgba)).unwrap() });
-            });
-        }
-        if is_x86_feature_detected!("avx2") && is_x86_feature_detected!("fma") {
-            g.bench_function("avx2_fma", |b| {
-                // SAFETY: runtime feature check confirmed avx2+fma are available.
-                b.iter(|| unsafe { load_srgb8_rgba_f32_avx2_fma(black_box(&rgba)).unwrap() });
-            });
-        }
-        if is_x86_feature_detected!("avx512f")
-            && is_x86_feature_detected!("avx512bw")
-            && is_x86_feature_detected!("avx512vl")
-        {
-            g.bench_function("avx512", |b| {
-                // SAFETY: runtime feature check confirmed avx512f+bw+vl are available.
-                b.iter(|| unsafe { load_srgb8_rgba_f32_avx512(black_box(&rgba)).unwrap() });
-            });
-        }
-    }
-
-    #[cfg(target_arch = "aarch64")]
-    {
-        use ctt::bench_internals::load_srgb8_rgba_f32_neon;
-
-        if std::arch::is_aarch64_feature_detected!("neon") {
-            g.bench_function("neon", |b| {
-                // SAFETY: runtime feature check confirmed NEON is available.
-                b.iter(|| unsafe { load_srgb8_rgba_f32_neon(black_box(&rgba)).unwrap() });
-            });
-        }
-    }
 
     g.finish();
 }
 
 fn bench_store(c: &mut Criterion) {
+    use ctt::bench_internals as k;
     let buf = make_buffer();
-    let buf3 = Buffer {
-        // `store_bgr8_srgb_f32` only reads lanes 0-2 from each pixel, so the
-        // 4-lane buffer feeds it fine.
-        pixels: buf.pixels.clone(),
-        width: SIDE,
-        height: SIDE,
-    };
 
     let mut g = c.benchmark_group(format!("srgb_store_{SIDE}x{SIDE}"));
     g.throughput(Throughput::Elements(PIXEL_COUNT));
 
-    g.bench_function("store_srgb8_f32_serial_rgba", |b| {
-        b.iter(|| ctt::bench_internals::store_srgb8_f32_serial(black_box(&buf), 4));
+    bench_srgb_store(&mut g, &buf);
+
+    // 3 bytes per pixel is not one packed word, so this production path is
+    // per-pixel scalar at every level — one row, not a level sweep.
+    // `store_bgr8_srgb_f32` only reads lanes 0-2, so the 4-lane `buf` feeds it.
+    g.bench_function("bgr8_scalar", |b| {
+        b.iter(|| k::store_bgr8_srgb_f32(black_box(&buf)));
     });
-    g.bench_function("store_bgra8_srgb_f32_serial", |b| {
-        b.iter(|| ctt::bench_internals::store_bgra8_srgb_f32_serial(black_box(&buf)));
-    });
-
-    g.bench_function("scalar_bgr", |b| {
-        b.iter(|| ctt::bench_internals::store_bgr8_srgb_f32(black_box(&buf3)));
-    });
-
-    #[cfg(target_arch = "x86_64")]
-    {
-        use ctt::bench_internals::{
-            store_srgb8_f32_avx2_fma, store_srgb8_f32_avx512, store_srgb8_f32_sse4_1,
-        };
-
-        if is_x86_feature_detected!("sse4.1") {
-            g.bench_function("sse4_1_rgba", |b| {
-                // SAFETY: runtime feature check confirmed sse4.1 is available.
-                b.iter(|| unsafe { store_srgb8_f32_sse4_1::<false>(black_box(&buf)) });
-            });
-            g.bench_function("sse4_1_bgra", |b| {
-                // SAFETY: runtime feature check confirmed sse4.1 is available.
-                b.iter(|| unsafe { store_srgb8_f32_sse4_1::<true>(black_box(&buf)) });
-            });
-        }
-        if is_x86_feature_detected!("avx2") && is_x86_feature_detected!("fma") {
-            g.bench_function("avx2_fma_rgba", |b| {
-                // SAFETY: runtime feature check confirmed avx2+fma are available.
-                b.iter(|| unsafe { store_srgb8_f32_avx2_fma::<false>(black_box(&buf)) });
-            });
-            g.bench_function("avx2_fma_bgra", |b| {
-                // SAFETY: runtime feature check confirmed avx2+fma are available.
-                b.iter(|| unsafe { store_srgb8_f32_avx2_fma::<true>(black_box(&buf)) });
-            });
-        }
-        if is_x86_feature_detected!("avx512f")
-            && is_x86_feature_detected!("avx512bw")
-            && is_x86_feature_detected!("avx512vl")
-        {
-            g.bench_function("avx512_rgba", |b| {
-                // SAFETY: runtime feature check confirmed avx512f+bw+vl are available.
-                b.iter(|| unsafe { store_srgb8_f32_avx512::<false>(black_box(&buf)) });
-            });
-            g.bench_function("avx512_bgra", |b| {
-                // SAFETY: runtime feature check confirmed avx512f+bw+vl are available.
-                b.iter(|| unsafe { store_srgb8_f32_avx512::<true>(black_box(&buf)) });
-            });
-        }
-    }
-
-    #[cfg(target_arch = "aarch64")]
-    {
-        use ctt::bench_internals::store_srgb8_f32_neon;
-
-        if std::arch::is_aarch64_feature_detected!("neon") {
-            g.bench_function("neon_rgba", |b| {
-                // SAFETY: runtime feature check confirmed NEON is available.
-                b.iter(|| unsafe { store_srgb8_f32_neon::<false>(black_box(&buf)) });
-            });
-            g.bench_function("neon_bgra", |b| {
-                // SAFETY: runtime feature check confirmed NEON is available.
-                b.iter(|| unsafe { store_srgb8_f32_neon::<true>(black_box(&buf)) });
-            });
-        }
-    }
 
     g.finish();
 }
 
-/// One runtime-selectable variant of an in-place pass.
-type InPlaceVariant = (&'static str, fn(&mut Vec<[f32; 4]>));
+/// sRGB store per-level sweep for both channel orders. Emits `_rgba` and
+/// `_bgra` variants of `fallback`, `sse4_2`, `avx2` (x86/x86_64) and `neon`
+/// (aarch64). The AVX-512 tier is deliberately split into the generic-rsqrt
+/// kernel (`avx512_generic_*`) and the `rsqrt14` intrinsic escape
+/// (`avx512_escape_*`, x86_64 only) rather than a single `avx512_*` row, since
+/// comparing those two is the point of keeping the escape.
+fn bench_srgb_store<M: criterion::measurement::Measurement>(
+    g: &mut criterion::BenchmarkGroup<'_, M>,
+    buf: &Buffer<f32>,
+) {
+    use ctt::bench_internals::{constructible_levels, store_srgb8_f32_at};
 
-/// Build the `(name, kernel)` list for one in-place pass: the serial path
-/// always, each SIMD kernel only when the host supports its ISA. The wrapper
-/// closures' `unsafe` is sound because a kernel is only listed after its
-/// runtime feature check passes.
-macro_rules! in_place_variants {
-    ($serial:path, $sse4_1:path, $avx2_fma:path, $avx512:path, $neon:path $(,)?) => {{
-        let mut variants: Vec<InPlaceVariant> = vec![("serial", |pixels| $serial(pixels))];
-
-        #[cfg(target_arch = "x86_64")]
-        {
-            if is_x86_feature_detected!("sse4.1") {
-                variants.push(("sse4_1", |pixels| unsafe { $sse4_1(pixels) }));
+    for (name, level) in constructible_levels() {
+        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        if name == "avx512" {
+            use ctt::bench_internals::store_srgb8_f32_generic_at;
+            g.bench_function("avx512_generic_rgba", |b| {
+                b.iter(|| store_srgb8_f32_generic_at::<false>(level, black_box(buf)));
+            });
+            g.bench_function("avx512_generic_bgra", |b| {
+                b.iter(|| store_srgb8_f32_generic_at::<true>(level, black_box(buf)));
+            });
+            #[cfg(target_arch = "x86_64")]
+            if let Some(avx512) = level.as_avx512() {
+                use ctt::bench_internals::store_srgb8_f32_avx512_escape;
+                g.bench_function("avx512_escape_rgba", |b| {
+                    b.iter(|| store_srgb8_f32_avx512_escape::<false>(avx512, black_box(buf)));
+                });
+                g.bench_function("avx512_escape_bgra", |b| {
+                    b.iter(|| store_srgb8_f32_avx512_escape::<true>(avx512, black_box(buf)));
+                });
             }
-            if is_x86_feature_detected!("avx2") && is_x86_feature_detected!("fma") {
-                variants.push(("avx2_fma", |pixels| unsafe { $avx2_fma(pixels) }));
-            }
-            if is_x86_feature_detected!("avx512f")
-                && is_x86_feature_detected!("avx512bw")
-                && is_x86_feature_detected!("avx512vl")
-            {
-                variants.push(("avx512", |pixels| unsafe { $avx512(pixels) }));
-            }
+            continue;
         }
 
-        #[cfg(target_arch = "aarch64")]
-        {
-            if std::arch::is_aarch64_feature_detected!("neon") {
-                variants.push(("neon", |pixels| unsafe { $neon(pixels) }));
-            }
-        }
-
-        variants
-    }};
+        g.bench_function(format!("{name}_rgba"), |b| {
+            b.iter(|| store_srgb8_f32_at::<false>(level, black_box(buf)));
+        });
+        g.bench_function(format!("{name}_bgra"), |b| {
+            b.iter(|| store_srgb8_f32_at::<true>(level, black_box(buf)));
+        });
+    }
 }
 
-/// Bench every listed variant of an in-place pass. The pass mutates its
-/// input, so every iteration gets a fresh clone via `iter_batched_ref`; the
-/// clone happens outside the timed region.
-fn bench_in_place(c: &mut Criterion, group: &str, variants: &[InPlaceVariant]) {
+/// Bench an in-place pass: one row per forced level. The pass mutates its input,
+/// so every iteration gets a fresh clone via `iter_batched_ref`; the clone
+/// happens outside the timed region. The buffer is built once and shared across
+/// every row.
+fn bench_in_place(c: &mut Criterion, group: &str, at: fn(Level, &mut [[f32; 4]])) {
     let buf = make_buffer();
 
     let mut g = c.benchmark_group(group);
     g.throughput(Throughput::Elements(PIXEL_COUNT));
-    for &(name, kernel) in variants {
-        g.bench_function(name, |b| {
-            b.iter_batched_ref(|| buf.pixels.clone(), kernel, BatchSize::LargeInput);
-        });
-    }
+
+    common::bench_levels(&mut g, "", |b, level| {
+        b.iter_batched_ref(
+            || buf.pixels.clone(),
+            |pixels| at(level, pixels),
+            BatchSize::LargeInput,
+        );
+    });
+
     g.finish();
 }
 
 fn bench_oetf_in_place(c: &mut Criterion) {
     use ctt::bench_internals as k;
-    bench_in_place(
-        c,
-        "srgb_oetf_in_place",
-        &in_place_variants!(
-            k::srgb_oetf_in_place_f32_serial,
-            k::srgb_oetf_in_place_f32_sse4_1,
-            k::srgb_oetf_in_place_f32_avx2_fma,
-            k::srgb_oetf_in_place_f32_avx512,
-            k::srgb_oetf_in_place_f32_neon,
-        ),
-    );
+    bench_in_place(c, "srgb_oetf_in_place", k::srgb_oetf_in_place_f32_at);
 }
 
 fn bench_eotf_in_place(c: &mut Criterion) {
     use ctt::bench_internals as k;
-    bench_in_place(
-        c,
-        "srgb_eotf_in_place",
-        &in_place_variants!(
-            k::srgb_eotf_in_place_f32_serial,
-            k::srgb_eotf_in_place_f32_sse4_1,
-            k::srgb_eotf_in_place_f32_avx2_fma,
-            k::srgb_eotf_in_place_f32_avx512,
-            k::srgb_eotf_in_place_f32_neon,
-        ),
-    );
+    bench_in_place(c, "srgb_eotf_in_place", k::srgb_eotf_in_place_f32_at);
 }
 
 criterion_group!(

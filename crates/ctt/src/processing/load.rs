@@ -11,8 +11,8 @@ use crate::error::{Error, Result};
 use crate::format_kind::{FormatFamily, FormatKind, classify};
 use crate::surface::{ColorSpace, Surface};
 
-use super::alpha;
 use super::buffer::Buffer;
+use super::kernels::alpha;
 use super::load_kernels as k;
 
 /// Load a surface into the f32 pipeline (linear + premultiplied).

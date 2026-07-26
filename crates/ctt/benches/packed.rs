@@ -1,15 +1,20 @@
 //! Micro-benchmarks for the packed 32-bit format kernels.
 //!
-//! Five representative paths:
+//! Representative paths:
 //!   * `A2B10G10R10_UNORM` load — reciprocal-multiply field normalization.
 //!   * `B10G11R11_UFLOAT` load — FMA-fused small-float decode.
+//!   * `E5B9G9R9_UFLOAT` load — shared-exponent decode.
 //!   * `A2B10G10R10_UNORM` store — FMA-fused rounding and bit packing.
 //!   * `B10G11R11_UFLOAT` store — integer small-float encoding and bit packing.
 //!   * `E5B9G9R9_UFLOAT` store — reciprocal-power-of-two + FMA-fused rounding.
 //!
-//! Each runs scalar plus every SIMD tier the host supports (skipped otherwise),
-//! so the same bench is meaningful on x86_64 and aarch64. Throughput is
-//! reported in pixels/second.
+//! The `A2B10G10R10` block covers each distinct codegen path: SNORM
+//! (sign-extension/copysign), UINT (integer min-clamp), and SINT (signed clamp)
+//! for both load and store, alongside the UNORM f32 paths above.
+//!
+//! Each group emits one row per constructible SIMD level (levels the host
+//! cannot execute are skipped), so the same bench is meaningful on x86_64 and
+//! aarch64. Throughput is reported in pixels/second.
 
 use std::hint::black_box;
 
@@ -17,8 +22,9 @@ use criterion::{Criterion, Throughput, criterion_group, criterion_main};
 use ctt::bench_internals::{A2B_R_SHIFT, Buffer};
 use ctt::{AlphaMode, ColorSpace, Format, Surface};
 
-const SIDE: u32 = 1024;
-const PIXEL_COUNT: u64 = (SIDE as u64) * (SIDE as u64);
+mod common;
+
+use common::{PIXEL_COUNT, SIDE};
 
 /// Build a packed 32-bit surface (4 bytes/pixel) with a deterministic word
 /// pattern that spreads bits across all four fields.
@@ -79,61 +85,70 @@ fn make_unorm_buffer() -> Buffer<f32> {
     }
 }
 
+/// Build a 4-channel buffer in the SNORM range, sweeping across zero and past
+/// both sign boundaries so the store's copysign rounding and clamp fire on
+/// negative inputs.
+fn make_snorm_buffer() -> Buffer<f32> {
+    let n = PIXEL_COUNT as usize;
+    let mut pixels = Vec::with_capacity(n);
+    for i in 0..n {
+        let k = (i % 1025) as f32;
+        let v = (k + 0.5) / 511.0 - 1.0; // spans [-1, 1+], straddles boundaries
+        pixels.push([v, -v, v * 0.5, ((i % 3) as f32) - 1.0]);
+    }
+    Buffer {
+        pixels,
+        width: SIDE,
+        height: SIDE,
+    }
+}
+
+/// Build a 4-channel u32 buffer for the UINT store, spanning past the 10-bit
+/// (and 2-bit alpha) field maxima so the integer min-clamp path fires.
+fn make_uint_buffer() -> Buffer<u32> {
+    let n = PIXEL_COUNT as usize;
+    let mut pixels = Vec::with_capacity(n);
+    for i in 0..n {
+        let v = (i as u32) % 1200; // 0..1199, exceeds the 10-bit max of 1023
+        pixels.push([v, 1199 - v, v / 2, (i as u32) % 5]); // alpha 0..4 exceeds 3
+    }
+    Buffer {
+        pixels,
+        width: SIDE,
+        height: SIDE,
+    }
+}
+
+/// Build a 4-channel u32 buffer for the SINT store: each lane is an i32 value
+/// reinterpreted as u32, sweeping across zero and past both signed field
+/// boundaries so the signed-clamp path fires on negative inputs.
+fn make_sint_buffer() -> Buffer<u32> {
+    let n = PIXEL_COUNT as usize;
+    let mut pixels = Vec::with_capacity(n);
+    for i in 0..n {
+        let v = (i as i32) % 1200 - 600; // -600..599, past [-512, 511]
+        let a = (i as i32) % 5 - 2; // -2..2, past [-2, 1]
+        pixels.push([v as u32, (-v) as u32, (v / 2) as u32, a as u32]);
+    }
+    Buffer {
+        pixels,
+        width: SIDE,
+        height: SIDE,
+    }
+}
+
 fn bench_a2b10g10r10_load(c: &mut Criterion) {
     let surface = make_packed_surface(Format::A2B10G10R10_UNORM_PACK32);
 
     let mut g = c.benchmark_group("a2b10g10r10_unorm_load_1024x1024");
     g.throughput(Throughput::Elements(PIXEL_COUNT));
 
-    g.bench_function("serial", |b| {
+    common::bench_levels(&mut g, "", |b, level| {
         b.iter(|| {
-            ctt::bench_internals::load_a2_unorm_serial::<A2B_R_SHIFT>(black_box(&surface)).unwrap()
+            ctt::bench_internals::load_a2_f32_at::<A2B_R_SHIFT, false>(level, black_box(&surface))
+                .unwrap()
         });
     });
-
-    #[cfg(target_arch = "x86_64")]
-    {
-        use ctt::bench_internals::{load_a2_f32_avx2, load_a2_f32_avx512, load_a2_f32_sse4_1};
-
-        if is_x86_feature_detected!("sse4.1") {
-            g.bench_function("sse4_1", |b| {
-                // SAFETY: runtime check confirmed sse4.1 is available.
-                b.iter(|| unsafe {
-                    load_a2_f32_sse4_1::<A2B_R_SHIFT, false>(black_box(&surface)).unwrap()
-                });
-            });
-        }
-        if is_x86_feature_detected!("avx2") {
-            g.bench_function("avx2", |b| {
-                // SAFETY: runtime check confirmed avx2 is available.
-                b.iter(|| unsafe {
-                    load_a2_f32_avx2::<A2B_R_SHIFT, false>(black_box(&surface)).unwrap()
-                });
-            });
-        }
-        if ctt::bench_internals::has_avx512() {
-            g.bench_function("avx512", |b| {
-                // SAFETY: runtime check confirmed avx512f+vl+bw are available.
-                b.iter(|| unsafe {
-                    load_a2_f32_avx512::<A2B_R_SHIFT, false>(black_box(&surface)).unwrap()
-                });
-            });
-        }
-    }
-
-    #[cfg(target_arch = "aarch64")]
-    {
-        use ctt::bench_internals::load_a2_f32_neon;
-
-        if std::arch::is_aarch64_feature_detected!("neon") {
-            g.bench_function("neon", |b| {
-                // SAFETY: runtime check confirmed NEON is available.
-                b.iter(|| unsafe {
-                    load_a2_f32_neon::<A2B_R_SHIFT, false>(black_box(&surface)).unwrap()
-                });
-            });
-        }
-    }
 
     g.finish();
 }
@@ -144,47 +159,22 @@ fn bench_b10g11r11_load(c: &mut Criterion) {
     let mut g = c.benchmark_group("b10g11r11_load_1024x1024");
     g.throughput(Throughput::Elements(PIXEL_COUNT));
 
-    g.bench_function("serial", |b| {
-        b.iter(|| ctt::bench_internals::load_b10g11r11_f32_serial(black_box(&surface)).unwrap());
+    common::bench_levels(&mut g, "", |b, level| {
+        b.iter(|| ctt::bench_internals::load_b10g11r11_f32_at(level, black_box(&surface)).unwrap());
     });
 
-    #[cfg(target_arch = "x86_64")]
-    {
-        use ctt::bench_internals::{
-            load_b10g11r11_f32_avx2_fma, load_b10g11r11_f32_avx512, load_b10g11r11_f32_sse4_1,
-        };
+    g.finish();
+}
 
-        if is_x86_feature_detected!("sse4.1") {
-            g.bench_function("sse4_1", |b| {
-                // SAFETY: runtime check confirmed sse4.1 is available.
-                b.iter(|| unsafe { load_b10g11r11_f32_sse4_1(black_box(&surface)).unwrap() });
-            });
-        }
-        if is_x86_feature_detected!("avx2") && is_x86_feature_detected!("fma") {
-            g.bench_function("avx2_fma", |b| {
-                // SAFETY: runtime check confirmed avx2+fma are available.
-                b.iter(|| unsafe { load_b10g11r11_f32_avx2_fma(black_box(&surface)).unwrap() });
-            });
-        }
-        if ctt::bench_internals::has_avx512() {
-            g.bench_function("avx512", |b| {
-                // SAFETY: runtime check confirmed avx512f+vl+bw are available.
-                b.iter(|| unsafe { load_b10g11r11_f32_avx512(black_box(&surface)).unwrap() });
-            });
-        }
-    }
+fn bench_e5b9g9r9_load(c: &mut Criterion) {
+    let surface = make_packed_surface(Format::E5B9G9R9_UFLOAT_PACK32);
 
-    #[cfg(target_arch = "aarch64")]
-    {
-        use ctt::bench_internals::load_b10g11r11_f32_neon;
+    let mut g = c.benchmark_group("e5b9g9r9_load_1024x1024");
+    g.throughput(Throughput::Elements(PIXEL_COUNT));
 
-        if std::arch::is_aarch64_feature_detected!("neon") {
-            g.bench_function("neon", |b| {
-                // SAFETY: runtime check confirmed NEON is available.
-                b.iter(|| unsafe { load_b10g11r11_f32_neon(black_box(&surface)).unwrap() });
-            });
-        }
-    }
+    common::bench_levels(&mut g, "", |b, level| {
+        b.iter(|| ctt::bench_internals::load_e5b9g9r9_f32_at(level, black_box(&surface)).unwrap());
+    });
 
     g.finish();
 }
@@ -195,47 +185,9 @@ fn bench_e5b9g9r9_store(c: &mut Criterion) {
     let mut g = c.benchmark_group("e5b9g9r9_store_1024x1024");
     g.throughput(Throughput::Elements(PIXEL_COUNT));
 
-    g.bench_function("serial", |b| {
-        b.iter(|| ctt::bench_internals::store_e5b9g9r9_f32_serial(black_box(&buf)));
+    common::bench_levels(&mut g, "", |b, level| {
+        b.iter(|| ctt::bench_internals::store_e5b9g9r9_f32_at(level, black_box(&buf)));
     });
-
-    #[cfg(target_arch = "x86_64")]
-    {
-        use ctt::bench_internals::{
-            store_e5b9g9r9_f32_avx2_fma, store_e5b9g9r9_f32_avx512, store_e5b9g9r9_f32_sse4_1,
-        };
-
-        if is_x86_feature_detected!("sse4.1") {
-            g.bench_function("sse4_1", |b| {
-                // SAFETY: runtime check confirmed sse4.1 is available.
-                b.iter(|| unsafe { store_e5b9g9r9_f32_sse4_1(black_box(&buf)) });
-            });
-        }
-        if is_x86_feature_detected!("avx2") && is_x86_feature_detected!("fma") {
-            g.bench_function("avx2_fma", |b| {
-                // SAFETY: runtime check confirmed avx2+fma are available.
-                b.iter(|| unsafe { store_e5b9g9r9_f32_avx2_fma(black_box(&buf)) });
-            });
-        }
-        if ctt::bench_internals::has_avx512() {
-            g.bench_function("avx512", |b| {
-                // SAFETY: runtime check confirmed avx512f+vl+bw are available.
-                b.iter(|| unsafe { store_e5b9g9r9_f32_avx512(black_box(&buf)) });
-            });
-        }
-    }
-
-    #[cfg(target_arch = "aarch64")]
-    {
-        use ctt::bench_internals::store_e5b9g9r9_f32_neon;
-
-        if std::arch::is_aarch64_feature_detected!("neon") {
-            g.bench_function("neon", |b| {
-                // SAFETY: runtime check confirmed NEON is available.
-                b.iter(|| unsafe { store_e5b9g9r9_f32_neon(black_box(&buf)) });
-            });
-        }
-    }
 
     g.finish();
 }
@@ -246,47 +198,11 @@ fn bench_a2b10g10r10_store(c: &mut Criterion) {
     let mut g = c.benchmark_group("a2b10g10r10_unorm_store_1024x1024");
     g.throughput(Throughput::Elements(PIXEL_COUNT));
 
-    g.bench_function("serial", |b| {
-        b.iter(|| ctt::bench_internals::store_a2_unorm_serial::<A2B_R_SHIFT>(black_box(&buf)));
+    common::bench_levels(&mut g, "", |b, level| {
+        b.iter(|| {
+            ctt::bench_internals::store_a2_f32_at::<A2B_R_SHIFT, false>(level, black_box(&buf))
+        });
     });
-
-    #[cfg(target_arch = "x86_64")]
-    {
-        use ctt::bench_internals::{
-            store_a2_f32_avx2_fma, store_a2_f32_avx512, store_a2_f32_sse4_1,
-        };
-
-        if is_x86_feature_detected!("sse4.1") {
-            g.bench_function("sse4_1", |b| {
-                // SAFETY: runtime check confirmed sse4.1 is available.
-                b.iter(|| unsafe { store_a2_f32_sse4_1::<A2B_R_SHIFT, false>(black_box(&buf)) });
-            });
-        }
-        if is_x86_feature_detected!("avx2") && is_x86_feature_detected!("fma") {
-            g.bench_function("avx2_fma", |b| {
-                // SAFETY: runtime check confirmed avx2+fma are available.
-                b.iter(|| unsafe { store_a2_f32_avx2_fma::<A2B_R_SHIFT, false>(black_box(&buf)) });
-            });
-        }
-        if ctt::bench_internals::has_avx512() {
-            g.bench_function("avx512", |b| {
-                // SAFETY: runtime check confirmed avx512f+vl+bw are available.
-                b.iter(|| unsafe { store_a2_f32_avx512::<A2B_R_SHIFT, false>(black_box(&buf)) });
-            });
-        }
-    }
-
-    #[cfg(target_arch = "aarch64")]
-    {
-        use ctt::bench_internals::store_a2_f32_neon;
-
-        if std::arch::is_aarch64_feature_detected!("neon") {
-            g.bench_function("neon", |b| {
-                // SAFETY: runtime check confirmed NEON is available.
-                b.iter(|| unsafe { store_a2_f32_neon::<A2B_R_SHIFT, false>(black_box(&buf)) });
-            });
-        }
-    }
 
     g.finish();
 }
@@ -297,39 +213,102 @@ fn bench_b10g11r11_store(c: &mut Criterion) {
     let mut g = c.benchmark_group("b10g11r11_store_1024x1024");
     g.throughput(Throughput::Elements(PIXEL_COUNT));
 
-    g.bench_function("serial", |b| {
-        b.iter(|| ctt::bench_internals::store_b10g11r11_f32_serial(black_box(&buf)));
+    common::bench_levels(&mut g, "", |b, level| {
+        b.iter(|| ctt::bench_internals::store_b10g11r11_f32_at(level, black_box(&buf)));
     });
 
-    #[cfg(target_arch = "x86_64")]
-    {
-        use ctt::bench_internals::{store_b10g11r11_f32_avx2, store_b10g11r11_f32_avx512};
+    g.finish();
+}
 
-        if is_x86_feature_detected!("avx2") {
-            g.bench_function("avx2", |b| {
-                // SAFETY: runtime check confirmed avx2 is available.
-                b.iter(|| unsafe { store_b10g11r11_f32_avx2(black_box(&buf)) });
-            });
-        }
-        if ctt::bench_internals::has_avx512() {
-            g.bench_function("avx512", |b| {
-                // SAFETY: runtime check confirmed avx512f+vl+bw are available.
-                b.iter(|| unsafe { store_b10g11r11_f32_avx512(black_box(&buf)) });
-            });
-        }
-    }
+fn bench_a2b10g10r10_snorm_load(c: &mut Criterion) {
+    let surface = make_packed_surface(Format::A2B10G10R10_SNORM_PACK32);
 
-    #[cfg(target_arch = "aarch64")]
-    {
-        use ctt::bench_internals::store_b10g11r11_f32_neon;
+    let mut g = c.benchmark_group("a2b10g10r10_snorm_load_1024x1024");
+    g.throughput(Throughput::Elements(PIXEL_COUNT));
 
-        if std::arch::is_aarch64_feature_detected!("neon") {
-            g.bench_function("neon", |b| {
-                // SAFETY: runtime check confirmed NEON is available.
-                b.iter(|| unsafe { store_b10g11r11_f32_neon(black_box(&buf)) });
-            });
-        }
-    }
+    common::bench_levels(&mut g, "", |b, level| {
+        b.iter(|| {
+            ctt::bench_internals::load_a2_f32_at::<A2B_R_SHIFT, true>(level, black_box(&surface))
+                .unwrap()
+        });
+    });
+
+    g.finish();
+}
+
+fn bench_a2b10g10r10_snorm_store(c: &mut Criterion) {
+    let buf = make_snorm_buffer();
+
+    let mut g = c.benchmark_group("a2b10g10r10_snorm_store_1024x1024");
+    g.throughput(Throughput::Elements(PIXEL_COUNT));
+
+    common::bench_levels(&mut g, "", |b, level| {
+        b.iter(|| {
+            ctt::bench_internals::store_a2_f32_at::<A2B_R_SHIFT, true>(level, black_box(&buf))
+        });
+    });
+
+    g.finish();
+}
+
+fn bench_a2b10g10r10_uint_load(c: &mut Criterion) {
+    let surface = make_packed_surface(Format::A2B10G10R10_UINT_PACK32);
+
+    let mut g = c.benchmark_group("a2b10g10r10_uint_load_1024x1024");
+    g.throughput(Throughput::Elements(PIXEL_COUNT));
+
+    common::bench_levels(&mut g, "", |b, level| {
+        b.iter(|| {
+            ctt::bench_internals::load_a2_u32_at::<A2B_R_SHIFT, false>(level, black_box(&surface))
+                .unwrap()
+        });
+    });
+
+    g.finish();
+}
+
+fn bench_a2b10g10r10_uint_store(c: &mut Criterion) {
+    let buf = make_uint_buffer();
+
+    let mut g = c.benchmark_group("a2b10g10r10_uint_store_1024x1024");
+    g.throughput(Throughput::Elements(PIXEL_COUNT));
+
+    common::bench_levels(&mut g, "", |b, level| {
+        b.iter(|| {
+            ctt::bench_internals::store_a2_u32_at::<A2B_R_SHIFT, false>(level, black_box(&buf))
+        });
+    });
+
+    g.finish();
+}
+
+fn bench_a2b10g10r10_sint_load(c: &mut Criterion) {
+    let surface = make_packed_surface(Format::A2B10G10R10_SINT_PACK32);
+
+    let mut g = c.benchmark_group("a2b10g10r10_sint_load_1024x1024");
+    g.throughput(Throughput::Elements(PIXEL_COUNT));
+
+    common::bench_levels(&mut g, "", |b, level| {
+        b.iter(|| {
+            ctt::bench_internals::load_a2_u32_at::<A2B_R_SHIFT, true>(level, black_box(&surface))
+                .unwrap()
+        });
+    });
+
+    g.finish();
+}
+
+fn bench_a2b10g10r10_sint_store(c: &mut Criterion) {
+    let buf = make_sint_buffer();
+
+    let mut g = c.benchmark_group("a2b10g10r10_sint_store_1024x1024");
+    g.throughput(Throughput::Elements(PIXEL_COUNT));
+
+    common::bench_levels(&mut g, "", |b, level| {
+        b.iter(|| {
+            ctt::bench_internals::store_a2_u32_at::<A2B_R_SHIFT, true>(level, black_box(&buf))
+        });
+    });
 
     g.finish();
 }
@@ -338,8 +317,15 @@ criterion_group!(
     benches,
     bench_a2b10g10r10_load,
     bench_b10g11r11_load,
+    bench_e5b9g9r9_load,
     bench_a2b10g10r10_store,
     bench_b10g11r11_store,
-    bench_e5b9g9r9_store
+    bench_e5b9g9r9_store,
+    bench_a2b10g10r10_snorm_load,
+    bench_a2b10g10r10_snorm_store,
+    bench_a2b10g10r10_uint_load,
+    bench_a2b10g10r10_uint_store,
+    bench_a2b10g10r10_sint_load,
+    bench_a2b10g10r10_sint_store
 );
 criterion_main!(benches);

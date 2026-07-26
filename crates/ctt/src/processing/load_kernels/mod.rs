@@ -2,23 +2,26 @@
 //! [`Surface`] into a `Buffer<T>`.
 //!
 //! Loaders land in *linear*, *straight alpha* space — premultiplication is
-//! handled separately in [`super::alpha`]. sRGB decoding is applied here
-//! (RGB channels only; alpha rides through as linear).
+//! handled separately in [`super::kernels::alpha`]. sRGB decoding is applied
+//! here (RGB channels only; alpha rides through as linear).
+//!
+//! The plain per-channel codecs live in this module; the formats with an
+//! explicitly vectorized loader (sRGB8 and the packed 32-bit formats) live in
+//! [`super::kernels`] and are re-exported below, so this module stays the
+//! format-facing surface for [`super::load`].
 
-pub(crate) mod a2_10_10_10;
-pub(crate) mod b10g11r11;
-pub(crate) mod e5b9g9r9;
-pub(crate) mod srgb;
-
-pub use a2_10_10_10::{
+pub use crate::processing::kernels::a2_10_10_10::{
     load_a2b10g10r10_sint_u32, load_a2b10g10r10_snorm_f32, load_a2b10g10r10_uint_u32,
     load_a2b10g10r10_unorm_f32, load_a2r10g10b10_sint_u32, load_a2r10g10b10_snorm_f32,
     load_a2r10g10b10_uint_u32, load_a2r10g10b10_unorm_f32,
 };
-pub use b10g11r11::load_b10g11r11_f32;
-pub use e5b9g9r9::load_e5b9g9r9_f32;
-pub use srgb::{load_bgr8_srgb_f32, load_bgra8_srgb_f32, load_srgb8_f32, srgb_eotf_in_place_f32};
+pub use crate::processing::kernels::b10g11r11::load_b10g11r11_f32;
+pub use crate::processing::kernels::e5b9g9r9::load_e5b9g9r9_f32;
+pub use crate::processing::kernels::srgb::{
+    load_bgr8_srgb_f32, load_bgra8_srgb_f32, load_srgb8_f32, srgb_eotf_in_place_f32,
+};
 
+use bytemuck::Pod;
 use half::f16;
 
 use crate::error::{Error, Result};
@@ -30,25 +33,37 @@ use super::buffer::Buffer;
 /// defaulted to 1.0 (and intermediate lanes defaulted to 0.0).
 pub fn load_u8_unorm_f32(surface: &Surface, channels: usize) -> Result<Buffer<f32>> {
     profiling::scope!("load_u8_unorm_f32");
-    read_pixels_f32(surface, channels, 1, |bytes, lanes| {
-        for (lane, &byte) in lanes.iter_mut().zip(bytes) {
-            *lane = byte as f32 / 255.0;
-        }
-    })
+    read_pixels(
+        surface,
+        channels,
+        1,
+        [0.0, 0.0, 0.0, 1.0],
+        |bytes, lanes| {
+            for (lane, &byte) in lanes.iter_mut().zip(bytes) {
+                *lane = byte as f32 / 255.0;
+            }
+        },
+    )
 }
 
 pub fn load_i8_snorm_f32(surface: &Surface, channels: usize) -> Result<Buffer<f32>> {
     profiling::scope!("load_i8_snorm_f32");
-    read_pixels_f32(surface, channels, 1, |bytes, lanes| {
-        for (lane, &byte) in lanes.iter_mut().zip(bytes) {
-            *lane = ((byte as i8) as f32 / 127.0).max(-1.0);
-        }
-    })
+    read_pixels(
+        surface,
+        channels,
+        1,
+        [0.0, 0.0, 0.0, 1.0],
+        |bytes, lanes| {
+            for (lane, &byte) in lanes.iter_mut().zip(bytes) {
+                *lane = ((byte as i8) as f32 / 127.0).max(-1.0);
+            }
+        },
+    )
 }
 
 pub fn load_bgra8_unorm_f32(surface: &Surface) -> Result<Buffer<f32>> {
     profiling::scope!("load_bgra8_unorm_f32");
-    read_pixels_f32(surface, 4, 1, |bytes, lanes| {
+    read_pixels(surface, 4, 1, [0.0, 0.0, 0.0, 1.0], |bytes, lanes| {
         let &[b, g, r, a] = <&[u8; 4]>::try_from(bytes).expect("4-byte pixel");
         lanes[0] = r as f32 / 255.0;
         lanes[1] = g as f32 / 255.0;
@@ -59,7 +74,7 @@ pub fn load_bgra8_unorm_f32(surface: &Surface) -> Result<Buffer<f32>> {
 
 pub fn load_bgr8_unorm_f32(surface: &Surface) -> Result<Buffer<f32>> {
     profiling::scope!("load_bgr8_unorm_f32");
-    read_pixels_f32(surface, 3, 1, |bytes, lanes| {
+    read_pixels(surface, 3, 1, [0.0, 0.0, 0.0, 1.0], |bytes, lanes| {
         let &[b, g, r] = <&[u8; 3]>::try_from(bytes).expect("3-byte pixel");
         lanes[0] = r as f32 / 255.0;
         lanes[1] = g as f32 / 255.0;
@@ -69,50 +84,41 @@ pub fn load_bgr8_unorm_f32(surface: &Surface) -> Result<Buffer<f32>> {
 
 pub fn load_u16_unorm_f32(surface: &Surface, channels: usize) -> Result<Buffer<f32>> {
     profiling::scope!("load_u16_unorm_f32");
-    read_pixels_f32(surface, channels, 2, |bytes, lanes| {
-        let (chunks, _) = bytes.as_chunks::<2>();
-        for (lane, &chunk) in lanes.iter_mut().zip(chunks) {
-            *lane = u16::from_le_bytes(chunk) as f32 / 65535.0;
-        }
-    })
+    read_pixels(
+        surface,
+        channels,
+        2,
+        [0.0, 0.0, 0.0, 1.0],
+        |bytes, lanes| {
+            let (chunks, _) = bytes.as_chunks::<2>();
+            for (lane, &chunk) in lanes.iter_mut().zip(chunks) {
+                *lane = u16::from_le_bytes(chunk) as f32 / 65535.0;
+            }
+        },
+    )
 }
 
 pub fn load_i16_snorm_f32(surface: &Surface, channels: usize) -> Result<Buffer<f32>> {
     profiling::scope!("load_i16_snorm_f32");
-    read_pixels_f32(surface, channels, 2, |bytes, lanes| {
-        let (chunks, _) = bytes.as_chunks::<2>();
-        for (lane, &chunk) in lanes.iter_mut().zip(chunks) {
-            *lane = (i16::from_le_bytes(chunk) as f32 / 32767.0).max(-1.0);
-        }
-    })
-}
-
-pub fn load_f16_f32(surface: &Surface, channels: usize) -> Result<Buffer<f32>> {
-    profiling::scope!("load_f16_f32");
-
-    // On little-endian (every realistic target), the file's f16 bytes match
-    // the native f16 in-memory representation, so we can cast and dispatch
-    // through `half`'s bulk SIMD-accelerated converter. On big-endian we'd be
-    // misinterpreting the bytes — fall back to the scalar `from_le_bytes`
-    // path that the rest of the codebase uses.
-    #[cfg(target_endian = "little")]
-    {
-        load_f16_f32_bulk(surface, channels)
-    }
-
-    #[cfg(target_endian = "big")]
-    {
-        read_pixels_f32(surface, channels, 2, |bytes, lanes| {
+    read_pixels(
+        surface,
+        channels,
+        2,
+        [0.0, 0.0, 0.0, 1.0],
+        |bytes, lanes| {
             let (chunks, _) = bytes.as_chunks::<2>();
             for (lane, &chunk) in lanes.iter_mut().zip(chunks) {
-                *lane = f16::from_bits(u16::from_le_bytes(chunk)).to_f32();
+                *lane = (i16::from_le_bytes(chunk) as f32 / 32767.0).max(-1.0);
             }
-        })
-    }
+        },
+    )
 }
 
-#[cfg(target_endian = "little")]
-fn load_f16_f32_bulk(surface: &Surface, channels: usize) -> Result<Buffer<f32>> {
+/// The file's f16 bytes match the native in-memory representation
+/// (little-endian only, enforced crate-wide), so rows cast in place and
+/// dispatch through `half`'s bulk SIMD-accelerated converter.
+pub fn load_f16_f32(surface: &Surface, channels: usize) -> Result<Buffer<f32>> {
+    profiling::scope!("load_f16_f32");
     use half::slice::HalfFloatSliceExt;
 
     let pixel_bytes = channels * 2;
@@ -167,7 +173,6 @@ fn load_f16_f32_bulk(surface: &Surface, channels: usize) -> Result<Buffer<f32>> 
 /// otherwise — e.g. an odd `stride` places a row at an odd byte offset —
 /// decodes the row into `scratch` (reused across rows) via `from_le_bytes`
 /// and returns that. `row.len()` is always a multiple of 2 here.
-#[cfg(target_endian = "little")]
 fn aligned_f16<'a>(row: &'a [u8], scratch: &'a mut Vec<f16>) -> &'a [f16] {
     match bytemuck::try_cast_slice::<u8, f16>(row) {
         Ok(src) => src,
@@ -182,34 +187,52 @@ fn aligned_f16<'a>(row: &'a [u8], scratch: &'a mut Vec<f16>) -> &'a [f16] {
 
 pub fn load_f32_f32(surface: &Surface, channels: usize) -> Result<Buffer<f32>> {
     profiling::scope!("load_f32_f32");
-    read_pixels_f32(surface, channels, 4, |bytes, lanes| {
-        let (chunks, _) = bytes.as_chunks::<4>();
-        for (lane, &chunk) in lanes.iter_mut().zip(chunks) {
-            *lane = f32::from_le_bytes(chunk);
-        }
-    })
+    read_pixels(
+        surface,
+        channels,
+        4,
+        [0.0, 0.0, 0.0, 1.0],
+        |bytes, lanes| {
+            let (chunks, _) = bytes.as_chunks::<4>();
+            for (lane, &chunk) in lanes.iter_mut().zip(chunks) {
+                *lane = f32::from_le_bytes(chunk);
+            }
+        },
+    )
 }
 
 // ---- f64 pipeline ----
 
 pub fn load_f32_f64(surface: &Surface, channels: usize) -> Result<Buffer<f64>> {
     profiling::scope!("load_f32_f64");
-    read_pixels_f64(surface, channels, 4, |bytes, lanes| {
-        let (chunks, _) = bytes.as_chunks::<4>();
-        for (lane, &chunk) in lanes.iter_mut().zip(chunks) {
-            *lane = f32::from_le_bytes(chunk) as f64;
-        }
-    })
+    read_pixels(
+        surface,
+        channels,
+        4,
+        [0.0, 0.0, 0.0, 1.0],
+        |bytes, lanes| {
+            let (chunks, _) = bytes.as_chunks::<4>();
+            for (lane, &chunk) in lanes.iter_mut().zip(chunks) {
+                *lane = f32::from_le_bytes(chunk) as f64;
+            }
+        },
+    )
 }
 
 pub fn load_f64_f64(surface: &Surface, channels: usize) -> Result<Buffer<f64>> {
     profiling::scope!("load_f64_f64");
-    read_pixels_f64(surface, channels, 8, |bytes, lanes| {
-        let (chunks, _) = bytes.as_chunks::<8>();
-        for (lane, &chunk) in lanes.iter_mut().zip(chunks) {
-            *lane = f64::from_le_bytes(chunk);
-        }
-    })
+    read_pixels(
+        surface,
+        channels,
+        8,
+        [0.0, 0.0, 0.0, 1.0],
+        |bytes, lanes| {
+            let (chunks, _) = bytes.as_chunks::<8>();
+            for (lane, &chunk) in lanes.iter_mut().zip(chunks) {
+                *lane = f64::from_le_bytes(chunk);
+            }
+        },
+    )
 }
 
 // ---- Integer (u32) pipeline ----
@@ -217,7 +240,7 @@ pub fn load_f64_f64(surface: &Surface, channels: usize) -> Result<Buffer<f64>> {
 /// Load 8-bit unsigned integers into u32 lanes. Alpha lane defaults to u32::MAX.
 pub fn load_u8_uint_u32(surface: &Surface, channels: usize) -> Result<Buffer<u32>> {
     profiling::scope!("load_u8_uint_u32");
-    read_pixels_u32(surface, channels, 1, |bytes, lanes| {
+    read_pixels(surface, channels, 1, [0, 0, 0, u32::MAX], |bytes, lanes| {
         for (lane, &byte) in lanes.iter_mut().zip(bytes) {
             *lane = byte as u32;
         }
@@ -227,7 +250,7 @@ pub fn load_u8_uint_u32(surface: &Surface, channels: usize) -> Result<Buffer<u32
 /// Load 8-bit signed integers (sign-extended) into u32 lanes via bit-cast.
 pub fn load_i8_sint_u32(surface: &Surface, channels: usize) -> Result<Buffer<u32>> {
     profiling::scope!("load_i8_sint_u32");
-    read_pixels_u32(surface, channels, 1, |bytes, lanes| {
+    read_pixels(surface, channels, 1, [0, 0, 0, u32::MAX], |bytes, lanes| {
         for (lane, &byte) in lanes.iter_mut().zip(bytes) {
             *lane = ((byte as i8) as i32) as u32;
         }
@@ -236,7 +259,7 @@ pub fn load_i8_sint_u32(surface: &Surface, channels: usize) -> Result<Buffer<u32
 
 pub fn load_u16_uint_u32(surface: &Surface, channels: usize) -> Result<Buffer<u32>> {
     profiling::scope!("load_u16_uint_u32");
-    read_pixels_u32(surface, channels, 2, |bytes, lanes| {
+    read_pixels(surface, channels, 2, [0, 0, 0, u32::MAX], |bytes, lanes| {
         let (chunks, _) = bytes.as_chunks::<2>();
         for (lane, &chunk) in lanes.iter_mut().zip(chunks) {
             *lane = u16::from_le_bytes(chunk) as u32;
@@ -246,7 +269,7 @@ pub fn load_u16_uint_u32(surface: &Surface, channels: usize) -> Result<Buffer<u3
 
 pub fn load_i16_sint_u32(surface: &Surface, channels: usize) -> Result<Buffer<u32>> {
     profiling::scope!("load_i16_sint_u32");
-    read_pixels_u32(surface, channels, 2, |bytes, lanes| {
+    read_pixels(surface, channels, 2, [0, 0, 0, u32::MAX], |bytes, lanes| {
         let (chunks, _) = bytes.as_chunks::<2>();
         for (lane, &chunk) in lanes.iter_mut().zip(chunks) {
             *lane = (i16::from_le_bytes(chunk) as i32) as u32;
@@ -256,7 +279,7 @@ pub fn load_i16_sint_u32(surface: &Surface, channels: usize) -> Result<Buffer<u3
 
 pub fn load_u32_uint_u32(surface: &Surface, channels: usize) -> Result<Buffer<u32>> {
     profiling::scope!("load_u32_uint_u32");
-    read_pixels_u32(surface, channels, 4, |bytes, lanes| {
+    read_pixels(surface, channels, 4, [0, 0, 0, u32::MAX], |bytes, lanes| {
         let (chunks, _) = bytes.as_chunks::<4>();
         for (lane, &chunk) in lanes.iter_mut().zip(chunks) {
             *lane = u32::from_le_bytes(chunk);
@@ -266,7 +289,7 @@ pub fn load_u32_uint_u32(surface: &Surface, channels: usize) -> Result<Buffer<u3
 
 pub fn load_i32_sint_u32(surface: &Surface, channels: usize) -> Result<Buffer<u32>> {
     profiling::scope!("load_i32_sint_u32");
-    read_pixels_u32(surface, channels, 4, |bytes, lanes| {
+    read_pixels(surface, channels, 4, [0, 0, 0, u32::MAX], |bytes, lanes| {
         let (chunks, _) = bytes.as_chunks::<4>();
         for (lane, &chunk) in lanes.iter_mut().zip(chunks) {
             *lane = u32::from_le_bytes(chunk); // bit-cast of i32 → u32
@@ -278,7 +301,7 @@ pub fn load_i32_sint_u32(surface: &Surface, channels: usize) -> Result<Buffer<u3
 
 pub fn load_u64_uint_u64(surface: &Surface, channels: usize) -> Result<Buffer<u64>> {
     profiling::scope!("load_u64_uint_u64");
-    read_pixels_u64(surface, channels, 8, |bytes, lanes| {
+    read_pixels(surface, channels, 8, [0, 0, 0, u64::MAX], |bytes, lanes| {
         let (chunks, _) = bytes.as_chunks::<8>();
         for (lane, &chunk) in lanes.iter_mut().zip(chunks) {
             *lane = u64::from_le_bytes(chunk);
@@ -288,7 +311,7 @@ pub fn load_u64_uint_u64(surface: &Surface, channels: usize) -> Result<Buffer<u6
 
 pub fn load_i64_sint_u64(surface: &Surface, channels: usize) -> Result<Buffer<u64>> {
     profiling::scope!("load_i64_sint_u64");
-    read_pixels_u64(surface, channels, 8, |bytes, lanes| {
+    read_pixels(surface, channels, 8, [0, 0, 0, u64::MAX], |bytes, lanes| {
         let (chunks, _) = bytes.as_chunks::<8>();
         for (lane, &chunk) in lanes.iter_mut().zip(chunks) {
             *lane = u64::from_le_bytes(chunk); // bit-cast i64 → u64
@@ -298,49 +321,7 @@ pub fn load_i64_sint_u64(surface: &Surface, channels: usize) -> Result<Buffer<u6
 
 // ---- Helpers ----
 
-/// Drive a SIMD packed-32-bit loader: run `row_fn` over each row of a
-/// 4-byte-per-pixel surface, decoding into 4 lanes per pixel. Because 4 input
-/// bytes become 4 output lanes, byte offsets double as lane offsets throughout
-/// the row helpers.
-///
-/// # Safety
-/// `row_fn` must write `row.len()` lanes starting at the pointer it is given.
-#[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
-unsafe fn load_packed_rows<T: Copy + bytemuck::Pod>(
-    surface: &Surface,
-    mut row_fn: impl FnMut(&[u8], *mut T),
-) -> Result<Buffer<T>> {
-    validate_surface(surface, 4)?;
-
-    let w = surface.width as usize;
-    let h = surface.height as usize;
-    let stride = surface.stride as usize;
-    let row_bytes = w * 4;
-    let total_pixels = w * h;
-
-    let mut pixels: Vec<[T; 4]> = Vec::with_capacity(total_pixels);
-    let out_base = pixels.as_mut_ptr() as *mut T;
-
-    let mut out_i = 0usize;
-    for row_region in surface.data.chunks(stride).take(h) {
-        let row = &row_region[..row_bytes];
-        // SAFETY: `out_i` stays within the reserved capacity; validate_surface
-        // bounded the input slice.
-        row_fn(row, unsafe { out_base.add(out_i) });
-        out_i += row_bytes;
-    }
-    debug_assert_eq!(out_i, total_pixels * 4);
-    // SAFETY: `row_fn` initialized all `total_pixels * 4` lanes (caller contract).
-    unsafe { pixels.set_len(total_pixels) };
-
-    Ok(Buffer {
-        pixels,
-        width: surface.width,
-        height: surface.height,
-    })
-}
-
-fn validate_surface(surface: &Surface, pixel_bytes: usize) -> Result<()> {
+pub(crate) fn validate_surface(surface: &Surface, pixel_bytes: usize) -> Result<()> {
     let w = surface.width as usize;
     let h = surface.height as usize;
     let row_bytes = w * pixel_bytes;
@@ -361,12 +342,15 @@ fn validate_surface(surface: &Surface, pixel_bytes: usize) -> Result<()> {
     Ok(())
 }
 
-fn read_pixels_f32(
+/// Shared by the plain codecs above and by the scalar production paths in
+/// [`super::kernels`].
+pub(crate) fn read_pixels<T: Copy + Pod>(
     surface: &Surface,
     channels: usize,
     channel_bytes: usize,
-    mut decode: impl FnMut(&[u8], &mut [f32; 4]),
-) -> Result<Buffer<f32>> {
+    default: [T; 4],
+    mut decode: impl FnMut(&[u8], &mut [T; 4]),
+) -> Result<Buffer<T>> {
     let pixel_bytes = channels * channel_bytes;
     validate_surface(surface, pixel_bytes)?;
 
@@ -379,100 +363,7 @@ fn read_pixels_f32(
     for row_region in surface.data.chunks(stride).take(h) {
         let row = &row_region[..row_bytes];
         pixels.extend(row.chunks_exact(pixel_bytes).map(|pixel| {
-            let mut lanes = [0.0f32, 0.0, 0.0, 1.0];
-            decode(pixel, &mut lanes);
-            lanes
-        }));
-    }
-
-    Ok(Buffer {
-        pixels,
-        width: surface.width,
-        height: surface.height,
-    })
-}
-
-fn read_pixels_f64(
-    surface: &Surface,
-    channels: usize,
-    channel_bytes: usize,
-    mut decode: impl FnMut(&[u8], &mut [f64; 4]),
-) -> Result<Buffer<f64>> {
-    let pixel_bytes = channels * channel_bytes;
-    validate_surface(surface, pixel_bytes)?;
-
-    let w = surface.width as usize;
-    let h = surface.height as usize;
-    let stride = surface.stride as usize;
-    let row_bytes = w * pixel_bytes;
-
-    let mut pixels = Vec::with_capacity(w * h);
-    for row_region in surface.data.chunks(stride).take(h) {
-        let row = &row_region[..row_bytes];
-        pixels.extend(row.chunks_exact(pixel_bytes).map(|pixel| {
-            let mut lanes = [0.0f64, 0.0, 0.0, 1.0];
-            decode(pixel, &mut lanes);
-            lanes
-        }));
-    }
-
-    Ok(Buffer {
-        pixels,
-        width: surface.width,
-        height: surface.height,
-    })
-}
-
-fn read_pixels_u32(
-    surface: &Surface,
-    channels: usize,
-    channel_bytes: usize,
-    mut decode: impl FnMut(&[u8], &mut [u32; 4]),
-) -> Result<Buffer<u32>> {
-    let pixel_bytes = channels * channel_bytes;
-    validate_surface(surface, pixel_bytes)?;
-
-    let w = surface.width as usize;
-    let h = surface.height as usize;
-    let stride = surface.stride as usize;
-    let row_bytes = w * pixel_bytes;
-
-    let mut pixels = Vec::with_capacity(w * h);
-    for row_region in surface.data.chunks(stride).take(h) {
-        let row = &row_region[..row_bytes];
-        pixels.extend(row.chunks_exact(pixel_bytes).map(|pixel| {
-            let mut lanes = [0u32, 0, 0, u32::MAX];
-            decode(pixel, &mut lanes);
-            lanes
-        }));
-    }
-
-    Ok(Buffer {
-        pixels,
-        width: surface.width,
-        height: surface.height,
-    })
-}
-
-fn read_pixels_u64(
-    surface: &Surface,
-    channels: usize,
-    channel_bytes: usize,
-    mut decode: impl FnMut(&[u8], &mut [u64; 4]),
-) -> Result<Buffer<u64>> {
-    let pixel_bytes = channels * channel_bytes;
-    validate_surface(surface, pixel_bytes)?;
-
-    let w = surface.width as usize;
-    let h = surface.height as usize;
-    let stride = surface.stride as usize;
-    let row_bytes = w * pixel_bytes;
-
-    let mut pixels = Vec::with_capacity(w * h);
-    for row_region in surface.data.chunks(stride).take(h) {
-        let row = &row_region[..row_bytes];
-        pixels.extend(row.chunks_exact(pixel_bytes).map(|pixel| {
-            let mut lanes = [0u64, 0, 0, u64::MAX];
+            let mut lanes = default;
             decode(pixel, &mut lanes);
             lanes
         }));

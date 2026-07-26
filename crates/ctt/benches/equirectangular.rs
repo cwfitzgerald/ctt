@@ -1,8 +1,8 @@
 //! Micro-benchmarks for the equirectangular → cubemap projection kernels.
 //!
-//! Kernels gated on CPU features are skipped if the host lacks the feature.
-//! The pyramid is built once outside the measured region — the benchmark
-//! isolates the projection itself. Throughput is reported in output
+//! One row per constructible SIMD level (levels the host cannot execute are
+//! skipped). The pyramid is built once outside the measured region — the
+//! benchmark isolates the projection itself. Throughput is reported in output
 //! (cubemap) texels per second across all six faces.
 //!
 //! Note: the projection parallelizes across faces and row bands when the
@@ -14,7 +14,9 @@ use std::hint::black_box;
 
 use criterion::{Criterion, Throughput, criterion_group, criterion_main};
 use ctt::EquirectangularOrientation;
-use ctt::bench_internals::{Buffer, EquirectangularPyramid, project_f32_serial};
+use ctt::bench_internals::{Buffer, EquirectangularPyramid};
+
+mod common;
 
 /// Smooth HDR-looking source: low-frequency angular gradients plus a bright
 /// "sun" spot, so LOD/aniso paths see realistic variation.
@@ -43,78 +45,30 @@ fn smooth_equirectangular(w: u32, h: u32) -> Buffer<f32> {
 }
 
 fn bench_size(c: &mut Criterion, src_w: u32, src_h: u32) {
+    use ctt::bench_internals as k;
     let face = src_w / 4;
     let out_texels = 6 * face as u64 * face as u64;
     let pyramid =
         EquirectangularPyramid::new(smooth_equirectangular(src_w, src_h)).expect("pyramid");
+    let orientation = EquirectangularOrientation::default();
 
     let mut group = c.benchmark_group(format!("equirectangular_{src_w}x{src_h}_to_{face}"));
     group.throughput(Throughput::Elements(out_texels));
+    // Each output texel is resampled with mip/aniso filtering, so a sample here
+    // is far costlier than the packed/sRGB kernels; 20 keeps wall-clock per
+    // bench reasonable without starving criterion's estimator.
     group.sample_size(20);
 
-    group.bench_function("serial", |b| {
+    common::bench_levels(&mut group, "", |b, level| {
         b.iter(|| {
-            black_box(project_f32_serial(
+            black_box(k::project_f32_at(
+                level,
                 black_box(&pyramid),
                 face,
-                EquirectangularOrientation::default(),
+                orientation,
             ))
         });
     });
-
-    #[cfg(target_arch = "x86_64")]
-    {
-        use ctt::bench_internals::{
-            has_avx2_fma, has_avx512, project_f32_avx2_fma, project_f32_avx512,
-        };
-        if has_avx2_fma() {
-            group.bench_function("avx2_fma", |b| {
-                // SAFETY: checked above.
-                b.iter(|| {
-                    black_box(unsafe {
-                        project_f32_avx2_fma(
-                            black_box(&pyramid),
-                            face,
-                            EquirectangularOrientation::default(),
-                        )
-                    })
-                });
-            });
-        }
-        if has_avx512() {
-            group.bench_function("avx512", |b| {
-                // SAFETY: checked above.
-                b.iter(|| {
-                    black_box(unsafe {
-                        project_f32_avx512(
-                            black_box(&pyramid),
-                            face,
-                            EquirectangularOrientation::default(),
-                        )
-                    })
-                });
-            });
-        }
-    }
-
-    #[cfg(target_arch = "aarch64")]
-    {
-        use ctt::bench_internals::project_f32_neon;
-        if std::arch::is_aarch64_feature_detected!("neon") {
-            group.bench_function("neon", |b| {
-                // SAFETY: checked above.
-                b.iter(|| {
-                    black_box(unsafe {
-                        project_f32_neon(
-                            black_box(&pyramid),
-                            face,
-                            EquirectangularOrientation::default(),
-                        )
-                    })
-                });
-            });
-        }
-    }
 
     group.finish();
 }

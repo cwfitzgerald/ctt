@@ -2,6 +2,8 @@ use std::f32::consts::PI;
 
 use super::super::buffer::Buffer;
 use super::*;
+use crate::processing::kernels::constructible_levels;
+use crate::processing::kernels::equirectangular::{map_texel_at, project_f32_at};
 
 /// Direction for normalized equirectangular coordinates — the inverse of the
 /// kernel's dir→(u, v) mapping, used to synthesize test sources.
@@ -89,16 +91,18 @@ fn face_centers_match_vulkan_orientation() {
     let src = axis_colored_equirectangular(128, 64);
     let pyr = EquirectangularPyramid::new(src).unwrap();
     let n = 17; // odd: the center texel direction is exactly the face axis
-    let faces = project_f32_serial(&pyr, n, EquirectangularOrientation::default());
-    for (fi, face) in faces.iter().enumerate() {
-        let center = face_texel(face, n / 2, n / 2);
-        for c in 0..4 {
-            assert!(
-                (center[c] - FACE_COLORS[fi][c]).abs() < 0.08,
-                "face {fi} center chan {c}: {} vs {}",
-                center[c],
-                FACE_COLORS[fi][c],
-            );
+    for (label, level) in constructible_levels() {
+        let faces = project_f32_at(level, &pyr, n, EquirectangularOrientation::default());
+        for (fi, face) in faces.iter().enumerate() {
+            let center = face_texel(face, n / 2, n / 2);
+            for c in 0..4 {
+                assert!(
+                    (center[c] - FACE_COLORS[fi][c]).abs() < 0.08,
+                    "{label}: face {fi} center chan {c}: {} vs {}",
+                    center[c],
+                    FACE_COLORS[fi][c],
+                );
+            }
         }
     }
 }
@@ -110,7 +114,6 @@ fn face_centers_sample_expected_coordinates() {
     let src = synth(128, 64, |u, v| [u, v, 0.0, 1.0]);
     let pyr = EquirectangularPyramid::new(src).unwrap();
     let n = 17;
-    let faces = project_f32_serial(&pyr, n, EquirectangularOrientation::default());
     // (face, expected u, expected v); u is None where the face center sits
     // on the wrap seam and the ramp image is discontinuous.
     let cases: [(usize, Option<f32>, f32); 6] = [
@@ -121,78 +124,56 @@ fn face_centers_sample_expected_coordinates() {
         (4, Some(0.5), 0.5),  // +Z
         (5, None, 0.5),       // -Z: u seam
     ];
-    for (fi, want_u, want_v) in cases {
-        let got = face_texel(&faces[fi], n / 2, n / 2);
-        if let Some(wu) = want_u {
+    for (label, level) in constructible_levels() {
+        let faces = project_f32_at(level, &pyr, n, EquirectangularOrientation::default());
+        for (fi, want_u, want_v) in cases {
+            let got = face_texel(&faces[fi], n / 2, n / 2);
+            if let Some(wu) = want_u {
+                assert!(
+                    (got[0] - wu).abs() < 0.02,
+                    "{label}: face {fi} u: {} vs {wu}",
+                    got[0],
+                );
+            }
+            let v_tol = if want_v == 0.5 { 0.02 } else { 0.1 };
             assert!(
-                (got[0] - wu).abs() < 0.02,
-                "face {fi} u: {} vs {wu}",
-                got[0],
+                (got[1] - want_v).abs() < v_tol,
+                "{label}: face {fi} v: {} vs {want_v}",
+                got[1],
             );
         }
-        let v_tol = if want_v == 0.5 { 0.02 } else { 0.1 };
-        assert!(
-            (got[1] - want_v).abs() < v_tol,
-            "face {fi} v: {} vs {want_v}",
-            got[1],
-        );
     }
 }
 
 /// A smooth longitude-only pattern must cross the ±π seam (center of the
-/// -Z face) without a jump.
+/// -Z face) without a jump, on every backend.
 #[test]
 fn seam_is_continuous_on_neg_z_face() {
-    let src = synth(128, 64, |u, _| {
-        let phi = (u - 0.5) * 2.0 * PI;
-        [phi.sin() * 0.5 + 0.5, phi.cos() * 0.5 + 0.5, 0.0, 1.0]
-    });
-    let pyr = EquirectangularPyramid::new(src).unwrap();
-    let n = 32;
-    let faces = project_f32_serial(&pyr, n, EquirectangularOrientation::default());
-    let face = &faces[5]; // -Z spans the seam
-    let y = n / 2;
-    for x in 0..n - 1 {
-        let a = face_texel(face, x, y);
-        let b = face_texel(face, x + 1, y);
-        for c in 0..2 {
-            assert!(
-                (a[c] - b[c]).abs() < 0.1,
-                "seam jump at x={x} chan {c}: {} -> {}",
-                a[c],
-                b[c],
-            );
-        }
+    let pyr = EquirectangularPyramid::new(test_support::seam_source()).unwrap();
+    for (label, level) in constructible_levels() {
+        let faces = project_f32_at(
+            level,
+            &pyr,
+            test_support::SEAM_FACE_SIZE,
+            EquirectangularOrientation::default(),
+        );
+        test_support::assert_neg_z_seam_continuous(&faces, test_support::SEAM_FACE_SIZE, label);
     }
 }
 
 /// Alternating columns (the worst horizontal-aliasing case) must converge
-/// to their mean near the poles instead of sparkling.
+/// to their mean near the poles instead of sparkling, on every backend.
 #[test]
 fn anisotropic_filter_averages_pole_region() {
-    let src = synth(256, 128, |u, _| {
-        let stripe = if ((u * 256.0) as u32).is_multiple_of(2) {
-            1.0
-        } else {
-            0.0
-        };
-        [stripe, stripe, stripe, 1.0]
-    });
-    let pyr = EquirectangularPyramid::new(src).unwrap();
-    let n = 64;
-    let faces = project_f32_serial(&pyr, n, EquirectangularOrientation::default());
-    // Central quarter of the +Y face looks at the pole cap where each
-    // output texel covers many stripes.
-    let face = &faces[2];
-    for y in (n / 2 - 8)..(n / 2 + 8) {
-        for x in (n / 2 - 8)..(n / 2 + 8) {
-            let px = face_texel(face, x, y);
-            assert!(
-                (px[0] - 0.5).abs() < 0.15,
-                "pole texel ({x},{y}) not averaged: {}",
-                px[0],
-            );
-        }
+    let pyr = EquirectangularPyramid::new(test_support::stripe_source()).unwrap();
+    for (label, level) in constructible_levels() {
+        let faces = project_f32_at(
+            level,
+            &pyr,
+            test_support::POLE_FACE_SIZE,
+            EquirectangularOrientation::default(),
+        );
+        test_support::assert_pole_region_averaged(&faces, test_support::POLE_FACE_SIZE, label);
     }
 }
 
@@ -203,26 +184,33 @@ fn map_texel_equator_is_single_tap() {
     let pyr = EquirectangularPyramid::new(synth(128, 64, |_, _| [0.0; 4])).unwrap();
     let n = 32;
     let params = ProjectParams::new(&pyr, n);
-    let cmd = map_texel(&FACE_BASES[4], 0.0, 0.0, &params); // +Z center
-    assert_eq!(cmd.taps_log2, 0, "equator should be isotropic");
-    assert!((cmd.u - 0.5).abs() < 1e-6, "u = {}", cmd.u);
-    assert!((cmd.v - 0.5).abs() < 1e-6, "v = {}", cmd.v);
-    assert!(
-        (0.0..1.0).contains(&cmd.lod),
-        "equator lod should be mild, got {}",
-        cmd.lod,
-    );
+    for (label, level) in constructible_levels() {
+        let cmd = map_texel_at(level, &FACE_BASES[4], 0.0, 0.0, &params); // +Z center
+        assert_eq!(cmd.taps_log2, 0, "{label}: equator should be isotropic");
+        assert!((cmd.u - 0.5).abs() < 1e-6, "{label}: u = {}", cmd.u);
+        assert!((cmd.v - 0.5).abs() < 1e-6, "{label}: v = {}", cmd.v);
+        assert!(
+            (0.0..1.0).contains(&cmd.lod),
+            "{label}: equator lod should be mild, got {}",
+            cmd.lod,
+        );
+    }
 }
 
 #[test]
 fn map_texel_pole_hits_aniso_cap() {
     let pyr = EquirectangularPyramid::new(synth(128, 64, |_, _| [0.0; 4])).unwrap();
     let params = ProjectParams::new(&pyr, 32);
-    // Just off the +Y face center: extreme anisotropy.
-    let cmd = map_texel(&FACE_BASES[2], 1e-3, 1e-3, &params);
-    assert_eq!(cmd.taps_log2, MAX_ANISO_LOG2, "pole should cap taps");
-    assert!(cmd.step_u.is_finite() && cmd.step_v.is_finite());
-    assert!(cmd.lod.is_finite() && cmd.lod >= 0.0);
+    for (label, level) in constructible_levels() {
+        // Just off the +Y face center: extreme anisotropy.
+        let cmd = map_texel_at(level, &FACE_BASES[2], 1e-3, 1e-3, &params);
+        assert_eq!(
+            cmd.taps_log2, MAX_ANISO_LOG2,
+            "{label}: pole should cap taps"
+        );
+        assert!(cmd.step_u.is_finite() && cmd.step_v.is_finite(), "{label}");
+        assert!(cmd.lod.is_finite() && cmd.lod >= 0.0, "{label}");
+    }
 }
 
 #[test]
@@ -273,21 +261,23 @@ fn orientation_conventions_place_expected_faces() {
         (EquirectangularFront::PosX, true, 0, 4),  // three.js / glTF IBL: +X → +Z
         (EquirectangularFront::NegX, false, 1, 4), // -X front → +Z
     ];
-    for (front, mirror, front_face, quarter_face) in cases {
-        let orientation = EquirectangularOrientation { front, mirror };
-        let faces = project_f32_serial(&pyr, n, orientation);
-        let center = face_texel(&faces[front_face], n / 2, n / 2);
-        assert!(
-            (center[0] - 0.5).abs() < 0.02,
-            "{orientation:?}: front face {front_face} reads u = {}",
-            center[0],
-        );
-        let quarter = face_texel(&faces[quarter_face], n / 2, n / 2);
-        assert!(
-            (quarter[0] - 0.75).abs() < 0.02,
-            "{orientation:?}: quarter-turn face {quarter_face} reads u = {}",
-            quarter[0],
-        );
+    for (label, level) in constructible_levels() {
+        for (front, mirror, front_face, quarter_face) in cases {
+            let orientation = EquirectangularOrientation { front, mirror };
+            let faces = project_f32_at(level, &pyr, n, orientation);
+            let center = face_texel(&faces[front_face], n / 2, n / 2);
+            assert!(
+                (center[0] - 0.5).abs() < 0.02,
+                "{label} {orientation:?}: front face {front_face} reads u = {}",
+                center[0],
+            );
+            let quarter = face_texel(&faces[quarter_face], n / 2, n / 2);
+            assert!(
+                (quarter[0] - 0.75).abs() < 0.02,
+                "{label} {orientation:?}: quarter-turn face {quarter_face} reads u = {}",
+                quarter[0],
+            );
+        }
     }
 }
 
@@ -301,38 +291,49 @@ fn pos_x_mirror_matches_threejs_formula() {
         front: EquirectangularFront::PosX,
         mirror: true,
     });
-    for face in 0..6 {
-        for (a, b) in [(0.3f32, -0.4), (-0.7, 0.2), (0.0, 0.9)] {
-            let cmd = map_texel(&bases[face], a, b, &params);
-            // World-space sampling direction from the untransformed basis.
-            let w = &FACE_BASES[face];
-            let d: [f32; 3] = std::array::from_fn(|i| w.axis[i] + a * w.u[i] + b * w.v[i]);
-            let want = 0.5 + d[2].atan2(d[0]) / (2.0 * PI);
-            assert!(
-                (cmd.u - want).abs() < 1e-6,
-                "face {face} ({a}, {b}): u = {} want {want}",
-                cmd.u,
-            );
+    for (label, level) in constructible_levels() {
+        for face in 0..6 {
+            for (a, b) in [(0.3f32, -0.4), (-0.7, 0.2), (0.0, 0.9)] {
+                let cmd = map_texel_at(level, &bases[face], a, b, &params);
+                // World-space sampling direction from the untransformed basis.
+                let w = &FACE_BASES[face];
+                let d: [f32; 3] = std::array::from_fn(|i| w.axis[i] + a * w.u[i] + b * w.v[i]);
+                let want = 0.5 + d[2].atan2(d[0]) / (2.0 * PI);
+                assert!(
+                    (cmd.u - want).abs() < 1e-6,
+                    "{label}: face {face} ({a}, {b}): u = {} want {want}",
+                    cmd.u,
+                );
+            }
         }
     }
 }
 
-/// Smooth source for SIMD-vs-serial comparisons: moderate gradients
-/// everywhere, no discontinuities except the seam.
-fn smooth_equirectangular(w: u32, h: u32) -> Buffer<f32> {
-    synth(w, h, |u, v| {
-        let phi = (u - 0.5) * 2.0 * PI;
-        let theta = v * PI;
-        [
-            phi.sin() * 0.5 + 0.5,
-            theta.cos() * 0.5 + 0.5,
-            (phi.cos() * theta.sin()) * 0.5 + 0.5,
-            1.0,
-        ]
-    })
+// ---- SIMD full projection ----
+
+fn smooth_equirect(w: u32, h: u32) -> Buffer<f32> {
+    let mut pixels = Vec::with_capacity(w as usize * h as usize);
+    for y in 0..h {
+        for x in 0..w {
+            let u = (x as f32 + 0.5) / w as f32;
+            let v = (y as f32 + 0.5) / h as f32;
+            let phi = (u - 0.5) * 2.0 * PI;
+            let theta = v * PI;
+            pixels.push([
+                phi.sin() * 0.5 + 0.5,
+                theta.cos() * 0.5 + 0.5,
+                (phi.cos() * theta.sin()) * 0.5 + 0.5,
+                1.0,
+            ]);
+        }
+    }
+    Buffer {
+        pixels,
+        width: w,
+        height: h,
+    }
 }
 
-#[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
 fn assert_faces_close(a: &[Buffer<f32>; 6], b: &[Buffer<f32>; 6], tol: f32, what: &str) {
     let mut max_diff = 0.0f32;
     for (fa, fb) in a.iter().zip(b) {
@@ -345,53 +346,48 @@ fn assert_faces_close(a: &[Buffer<f32>; 6], b: &[Buffer<f32>; 6], tol: f32, what
     assert!(max_diff < tol, "{what}: max diff {max_diff} >= {tol}");
 }
 
-#[cfg(target_arch = "x86_64")]
+/// Cross-level agreement bound. The floor is set by tap-count quantization, not
+/// raw polynomial error: near an anisotropy boundary a different `log2` rounding
+/// can nudge `delta.ceil()` so two backends pick different tap counts, and
+/// averaging a different number of taps moves the result by more than the
+/// transcendental error alone.
+const CROSS_LEVEL_TOL: f32 = 5e-3;
+
+/// Every backend must agree with the lowest constructible one. Not tautological:
+/// the tiers run different vector widths, FMA availability, and (on the store
+/// side of other kernels) different instruction sequences, and the tail handling
+/// differs per width. The base is taken from `constructible_levels` rather than
+/// a hand-built `Fallback` token, which `dispatch!` would normalize to the
+/// baseline backend on targets like aarch64.
 #[test]
-fn avx2_matches_serial() {
-    if !crate::processing::x86::has_avx2_fma() {
-        eprintln!("skipping: no avx2+fma");
-        return;
+fn levels_agree_across_backends() {
+    let pyr = EquirectangularPyramid::new(smooth_equirect(128, 64)).unwrap();
+    let mirrored = EquirectangularOrientation {
+        front: EquirectangularFront::PosX,
+        mirror: true,
+    };
+    let levels = constructible_levels();
+    let (base_label, base_level) = levels[0];
+    for orientation in [EquirectangularOrientation::default(), mirrored] {
+        let base = project_f32_at(base_level, &pyr, 33, orientation);
+        for &(label, level) in &levels[1..] {
+            let got = project_f32_at(level, &pyr, 33, orientation);
+            assert_faces_close(
+                &base,
+                &got,
+                CROSS_LEVEL_TOL,
+                &format!("{label} vs {base_label} {orientation:?}"),
+            );
+        }
     }
-    let pyr = EquirectangularPyramid::new(smooth_equirectangular(128, 64)).unwrap();
-    let serial = project_f32_serial(&pyr, 33, EquirectangularOrientation::default());
-    // SAFETY: checked above.
-    let simd =
-        unsafe { x86::project_f32_avx2_fma(&pyr, 33, EquirectangularOrientation::default()) };
-    assert_faces_close(&serial, &simd, 5e-3, "avx2 vs serial");
 }
 
-#[cfg(target_arch = "x86_64")]
-#[test]
-fn avx512_matches_serial() {
-    if !crate::processing::x86::has_avx512() {
-        eprintln!("skipping: no avx512");
-        return;
-    }
-    let pyr = EquirectangularPyramid::new(smooth_equirectangular(128, 64)).unwrap();
-    let serial = project_f32_serial(&pyr, 33, EquirectangularOrientation::default());
-    // SAFETY: checked above.
-    let simd = unsafe { x86::project_f32_avx512(&pyr, 33, EquirectangularOrientation::default()) };
-    assert_faces_close(&serial, &simd, 5e-3, "avx512 vs serial");
-}
-
-#[cfg(target_arch = "aarch64")]
-#[test]
-fn neon_matches_serial() {
-    if !std::arch::is_aarch64_feature_detected!("neon") {
-        eprintln!("skipping: no neon");
-        return;
-    }
-    let pyr = EquirectangularPyramid::new(smooth_equirectangular(128, 64)).unwrap();
-    let serial = project_f32_serial(&pyr, 33, EquirectangularOrientation::default());
-    // SAFETY: checked above.
-    let simd = unsafe { neon::project_f32_neon(&pyr, 33, EquirectangularOrientation::default()) };
-    assert_faces_close(&serial, &simd, 5e-3, "neon vs serial");
-}
-
-#[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
+/// A solid-color source must project exactly (within trilinear rounding) on
+/// every level. Face size 19 leaves a tail at every native width; 16 covers
+/// the tail-free path.
 #[test]
 fn simd_solid_color_is_exact() {
-    let pyr = EquirectangularPyramid::new(synth(64, 32, |_, _| [0.125, 2.0, -4.5, 1.0])).unwrap();
+    let pyr = EquirectangularPyramid::new(smooth_solid()).unwrap();
     let check = |faces: &[Buffer<f32>; 6], what: &str| {
         for face in faces {
             for px in &face.pixels {
@@ -402,33 +398,23 @@ fn simd_solid_color_is_exact() {
             }
         }
     };
-    #[cfg(target_arch = "x86_64")]
-    {
-        if crate::processing::x86::has_avx2_fma() {
-            // SAFETY: checked above.
-            check(
-                &unsafe {
-                    x86::project_f32_avx2_fma(&pyr, 16, EquirectangularOrientation::default())
-                },
-                "avx2",
+    for (label, level) in constructible_levels() {
+        for face_size in [16u32, 19] {
+            let faces = project_f32_at(
+                level,
+                &pyr,
+                face_size,
+                EquirectangularOrientation::default(),
             );
-        }
-        if crate::processing::x86::has_avx512() {
-            // SAFETY: checked above.
-            check(
-                &unsafe {
-                    x86::project_f32_avx512(&pyr, 16, EquirectangularOrientation::default())
-                },
-                "avx512",
-            );
+            check(&faces, &format!("{label} n={face_size}"));
         }
     }
-    #[cfg(target_arch = "aarch64")]
-    if std::arch::is_aarch64_feature_detected!("neon") {
-        // SAFETY: checked above.
-        check(
-            &unsafe { neon::project_f32_neon(&pyr, 16, EquirectangularOrientation::default()) },
-            "neon",
-        );
+}
+
+fn smooth_solid() -> Buffer<f32> {
+    Buffer {
+        pixels: vec![[0.125, 2.0, -4.5, 1.0]; 64 * 32],
+        width: 64,
+        height: 32,
     }
 }
