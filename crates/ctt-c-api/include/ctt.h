@@ -171,9 +171,9 @@
  * How the Intel ISPC BC7 encoder should treat the alpha channel.
  */
 enum ctt_intel_bc7_alpha
-#ifdef __cplusplus
+#if defined(__cplusplus) || __STDC_VERSION__ >= 202311L
   : uint8_t
-#endif // __cplusplus
+#endif // defined(__cplusplus) || __STDC_VERSION__ >= 202311L
  {
     /**
      * Derive from the surface's [`AlphaMode`]: opaque → opaque presets,
@@ -190,7 +190,11 @@ enum ctt_intel_bc7_alpha
     CTT_INTEL_BC7_ALPHA_ALPHA,
 };
 #ifndef __cplusplus
+#if __STDC_VERSION__ >= 202311L
+typedef enum ctt_intel_bc7_alpha ctt_intel_bc7_alpha;
+#else
 typedef uint8_t ctt_intel_bc7_alpha;
+#endif // __STDC_VERSION__ >= 202311L
 #endif // __cplusplus
 
 /**
@@ -198,9 +202,9 @@ typedef uint8_t ctt_intel_bc7_alpha;
  * weighting and the `auto` branch of [`AmdBc7Alpha`].
  */
 enum ctt_amd_usage
-#ifdef __cplusplus
+#if defined(__cplusplus) || __STDC_VERSION__ >= 202311L
   : uint8_t
-#endif // __cplusplus
+#endif // defined(__cplusplus) || __STDC_VERSION__ >= 202311L
  {
     /**
      * Generic color texture. BC1/2/3 use BT.601 luminance weights
@@ -220,16 +224,20 @@ enum ctt_amd_usage
     CTT_AMD_USAGE_DATA,
 };
 #ifndef __cplusplus
+#if __STDC_VERSION__ >= 202311L
+typedef enum ctt_amd_usage ctt_amd_usage;
+#else
 typedef uint8_t ctt_amd_usage;
+#endif // __STDC_VERSION__ >= 202311L
 #endif // __cplusplus
 
 /**
  * How the BC7 encoder should treat the alpha channel.
  */
 enum ctt_amd_bc7_alpha
-#ifdef __cplusplus
+#if defined(__cplusplus) || __STDC_VERSION__ >= 202311L
   : uint8_t
-#endif // __cplusplus
+#endif // defined(__cplusplus) || __STDC_VERSION__ >= 202311L
  {
     /**
      * Derive from the surface's [`AlphaMode`]: opaque → behaves like
@@ -252,7 +260,11 @@ enum ctt_amd_bc7_alpha
     CTT_AMD_BC7_ALPHA_RESTRICTED,
 };
 #ifndef __cplusplus
+#if __STDC_VERSION__ >= 202311L
+typedef enum ctt_amd_bc7_alpha ctt_amd_bc7_alpha;
+#else
 typedef uint8_t ctt_amd_bc7_alpha;
+#endif // __STDC_VERSION__ >= 202311L
 #endif // __cplusplus
 
 /**
@@ -273,15 +285,19 @@ typedef uint8_t ctt_amd_bc7_alpha;
  *     shader code keeps working after the swap to ASTC.
  */
 enum ctt_astcenc_normal_swizzle
-#ifdef __cplusplus
+#if defined(__cplusplus) || __STDC_VERSION__ >= 202311L
   : uint8_t
-#endif // __cplusplus
+#endif // defined(__cplusplus) || __STDC_VERSION__ >= 202311L
  {
     CTT_ASTCENC_NORMAL_SWIZZLE_ASTC_DEFAULT = 0,
     CTT_ASTCENC_NORMAL_SWIZZLE_BC5_COMPAT = 1,
 };
 #ifndef __cplusplus
+#if __STDC_VERSION__ >= 202311L
+typedef enum ctt_astcenc_normal_swizzle ctt_astcenc_normal_swizzle;
+#else
 typedef uint8_t ctt_astcenc_normal_swizzle;
+#endif // __STDC_VERSION__ >= 202311L
 #endif // __cplusplus
 
 /**
@@ -293,9 +309,9 @@ typedef uint8_t ctt_astcenc_normal_swizzle;
  * speed ordering.
  */
 enum ctt_quality
-#ifdef __cplusplus
+#if defined(__cplusplus) || __STDC_VERSION__ >= 202311L
   : uint8_t
-#endif // __cplusplus
+#endif // defined(__cplusplus) || __STDC_VERSION__ >= 202311L
  {
     CTT_QUALITY_BASIC = 0,
     CTT_QUALITY_ULTRA_FAST = 1,
@@ -305,47 +321,59 @@ enum ctt_quality
     CTT_QUALITY_VERY_SLOW = 5,
 };
 #ifndef __cplusplus
+#if __STDC_VERSION__ >= 202311L
+typedef enum ctt_quality ctt_quality;
+#else
 typedef uint8_t ctt_quality;
+#endif // __STDC_VERSION__ >= 202311L
 #endif // __cplusplus
 
 /**
  * Color space metadata for a surface.
  */
 enum ctt_color_space
-#ifdef __cplusplus
+#if defined(__cplusplus) || __STDC_VERSION__ >= 202311L
   : uint8_t
-#endif // __cplusplus
+#endif // defined(__cplusplus) || __STDC_VERSION__ >= 202311L
  {
     CTT_COLOR_SPACE_SRGB = 0,
     CTT_COLOR_SPACE_LINEAR = 1,
 };
 #ifndef __cplusplus
+#if __STDC_VERSION__ >= 202311L
+typedef enum ctt_color_space ctt_color_space;
+#else
 typedef uint8_t ctt_color_space;
+#endif // __STDC_VERSION__ >= 202311L
 #endif // __cplusplus
 
 /**
  * Alpha interpretation for a surface.
  */
 enum ctt_alpha_mode
-#ifdef __cplusplus
+#if defined(__cplusplus) || __STDC_VERSION__ >= 202311L
   : uint8_t
-#endif // __cplusplus
+#endif // defined(__cplusplus) || __STDC_VERSION__ >= 202311L
  {
     CTT_ALPHA_MODE_STRAIGHT = 0,
     CTT_ALPHA_MODE_PREMULTIPLIED = 1,
     CTT_ALPHA_MODE_OPAQUE = 2,
 };
 #ifndef __cplusplus
+#if __STDC_VERSION__ >= 202311L
+typedef enum ctt_alpha_mode ctt_alpha_mode;
+#else
 typedef uint8_t ctt_alpha_mode;
+#endif // __STDC_VERSION__ >= 202311L
 #endif // __cplusplus
 
 /**
  * One channel of a [`Swizzle`].
  */
 enum ctt_swizzle_channel
-#ifdef __cplusplus
+#if defined(__cplusplus) || __STDC_VERSION__ >= 202311L
   : uint8_t
-#endif // __cplusplus
+#endif // defined(__cplusplus) || __STDC_VERSION__ >= 202311L
  {
     CTT_SWIZZLE_CHANNEL_R = 0,
     CTT_SWIZZLE_CHANNEL_G = 1,
@@ -355,7 +383,11 @@ enum ctt_swizzle_channel
     CTT_SWIZZLE_CHANNEL_ONE = 5,
 };
 #ifndef __cplusplus
+#if __STDC_VERSION__ >= 202311L
+typedef enum ctt_swizzle_channel ctt_swizzle_channel;
+#else
 typedef uint8_t ctt_swizzle_channel;
+#endif // __STDC_VERSION__ >= 202311L
 #endif // __cplusplus
 
 /**
@@ -366,9 +398,9 @@ typedef uint8_t ctt_swizzle_channel;
  * as `ctt_convert_settings_default`.
  */
 enum ctt_mipmap_filter
-#ifdef __cplusplus
+#if defined(__cplusplus) || __STDC_VERSION__ >= 202311L
   : uint8_t
-#endif // __cplusplus
+#endif // defined(__cplusplus) || __STDC_VERSION__ >= 202311L
  {
     CTT_MIPMAP_FILTER_TRIANGLE = 0,
     CTT_MIPMAP_FILTER_NEAREST = 1,
@@ -377,7 +409,11 @@ enum ctt_mipmap_filter
     CTT_MIPMAP_FILTER_LANCZOS3 = 4,
 };
 #ifndef __cplusplus
+#if __STDC_VERSION__ >= 202311L
+typedef enum ctt_mipmap_filter ctt_mipmap_filter;
+#else
 typedef uint8_t ctt_mipmap_filter;
+#endif // __STDC_VERSION__ >= 202311L
 #endif // __cplusplus
 
 /**
@@ -393,9 +429,9 @@ typedef uint8_t ctt_mipmap_filter;
  * thread-local error slot.
  */
 enum ctt_status
-#ifdef __cplusplus
+#if defined(__cplusplus) || __STDC_VERSION__ >= 202311L
   : int32_t
-#endif // __cplusplus
+#endif // defined(__cplusplus) || __STDC_VERSION__ >= 202311L
  {
     CTT_STATUS_OK = 0,
     CTT_STATUS_INVALID_DIMENSIONS = -1,
@@ -417,7 +453,11 @@ enum ctt_status
     CTT_STATUS_INTERNAL = -200,
 };
 #ifndef __cplusplus
+#if __STDC_VERSION__ >= 202311L
+typedef enum ctt_status ctt_status;
+#else
 typedef int32_t ctt_status;
+#endif // __STDC_VERSION__ >= 202311L
 #endif // __cplusplus
 
 /**
@@ -428,31 +468,39 @@ typedef int32_t ctt_status;
  * requires exactly one layer (depth is carried on the surface).
  */
 enum ctt_texture_kind
-#ifdef __cplusplus
+#if defined(__cplusplus) || __STDC_VERSION__ >= 202311L
   : uint8_t
-#endif // __cplusplus
+#endif // defined(__cplusplus) || __STDC_VERSION__ >= 202311L
  {
     CTT_TEXTURE_KIND_TEXTURE2D = 0,
     CTT_TEXTURE_KIND_CUBEMAP = 1,
     CTT_TEXTURE_KIND_TEXTURE3D = 2,
 };
 #ifndef __cplusplus
+#if __STDC_VERSION__ >= 202311L
+typedef enum ctt_texture_kind ctt_texture_kind;
+#else
 typedef uint8_t ctt_texture_kind;
+#endif // __STDC_VERSION__ >= 202311L
 #endif // __cplusplus
 
 /**
  * Detected container format.
  */
 enum ctt_input_format
-#ifdef __cplusplus
+#if defined(__cplusplus) || __STDC_VERSION__ >= 202311L
   : uint8_t
-#endif // __cplusplus
+#endif // defined(__cplusplus) || __STDC_VERSION__ >= 202311L
  {
     CTT_INPUT_FORMAT_KTX2 = 0,
     CTT_INPUT_FORMAT_DDS = 1,
 };
 #ifndef __cplusplus
+#if __STDC_VERSION__ >= 202311L
+typedef enum ctt_input_format ctt_input_format;
+#else
 typedef uint8_t ctt_input_format;
+#endif // __STDC_VERSION__ >= 202311L
 #endif // __cplusplus
 
 /**
@@ -465,9 +513,9 @@ typedef uint8_t ctt_input_format;
  * never appears as the `level` of a callback invocation.
  */
 enum ctt_log_level
-#ifdef __cplusplus
+#if defined(__cplusplus) || __STDC_VERSION__ >= 202311L
   : uint8_t
-#endif // __cplusplus
+#endif // defined(__cplusplus) || __STDC_VERSION__ >= 202311L
  {
     CTT_LOG_LEVEL_OFF = 0,
     CTT_LOG_LEVEL_ERROR = 1,
@@ -477,16 +525,20 @@ enum ctt_log_level
     CTT_LOG_LEVEL_TRACE = 5,
 };
 #ifndef __cplusplus
+#if __STDC_VERSION__ >= 202311L
+typedef enum ctt_log_level ctt_log_level;
+#else
 typedef uint8_t ctt_log_level;
+#endif // __STDC_VERSION__ >= 202311L
 #endif // __cplusplus
 
 /**
  * Tag for [`PipelineOutput`].
  */
 enum ctt_pipeline_output_kind
-#ifdef __cplusplus
+#if defined(__cplusplus) || __STDC_VERSION__ >= 202311L
   : uint8_t
-#endif // __cplusplus
+#endif // defined(__cplusplus) || __STDC_VERSION__ >= 202311L
  {
     CTT_PIPELINE_OUTPUT_KIND_ENCODED = 0,
     CTT_PIPELINE_OUTPUT_KIND_RAW = 1,
@@ -499,7 +551,11 @@ enum ctt_pipeline_output_kind
     CTT_PIPELINE_OUTPUT_KIND_INVALID = 2,
 };
 #ifndef __cplusplus
+#if __STDC_VERSION__ >= 202311L
+typedef enum ctt_pipeline_output_kind ctt_pipeline_output_kind;
+#else
 typedef uint8_t ctt_pipeline_output_kind;
+#endif // __STDC_VERSION__ >= 202311L
 #endif // __cplusplus
 
 /**
@@ -689,9 +745,9 @@ typedef struct {
  * wasting encoding bits on components the asset doesn't actually need.
  */
 enum ctt_astcenc_usage_Tag
-#ifdef __cplusplus
+#if defined(__cplusplus) || __STDC_VERSION__ >= 202311L
   : uint8_t
-#endif // __cplusplus
+#endif // defined(__cplusplus) || __STDC_VERSION__ >= 202311L
  {
     /**
      * Generic color (LDR or LDR sRGB based on the surface's color space).
@@ -739,7 +795,11 @@ enum ctt_astcenc_usage_Tag
     CTT_ASTCENC_USAGE_RGBM,
 };
 #ifndef __cplusplus
+#if __STDC_VERSION__ >= 202311L
+typedef enum ctt_astcenc_usage_Tag ctt_astcenc_usage_Tag;
+#else
 typedef uint8_t ctt_astcenc_usage_Tag;
+#endif // __STDC_VERSION__ >= 202311L
 #endif // __cplusplus
 
 typedef struct {
@@ -755,9 +815,9 @@ typedef struct {
  * astcenc effort preset. `CUSTOM` carries any value in `[0.0, 100.0]`.
  */
 enum ctt_astcenc_preset_Tag
-#ifdef __cplusplus
+#if defined(__cplusplus) || __STDC_VERSION__ >= 202311L
   : uint8_t
-#endif // __cplusplus
+#endif // defined(__cplusplus) || __STDC_VERSION__ >= 202311L
  {
     /**
      * 0.0 — fastest, lowest quality.
@@ -789,7 +849,11 @@ enum ctt_astcenc_preset_Tag
     CTT_ASTCENC_PRESET_CUSTOM,
 };
 #ifndef __cplusplus
+#if __STDC_VERSION__ >= 202311L
+typedef enum ctt_astcenc_preset_Tag ctt_astcenc_preset_Tag;
+#else
 typedef uint8_t ctt_astcenc_preset_Tag;
+#endif // __STDC_VERSION__ >= 202311L
 #endif // __cplusplus
 
 typedef struct {
@@ -894,9 +958,9 @@ typedef struct {
  * at compile time returns `CTT_STATUS_ENCODER_NOT_COMPILED_IN`.
  */
 enum ctt_encoder_Tag
-#ifdef __cplusplus
+#if defined(__cplusplus) || __STDC_VERSION__ >= 202311L
   : uint8_t
-#endif // __cplusplus
+#endif // defined(__cplusplus) || __STDC_VERSION__ >= 202311L
  {
     CTT_ENCODER_AUTO,
     CTT_ENCODER_BC7ENC,
@@ -906,7 +970,11 @@ enum ctt_encoder_Tag
     CTT_ENCODER_ASTCENC,
 };
 #ifndef __cplusplus
+#if __STDC_VERSION__ >= 202311L
+typedef enum ctt_encoder_Tag ctt_encoder_Tag;
+#else
 typedef uint8_t ctt_encoder_Tag;
+#endif // __STDC_VERSION__ >= 202311L
 #endif // __cplusplus
 
 typedef struct {
@@ -955,16 +1023,20 @@ typedef struct {
  * [`Encoder`].
  */
 enum ctt_target_format_Tag
-#ifdef __cplusplus
+#if defined(__cplusplus) || __STDC_VERSION__ >= 202311L
   : uint8_t
-#endif // __cplusplus
+#endif // defined(__cplusplus) || __STDC_VERSION__ >= 202311L
  {
     CTT_TARGET_FORMAT_NONE,
     CTT_TARGET_FORMAT_UNCOMPRESSED,
     CTT_TARGET_FORMAT_COMPRESSED,
 };
 #ifndef __cplusplus
+#if __STDC_VERSION__ >= 202311L
+typedef enum ctt_target_format_Tag ctt_target_format_Tag;
+#else
 typedef uint8_t ctt_target_format_Tag;
+#endif // __STDC_VERSION__ >= 202311L
 #endif // __cplusplus
 
 typedef struct {
@@ -992,9 +1064,9 @@ typedef struct {
  * `ctt_convert_settings_default`.
  */
 enum ctt_container_Tag
-#ifdef __cplusplus
+#if defined(__cplusplus) || __STDC_VERSION__ >= 202311L
   : uint8_t
-#endif // __cplusplus
+#endif // defined(__cplusplus) || __STDC_VERSION__ >= 202311L
  {
     CTT_CONTAINER_KTX2,
     CTT_CONTAINER_KTX2_ZSTD,
@@ -1003,7 +1075,11 @@ enum ctt_container_Tag
     CTT_CONTAINER_RAW,
 };
 #ifndef __cplusplus
+#if __STDC_VERSION__ >= 202311L
+typedef enum ctt_container_Tag ctt_container_Tag;
+#else
 typedef uint8_t ctt_container_Tag;
+#endif // __STDC_VERSION__ >= 202311L
 #endif // __cplusplus
 
 typedef struct {
