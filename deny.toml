@@ -15,10 +15,14 @@ allow = [
 
 [bans]
 skip = [
-  { crate = "winnow@0.7.15", reason = "cbindgen uses toml; toml uses toml_parser. toml uses 0.7.15, toml_parser uses 1.1.2" },
+  { crate = "getrandom@0.3", reason = "tempfile uses 0.3, jobserver uses 0.4" },
+  { crate = "winnow@0.7", reason = "toml uses 0.7, toml_parser uses 1" },
   { crate = "itertools@0.13", reason = "bindgen uses 0.13, rav1e uses 0.14" },
   { crate = "nom@7", reason = "bindgen (via cexpr) uses 7, av1-grain uses 8" },
-  { crate = "smallvec@1.15.1", reason = "exr uses 1.15.1, facet-reflect uses 2" },
+  { crate = "r-efi@5", reason = "getrandom 0.3 uses 5, getrandom 0.4 uses 6" },
+  { crate = "shlex@1", reason = "bindgen uses 1, cc uses 2" },
+  { crate = "smallvec@1", reason = "exr uses 1, facet-reflect uses 2" },
+  { crate = "syn@2", reason = "transitive proc-macro dependencies use both 2 and 3" },
 ]
 multiple-versions = "deny"
 
