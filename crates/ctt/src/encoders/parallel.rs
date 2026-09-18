@@ -4,6 +4,7 @@
 #[cfg(any(
     feature = "encoder-intel",
     feature = "encoder-bc7enc",
+    feature = "encoder-bc7f",
     feature = "encoder-etcpak",
 ))]
 pub(crate) fn for_each_row_chunk<T: Send>(

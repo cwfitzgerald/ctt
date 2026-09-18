@@ -33,3 +33,8 @@ commit = "9110365ba6916c9554c231c5cdcac77b2618cb89"
 repo = "https://github.com/GameTechDev/ISPCTextureCompressor"
 ref = "master"
 commit = "79ddbc90334fc31edd438e68ccb0fe99b4e15aab"
+
+[bc7f]
+repo = "https://github.com/BinomialLLC/basis_universal"
+ref = "master"
+commit = "99f52d63aa6799cbdaecfe977111dc5ec3b31d47"

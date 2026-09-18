@@ -4,6 +4,7 @@ pub(crate) mod backend;
 #[cfg(any(
     feature = "encoder-intel",
     feature = "encoder-bc7enc",
+    feature = "encoder-bc7f",
     feature = "encoder-etcpak",
     feature = "encoder-amd",
 ))]
@@ -17,6 +18,9 @@ pub mod ispc;
 
 #[cfg(feature = "encoder-bc7enc")]
 pub mod bc7enc;
+
+#[cfg(feature = "encoder-bc7f")]
+pub mod bc7f;
 
 #[cfg(feature = "encoder-etcpak")]
 pub mod etcpak;
@@ -35,6 +39,7 @@ pub mod compressonator;
     any(
         feature = "encoder-intel",
         feature = "encoder-bc7enc",
+        feature = "encoder-bc7f",
         feature = "encoder-etcpak",
         feature = "encoder-amd",
         feature = "encoder-astcenc",
@@ -64,6 +69,8 @@ pub enum Encoder {
     Auto,
     #[cfg(feature = "encoder-bc7enc")]
     Bc7enc(bc7enc::Bc7encSettings),
+    #[cfg(feature = "encoder-bc7f")]
+    Bc7f(bc7f::Bc7fSettings),
     #[cfg(feature = "encoder-intel")]
     Intel(ispc::IspcSettings),
     #[cfg(feature = "encoder-etcpak")]
@@ -94,6 +101,7 @@ pub fn resolve_auto_encoder(format: ktx2::Format) -> Option<Encoder> {
     #[cfg_attr(
         not(any(
             feature = "encoder-bc7enc",
+            feature = "encoder-bc7f",
             feature = "encoder-intel",
             feature = "encoder-etcpak",
             feature = "encoder-amd",
@@ -106,6 +114,10 @@ pub fn resolve_auto_encoder(format: ktx2::Format) -> Option<Encoder> {
     #[cfg(feature = "encoder-bc7enc")]
     if bc7enc::Bc7encEncoder::supported_formats().contains(&format) {
         return Some(Encoder::Bc7enc(Default::default()));
+    }
+    #[cfg(feature = "encoder-bc7f")]
+    if bc7f::Bc7fEncoder::supported_formats().contains(&format) {
+        return Some(Encoder::Bc7f(Default::default()));
     }
     #[cfg(feature = "encoder-intel")]
     if ispc::IspcEncoder::supported_formats().contains(&format) {
@@ -134,6 +146,7 @@ pub fn compiled_in_encoders() -> Vec<EncoderInfo> {
     #[cfg_attr(
         not(any(
             feature = "encoder-bc7enc",
+            feature = "encoder-bc7f",
             feature = "encoder-intel",
             feature = "encoder-etcpak",
             feature = "encoder-amd",
@@ -147,6 +160,11 @@ pub fn compiled_in_encoders() -> Vec<EncoderInfo> {
         EncoderInfo {
             name: bc7enc::Bc7encEncoder::name(),
             supported_formats: bc7enc::Bc7encEncoder::supported_formats(),
+        },
+        #[cfg(feature = "encoder-bc7f")]
+        EncoderInfo {
+            name: bc7f::Bc7fEncoder::name(),
+            supported_formats: bc7f::Bc7fEncoder::supported_formats(),
         },
         #[cfg(feature = "encoder-intel")]
         EncoderInfo {
@@ -178,6 +196,8 @@ mod tests {
     fn encoder_name(encoder: &Encoder) -> &'static str {
         match encoder {
             Encoder::Auto => "auto",
+            #[cfg(feature = "encoder-bc7f")]
+            Encoder::Bc7f(_) => "bc7f",
             #[cfg(feature = "encoder-bc7enc")]
             Encoder::Bc7enc(_) => "bc7e",
             #[cfg(feature = "encoder-intel")]

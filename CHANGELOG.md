@@ -23,6 +23,10 @@ Per Keep a Changelog there are 6 main categories of changes:
 
 ## Unreleased
 
+### Added
+
+- BC7F bindings and Rust/CLI support for BC7 compression, with six quality presets. Automatic selection prefers BC7F after bc7enc. @cwfitzgerald
+
 ### Changed
 
 - With the `rayon` feature, all mips and layers of an image now encode concurrently instead of one surface at a time, improving worker utilization on images with many small surfaces.

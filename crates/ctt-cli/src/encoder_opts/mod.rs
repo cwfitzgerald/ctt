@@ -18,6 +18,7 @@ use facet::{Facet, Field, Shape, Type, UserType};
 pub mod amd;
 pub mod astcenc;
 pub mod bc7enc;
+pub mod bc7f;
 pub mod etcpak;
 pub mod intel;
 

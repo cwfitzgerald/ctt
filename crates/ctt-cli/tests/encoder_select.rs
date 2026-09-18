@@ -10,9 +10,9 @@ fn list_encoders_smoke() {
     // Runs without an output path or inputs.
     run_cli(["ctt", "--list-encoders"]).expect("--list-encoders run succeeded");
 
-    // ctt-cli always compiles in all five backends; each must appear.
+    // ctt-cli always compiles in all six backends; each must appear.
     let table = ctt_cli::encoder_table_string();
-    for name in ["bc7e", "intel", "etcpak", "amd", "astcenc"] {
+    for name in ["bc7e", "intel", "etcpak", "amd", "astcenc", "bc7f"] {
         assert!(
             table.contains(name),
             "encoder table should list `{name}`; got:\n{table}"
@@ -60,4 +60,29 @@ fn intel_bc7_vs_bc7e_bc7_produce_different_bytes() {
         read(&bc7e_out),
         "intel and bc7e BC7 encoders should produce different bytes"
     );
+}
+
+#[test]
+fn bc7f_encodes_ktx2_with_options() {
+    let f = TestFixture::new();
+    let input = f.data_file("rgba8_16x16_linear.ktx2");
+    let output = f.output_file("bc7f.ktx2");
+    run_cli([
+        "ctt",
+        input.to_str().unwrap(),
+        "-o",
+        output.to_str().unwrap(),
+        "-f",
+        "bc7f_bc7",
+        "--quality",
+        "slow",
+        "--bc7f-opts",
+        "astc-compatible=true;disable-rgb-dual-plane=true",
+    ])
+    .unwrap();
+    let bytes = read(&output);
+    let reader = ktx2::Reader::new(bytes).unwrap();
+    assert_eq!(reader.header().format, Some(ktx2::Format::BC7_UNORM_BLOCK));
+    assert_eq!(reader.levels().next().unwrap().data.len(), 256);
+    run_cli(["ctt", "--help-encoder", "bc7f"]).unwrap();
 }

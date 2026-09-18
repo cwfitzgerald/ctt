@@ -1,0 +1,20 @@
+[package]
+name = "ctt-bc7f"
+version.workspace = true
+edition.workspace = true
+repository.workspace = true
+authors.workspace = true
+license = "(MIT OR Apache-2.0 OR Zlib) AND Apache-2.0"
+rust-version.workspace = true
+readme = "../../README.md"
+description = "Vendored BC7F bindings for BC7 texture compression"
+keywords = ["texture", "compression", "bc7", "gpu"]
+categories = ["graphics", "compression"]
+build = "build.rs"
+links = "ctt_bc7f"
+
+[build-dependencies]
+cc = { workspace = true, features = ["parallel"] }
+
+[lints]
+workspace = true

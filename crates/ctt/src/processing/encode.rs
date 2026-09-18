@@ -6,6 +6,7 @@ use crate::encoders::Encoder;
 #[cfg_attr(
     not(any(
         feature = "encoder-bc7enc",
+        feature = "encoder-bc7f",
         feature = "encoder-intel",
         feature = "encoder-etcpak",
         feature = "encoder-amd",
@@ -107,6 +108,7 @@ fn pick_auto(target: ktx2::Format) -> Result<Encoder> {
 #[cfg_attr(
     not(any(
         feature = "encoder-bc7enc",
+        feature = "encoder-bc7f",
         feature = "encoder-intel",
         feature = "encoder-etcpak",
         feature = "encoder-amd",
@@ -129,6 +131,8 @@ fn required_input_for(encoder: &Encoder, target: ktx2::Format) -> Result<ktx2::F
     use crate::encoders::astcenc::AstcencEncoder;
     #[cfg(feature = "encoder-bc7enc")]
     use crate::encoders::bc7enc::Bc7encEncoder;
+    #[cfg(feature = "encoder-bc7f")]
+    use crate::encoders::bc7f::Bc7fEncoder;
     #[cfg(feature = "encoder-amd")]
     use crate::encoders::compressonator::CompressonatorEncoder;
     #[cfg(feature = "encoder-etcpak")]
@@ -140,6 +144,11 @@ fn required_input_for(encoder: &Encoder, target: ktx2::Format) -> Result<ktx2::F
         Encoder::Auto => {
             let resolved = pick_auto(target)?;
             required_input_for(&resolved, target)
+        }
+        #[cfg(feature = "encoder-bc7f")]
+        Encoder::Bc7f(s) => {
+            require_supports(Bc7fEncoder::supported_formats(), target, "bc7f")?;
+            Ok(Bc7fEncoder::required_input_format(target, s))
         }
         #[cfg(feature = "encoder-bc7enc")]
         Encoder::Bc7enc(s) => {
@@ -181,6 +190,10 @@ fn compress_with(
             let resolved = pick_auto(base)?;
             compress_with(&resolved, surface, output_format, quality)
         }
+        #[cfg(feature = "encoder-bc7f")]
+        Encoder::Bc7f(s) => {
+            crate::encoders::bc7f::Bc7fEncoder::compress(surface, output_format, quality, s)
+        }
         #[cfg(feature = "encoder-bc7enc")]
         Encoder::Bc7enc(s) => {
             crate::encoders::bc7enc::Bc7encEncoder::compress(surface, output_format, quality, s)
@@ -210,6 +223,8 @@ fn compress_with(
 fn encoder_name(encoder: &Encoder) -> &'static str {
     match encoder {
         Encoder::Auto => "auto",
+        #[cfg(feature = "encoder-bc7f")]
+        Encoder::Bc7f(_) => crate::encoders::bc7f::Bc7fEncoder::name(),
         #[cfg(feature = "encoder-bc7enc")]
         Encoder::Bc7enc(_) => crate::encoders::bc7enc::Bc7encEncoder::name(),
         #[cfg(feature = "encoder-intel")]

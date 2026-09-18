@@ -58,6 +58,8 @@ pub fn parse_format(s: &str) -> Result<TargetFormat, Error> {
 
 fn encoder_for_prefix(name: &str) -> Encoder {
     match name {
+        #[cfg(feature = "encoder-bc7f")]
+        "bc7f" => Encoder::Bc7f(Default::default()),
         #[cfg(feature = "encoder-bc7enc")]
         "bc7e" => Encoder::Bc7enc(Default::default()),
         #[cfg(feature = "encoder-intel")]

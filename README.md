@@ -11,6 +11,7 @@ ctt binds to established open-source compression libraries and exposes them thro
 | Backend | Prefix | Feature | Description |
 |---------|--------|---------|-------------|
 | [**bc7enc-rdo**](https://github.com/richgel999/bc7enc_rdo) | `bc7e_` | `encoder-bc7enc` | Perceptual BC7 encoder with RDO support. |
+| [**BC7F**](https://github.com/BinomialLLC/basis_universal) | `bc7f_` | `encoder-bc7f` | Portable analytical BC7 encoder from Basis Universal. |
 | [**Intel ISPC Texture Compressor**](https://github.com/GameTechDev/ISPCTextureCompressor) | `intel_` | `encoder-intel` | SIMD-optimized BCn and ETC encoder. |
 | [**etcpak**](https://github.com/wolfpld/etcpak) | `etcpak_` | `encoder-etcpak` | Fast ETC/EAC and BCn encoder. |
 | [**AMD Compressonator**](https://github.com/GPUOpen-Tools/compressonator) | `amd_` | `encoder-amd` | AMD's BCn encoder suite. |
@@ -25,10 +26,11 @@ $ ctt --list-encoders
 Encoder    Priority     Formats
 -------    --------     -------
 bc7e       1            bc7
-intel      2            bc1, bc3, bc4, bc5, bc6h, bc7, etc1
-etcpak     3            etc1, etc2_rgba, eac_r, eac_rg, bc1, bc3, bc4, bc5
-amd        4            bc1, bc2, bc3, bc4, bc4s, bc5, bc5s, bc6h, bc6hsf, bc7
-astcenc    5            astc
+bc7f       2            bc7
+intel      3            bc1, bc3, bc4, bc5, bc6h, bc7, etc1
+etcpak     4            etc1, etc2_rgba, eac_r, eac_rg, bc1, bc3, bc4, bc5
+amd        5            bc1, bc2, bc3, bc4, bc4s, bc5, bc5s, bc6h, bc6hsf, bc7
+astcenc    6            astc
 ```
 
 ## Formats
@@ -248,10 +250,10 @@ warning without changing pixels.
 
 Each backend exposes its own low-level knobs through a
 `--<encoder>-opts "key=val;key=val"` flag: `--bc7e-opts`, `--intel-opts`,
-`--etcpak-opts`, `--amd-opts`, and `--astcenc-opts`. The opts apply only when
+`--bc7f-opts`, `--etcpak-opts`, `--amd-opts`, and `--astcenc-opts`. The opts apply only when
 the selected format resolves to that encoder; opts for a different encoder are
 ignored with a warning. Run `ctt --help-encoder <name>` (e.g. `bc7e`, `intel`,
-`etcpak`, `amd`, `astcenc`) to list the available keys, their types, and
+`bc7f`, `etcpak`, `amd`, `astcenc`) to list the available keys, their types, and
 descriptions for the encoders compiled into your build:
 
 ```sh

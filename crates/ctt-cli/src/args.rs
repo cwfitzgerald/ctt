@@ -131,6 +131,10 @@ pub struct Args {
     #[arg(long, value_name = "OPTS")]
     pub bc7e_opts: Option<String>,
 
+    /// BC7F options. Run `--help-encoder bc7f` for available keys.
+    #[arg(long, value_name = "OPTS")]
+    pub bc7f_opts: Option<String>,
+
     /// intel/ispc-encoder-specific options. Format: `key=val[;key=val...]`.
     /// Run `--help-encoder intel` to see the available keys.
     #[arg(long, value_name = "OPTS")]

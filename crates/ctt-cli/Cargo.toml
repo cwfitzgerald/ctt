@@ -36,6 +36,7 @@ ctt = { workspace = true, features = [
   "encoder-amd",
   "encoder-astcenc",
   "encoder-bc7enc",
+  "encoder-bc7f",
   "encoder-etcpak",
   "encoder-intel",
   "rayon",
