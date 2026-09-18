@@ -520,7 +520,7 @@ dependencies = [
  "half",
  "ktx2",
  "log",
- "miniz_oxide 0.8.9",
+ "miniz_oxide 0.9.1",
  "profiling",
  "rayon",
  "thiserror",
