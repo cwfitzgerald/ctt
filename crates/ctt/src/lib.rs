@@ -42,7 +42,7 @@
 //! # Feature flags
 //!
 //! Each encoder backend is an independent feature, all enabled by default:
-//! `encoder-bc7enc`, `encoder-intel`, `encoder-etcpak`, `encoder-amd`, and
+//! `encoder-bc7enc`, `encoder-bc7f`, `encoder-intel`, `encoder-etcpak`, `encoder-amd`, and
 //! `encoder-astcenc`. `ispc-prebuilt` (default) links prebuilt ISPC kernels;
 //! `ispc-build-from-source` compiles them instead and requires `ispc` on
 //! `PATH` — enable exactly one of the two. The default-off `rayon` feature

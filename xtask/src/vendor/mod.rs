@@ -1,5 +1,6 @@
 mod astcenc;
 mod bc7enc_rdo;
+mod bc7f;
 mod compressonator;
 mod etcpak;
 mod git;
@@ -36,6 +37,8 @@ pub struct VendorArgs {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
 pub enum VendorTarget {
+    /// Vendor the Basis Universal BC7F encoder.
+    Bc7f,
     /// Vendor bc7enc_rdo ISPC source.
     Bc7encRdo,
     /// Vendor astc-encoder C++ source.
@@ -49,7 +52,8 @@ pub enum VendorTarget {
 }
 
 impl VendorTarget {
-    const ALL: [VendorTarget; 5] = [
+    const ALL: [VendorTarget; 6] = [
+        VendorTarget::Bc7f,
         VendorTarget::Bc7encRdo,
         VendorTarget::Astcenc,
         VendorTarget::Compressonator,
@@ -61,6 +65,7 @@ impl VendorTarget {
     fn name(&self) -> &'static str {
         match self {
             VendorTarget::Bc7encRdo => "bc7enc-rdo",
+            VendorTarget::Bc7f => "bc7f",
             VendorTarget::Astcenc => "astcenc",
             VendorTarget::Compressonator => "compressonator",
             VendorTarget::Etcpak => "etcpak",
@@ -72,6 +77,7 @@ impl VendorTarget {
     fn vendor_from(&self, src_dir: &Path) -> Result<()> {
         match self {
             VendorTarget::Bc7encRdo => bc7enc_rdo::vendor_bc7enc_rdo(src_dir),
+            VendorTarget::Bc7f => bc7f::vendor_bc7f(src_dir),
             VendorTarget::Astcenc => astcenc::vendor_astcenc(src_dir),
             VendorTarget::Compressonator => compressonator::vendor_compressonator(src_dir),
             VendorTarget::Etcpak => etcpak::vendor_etcpak(src_dir),

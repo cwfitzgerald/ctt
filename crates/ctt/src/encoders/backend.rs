@@ -7,6 +7,7 @@ use crate::surface::Surface;
 #[cfg_attr(
     not(any(
         feature = "encoder-bc7enc",
+        feature = "encoder-bc7f",
         feature = "encoder-intel",
         feature = "encoder-etcpak",
         feature = "encoder-amd",

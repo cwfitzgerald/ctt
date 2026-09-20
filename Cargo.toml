@@ -18,6 +18,7 @@ repository = "https://github.com/cwfitzgerald/ctt"
 [workspace.lints]
 
 [workspace.dependencies]
+ctt-bc7f = { path = "crates/ctt-bc7f", version = "0.5", default-features = false }
 ctt = { path = "crates/ctt", version = "0.5", default-features = false }
 ctt-intel-texture-compressor = { path = "crates/ctt-intel-texture-compressor", version = "0.5", default-features = false }
 ctt-intel-texture-compressor-prebuilt = { path = "crates/ctt-intel-texture-compressor/prebuilt", version = "0.5", default-features = false }

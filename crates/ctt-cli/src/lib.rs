@@ -967,6 +967,9 @@ fn merge_encoder_opts(tf: TargetFormat, args: &Args) -> Result<TargetFormat, Err
     if let Some(raw) = args.astcenc_opts.as_deref() {
         encoder = apply_astcenc_opts(encoder, raw)?;
     }
+    if let Some(raw) = args.bc7f_opts.as_deref() {
+        encoder = apply_bc7f_opts(encoder, raw)?;
+    }
     if let Some(raw) = args.bc7e_opts.as_deref() {
         encoder = apply_bc7enc_opts(encoder, raw)?;
     }
@@ -983,10 +986,11 @@ fn merge_encoder_opts(tf: TargetFormat, args: &Args) -> Result<TargetFormat, Err
     Ok(TargetFormat::Compressed { format, encoder })
 }
 
-fn opts_strings(args: &Args) -> [(&'static str, &Option<String>); 5] {
+fn opts_strings(args: &Args) -> [(&'static str, &Option<String>); 6] {
     [
         ("astcenc", &args.astcenc_opts),
         ("bc7e", &args.bc7e_opts),
+        ("bc7f", &args.bc7f_opts),
         ("intel", &args.intel_opts),
         ("etcpak", &args.etcpak_opts),
         ("amd", &args.amd_opts),
@@ -1021,6 +1025,20 @@ fn apply_bc7enc_opts(encoder: Encoder, raw: &str) -> Result<Encoder, Error> {
         }
         other => {
             log::warn!("--bc7e-opts ignored: --format selected a non-bc7e encoder");
+            Ok(other)
+        }
+    }
+}
+
+fn apply_bc7f_opts(encoder: Encoder, raw: &str) -> Result<Encoder, Error> {
+    match encoder {
+        Encoder::Bc7f(_seed) => {
+            let parsed = encoder_opts::parse_opts::<encoder_opts::bc7f::Opts>(raw)
+                .map_err(|e| Error::UnsupportedFormat(format!("--bc7f-opts: {e}")))?;
+            Ok(Encoder::Bc7f(parsed.value.into_settings()))
+        }
+        other => {
+            log::warn!("--bc7f-opts ignored: --format selected a non-bc7f encoder");
             Ok(other)
         }
     }
@@ -1073,6 +1091,9 @@ fn print_encoder_help(name: &str) -> Result<(), Box<dyn std::error::Error>> {
     match name {
         "astcenc" => {
             encoder_opts::print_help_encoder::<encoder_opts::astcenc::Opts>("astcenc");
+        }
+        "bc7f" => {
+            encoder_opts::print_help_encoder::<encoder_opts::bc7f::Opts>("bc7f");
         }
         "bc7e" => {
             encoder_opts::print_help_encoder::<encoder_opts::bc7enc::Opts>("bc7e");
