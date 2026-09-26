@@ -2,11 +2,10 @@
 //!
 //! Drives load/store kernel dispatch and variant (float/integer, precision) selection.
 //!
-//! ctt normalizes ktx2 formats at the boundary so that sRGB-ness lives on
-//! [`Surface::color_space`](crate::surface::ColorSpace) rather than as a
-//! format variant (`R8G8B8A8_SRGB` etc.). Classification therefore derives
-//! the sRGB decision from the supplied `color_space`, not the format's own
-//! sRGB-ness.
+//! Classification takes the sRGB decision from the supplied `color_space`,
+//! not from the format's own sRGB-ness. This lets the pipeline store sRGB data
+//! through a UNORM format, and apply the sRGB curve to formats that have no
+//! sRGB variant (such as 16-bit UNORM).
 
 /// Byte-level layout of a format's channels.
 ///

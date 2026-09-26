@@ -30,11 +30,11 @@ pub fn decode_ktx2_image(data: &[u8]) -> Result<Image> {
 
     let supercompression = header.supercompression_scheme;
 
-    let full_format = header.format.ok_or_else(|| {
+    let format = header.format.ok_or_else(|| {
         Error::InputDecoding("KTX2 has VK_FORMAT_UNDEFINED (Basis Universal); not supported".into())
     })?;
 
-    let (format, color_space) = full_format.normalize();
+    let (_, color_space) = format.normalize();
 
     let alpha = match reader.is_alpha_premultiplied() {
         Some(true) => AlphaMode::Premultiplied,
@@ -419,7 +419,7 @@ mod tests {
                 depth: 1,
                 stride: 16,
                 slice_stride: 0,
-                format: ktx2::Format::R8G8B8A8_UNORM,
+                format: ktx2::Format::R8G8B8A8_SRGB,
                 color_space: ColorSpace::Srgb,
                 alpha: AlphaMode::Straight,
             }]],
@@ -434,7 +434,7 @@ mod tests {
         let s = &decoded.surfaces[0][0];
         assert_eq!(s.width, 4);
         assert_eq!(s.height, 4);
-        assert_eq!(s.format, ktx2::Format::R8G8B8A8_UNORM);
+        assert_eq!(s.format, ktx2::Format::R8G8B8A8_SRGB);
         assert_eq!(s.color_space, ColorSpace::Srgb);
         assert_eq!(s.data, vec![42u8; 64]);
     }
@@ -502,7 +502,7 @@ mod tests {
                 depth: 1,
                 stride: 16,
                 slice_stride: 0,
-                format: ktx2::Format::BC7_UNORM_BLOCK,
+                format: ktx2::Format::BC7_SRGB_BLOCK,
                 color_space: ColorSpace::Srgb,
                 alpha: AlphaMode::Straight,
             }]],
@@ -512,7 +512,7 @@ mod tests {
         let encoded = encode_ktx2_image(&original, None).unwrap();
         let decoded = decode_ktx2_image(&encoded).unwrap();
 
-        assert_eq!(decoded.surfaces[0][0].format, ktx2::Format::BC7_UNORM_BLOCK);
+        assert_eq!(decoded.surfaces[0][0].format, ktx2::Format::BC7_SRGB_BLOCK);
         assert_eq!(decoded.surfaces[0][0].color_space, ColorSpace::Srgb);
         assert_eq!(decoded.surfaces[0][0].data, vec![0xFF; 16]);
     }

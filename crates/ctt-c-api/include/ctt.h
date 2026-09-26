@@ -24,7 +24,7 @@
  * A typical encode pipeline:
  *
  *     ctt_surface *s = ctt_surface_create(pixels, len, w, h, 1, w*4, 0,
- *                          CTT_FORMAT_R8G8B8A8_UNORM,
+ *                          CTT_FORMAT_R8G8B8A8_SRGB,
  *                          CTT_COLOR_SPACE_SRGB,
  *                          CTT_ALPHA_MODE_STRAIGHT);
  *     ctt_image *img = ctt_image_create(CTT_TEXTURE_KIND_TEXTURE2D);
@@ -34,7 +34,7 @@
  *     ctt_convert_settings cfg = ctt_convert_settings_default();
  *     cfg.format = (ctt_target_format){
  *         .tag = CTT_TARGET_FORMAT_COMPRESSED,
- *         .compressed = { CTT_FORMAT_BC7_UNORM_BLOCK, ctt_encoder_auto() },
+ *         .compressed = { CTT_FORMAT_BC7_SRGB_BLOCK, ctt_encoder_auto() },
  *     };
  *     cfg.mipmap = true;
  *
@@ -1018,9 +1018,13 @@ typedef struct {
 /**
  * The target format for a conversion.
  *
- * `None` keeps the input format (no conversion). `Uncompressed` produces a
+ * `None` keeps the input format without compression, changed to the
+ * variant that agrees with the output color space. `Uncompressed` produces a
  * plain pixel format. `Compressed` block-encodes with the chosen
  * [`Encoder`].
+ *
+ * The format in `Uncompressed` and `Compressed` must agree with the output
+ * color space, by the same rules as the `format` of `ctt_surface_create`.
  */
 enum ctt_target_format_Tag
 #if defined(__cplusplus) || __STDC_VERSION__ >= 202311L
@@ -1148,9 +1152,19 @@ typedef struct {
  * self-documenting and stays correct if defaults ever change.
  */
 typedef struct {
+    /**
+     * Target format. Must agree with the output color space. See
+     * [`TargetFormat`].
+     */
     ctt_target_format format;
     ctt_container container;
     ctt_quality quality;
+    /**
+     * Override the output color space. Not present keeps the input's color
+     * space.
+     *
+     * Limits which target formats are valid. See [`TargetFormat`].
+     */
     ctt_optional_color_space output_color_space;
     ctt_optional_alpha_mode output_alpha;
     /**
@@ -1172,6 +1186,10 @@ typedef struct {
  * container would otherwise provide.
  */
 typedef struct {
+    /**
+     * Overrides the color space of every surface when present. The surface
+     * format changes to the variant that agrees with the new color space.
+     */
     ctt_optional_color_space color_space;
     ctt_optional_alpha_mode alpha;
 } ctt_input_overrides;
@@ -1708,6 +1726,19 @@ ctt_status ctt_decode_container_as(const uint8_t *data,
  *
  * `format` must be a valid VkFormat value (non-zero). `slice_stride` is
  * only meaningful when `depth > 1`; pass `0` for 2D surfaces.
+ *
+ * `format` must agree with `color_space`:
+ *
+ * - `CTT_COLOR_SPACE_SRGB`: if the format has an sRGB variant, the format
+ *   must be that variant. `CTT_FORMAT_R8G8B8A8_SRGB` is valid and
+ *   `CTT_FORMAT_R8G8B8A8_UNORM` is not. `CTT_FORMAT_R16G16B16A16_SFLOAT` has
+ *   no sRGB variant, so it is valid.
+ * - `CTT_COLOR_SPACE_LINEAR`: the format must not be an sRGB variant.
+ *   `CTT_FORMAT_R8G8B8A8_UNORM` and `CTT_FORMAT_R16G16B16A16_SFLOAT` are
+ *   valid and `CTT_FORMAT_R8G8B8A8_SRGB` is not.
+ *
+ * This function does not check the rule; `ctt_convert` fails with an error
+ * for a surface that breaks it.
  *
  * On failure returns `NULL` and sets the thread-local error message.
  */

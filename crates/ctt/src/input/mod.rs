@@ -4,6 +4,7 @@ pub mod ktx2;
 use crate::alpha::AlphaMode;
 use crate::error::Result;
 use crate::surface::{ColorSpace, Image};
+use crate::vk_format::FormatExt as _;
 
 /// The detected container type of input data.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -36,7 +37,8 @@ pub fn detect_container(data: &[u8]) -> Option<InputFormat> {
 /// When set, these take precedence over the values read from the container.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct InputOverrides {
-    /// Overrides the color space of every surface when set.
+    /// Overrides the color space of every surface when set. The surface
+    /// format changes to the variant that agrees with the new color space.
     pub color_space: Option<ColorSpace>,
     /// Overrides the alpha mode of every surface when set.
     pub alpha: Option<AlphaMode>,
@@ -74,6 +76,7 @@ pub fn decode_container_as(
         for layer in &mut image.surfaces {
             for surface in layer {
                 if let Some(cs) = overrides.color_space {
+                    surface.format = surface.format.with_color_space(cs);
                     surface.color_space = cs;
                 }
                 if let Some(alpha) = overrides.alpha {

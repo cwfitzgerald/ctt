@@ -16,6 +16,19 @@ pub struct Surface(pub(crate) ctt::Surface);
 /// `format` must be a valid VkFormat value (non-zero). `slice_stride` is
 /// only meaningful when `depth > 1`; pass `0` for 2D surfaces.
 ///
+/// `format` must agree with `color_space`:
+///
+/// - `CTT_COLOR_SPACE_SRGB`: if the format has an sRGB variant, the format
+///   must be that variant. `CTT_FORMAT_R8G8B8A8_SRGB` is valid and
+///   `CTT_FORMAT_R8G8B8A8_UNORM` is not. `CTT_FORMAT_R16G16B16A16_SFLOAT` has
+///   no sRGB variant, so it is valid.
+/// - `CTT_COLOR_SPACE_LINEAR`: the format must not be an sRGB variant.
+///   `CTT_FORMAT_R8G8B8A8_UNORM` and `CTT_FORMAT_R16G16B16A16_SFLOAT` are
+///   valid and `CTT_FORMAT_R8G8B8A8_SRGB` is not.
+///
+/// This function does not check the rule; `ctt_convert` fails with an error
+/// for a surface that breaks it.
+///
 /// On failure returns `NULL` and sets the thread-local error message.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn ctt_surface_create(

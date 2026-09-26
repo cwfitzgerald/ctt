@@ -62,6 +62,18 @@ pub trait FormatExt {
     ///
     /// Returns the sRGB variant when `cs == Srgb` and one exists, otherwise returns `self`.
     fn denormalize(&self, cs: ColorSpace) -> ktx2::Format;
+
+    /// Return the variant of this format that agrees with `cs`.
+    ///
+    /// - `Srgb`: the sRGB variant if one exists, otherwise `self`.
+    ///   `BC7_UNORM_BLOCK` becomes `BC7_SRGB_BLOCK`. `R16G16B16A16_SFLOAT` has
+    ///   no sRGB variant, so it does not change.
+    /// - `Linear`: the format with any sRGB variant removed.
+    ///   `BC7_SRGB_BLOCK` becomes `BC7_UNORM_BLOCK`. `BC7_UNORM_BLOCK` and
+    ///   `R16G16B16A16_SFLOAT` do not change.
+    fn with_color_space(&self, cs: ColorSpace) -> ktx2::Format {
+        self.normalize().0.denormalize(cs)
+    }
 }
 
 impl FormatExt for ktx2::Format {
@@ -706,6 +718,26 @@ mod tests {
         assert_eq!(
             F::BC6H_UFLOAT_BLOCK.denormalize(ColorSpace::Srgb),
             F::BC6H_UFLOAT_BLOCK
+        );
+    }
+
+    #[test]
+    fn with_color_space_picks_matching_variant() {
+        assert_eq!(
+            F::BC7_UNORM_BLOCK.with_color_space(ColorSpace::Srgb),
+            F::BC7_SRGB_BLOCK
+        );
+        assert_eq!(
+            F::BC7_SRGB_BLOCK.with_color_space(ColorSpace::Linear),
+            F::BC7_UNORM_BLOCK
+        );
+        assert_eq!(
+            F::BC7_SRGB_BLOCK.with_color_space(ColorSpace::Srgb),
+            F::BC7_SRGB_BLOCK
+        );
+        assert_eq!(
+            F::BC5_UNORM_BLOCK.with_color_space(ColorSpace::Srgb),
+            F::BC5_UNORM_BLOCK
         );
     }
 

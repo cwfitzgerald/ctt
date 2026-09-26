@@ -255,6 +255,7 @@ pub fn decode_dds_image(data: &[u8]) -> Result<Image> {
             "DDS file has no recognizable format".into(),
         ));
     };
+    let format = format.with_color_space(color_space);
 
     let width = dds.get_width();
     let height = dds.get_height();
@@ -462,7 +463,7 @@ mod tests {
                 depth: 1,
                 stride: 16,
                 slice_stride: 0,
-                format: ktx2::Format::R8G8B8A8_UNORM,
+                format: ktx2::Format::R8G8B8A8_SRGB,
                 color_space: ColorSpace::Srgb,
                 alpha: AlphaMode::Straight,
             }]],
@@ -477,7 +478,7 @@ mod tests {
         let s = &decoded.surfaces[0][0];
         assert_eq!(s.width, 4);
         assert_eq!(s.height, 4);
-        assert_eq!(s.format, ktx2::Format::R8G8B8A8_UNORM);
+        assert_eq!(s.format, ktx2::Format::R8G8B8A8_SRGB);
         assert_eq!(s.color_space, ColorSpace::Srgb);
         assert_eq!(s.data, vec![42u8; 64]);
     }

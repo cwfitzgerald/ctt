@@ -50,7 +50,12 @@ impl Container {
 /// Settings for the high-level [`convert`] function.
 #[derive(Default)]
 pub struct ConvertSettings {
-    /// Target format. If `None`, the input format is preserved without compression.
+    /// Target format. If `None`, the input format is kept without compression,
+    /// changed to the variant that agrees with the output color space (see
+    /// [`FormatExt::with_color_space`](crate::FormatExt::with_color_space)).
+    ///
+    /// Must agree with the output color space, by the same rules as
+    /// [`Surface::format`].
     pub format: Option<TargetFormat>,
     /// Output container format. Defaults to KTX2 with no supercompression
     /// ([`Container::Ktx2(None)`](Container::Ktx2)).
@@ -59,6 +64,8 @@ pub struct ConvertSettings {
     /// uncompressed output.
     pub quality: Quality,
     /// Override the output color space. `None` keeps the input's color space.
+    ///
+    /// Limits which target formats are valid. See [`ConvertSettings::format`].
     pub output_color_space: Option<ColorSpace>,
     /// Override the output alpha mode. `None` keeps the input's alpha mode.
     pub output_alpha: Option<AlphaMode>,
@@ -98,10 +105,10 @@ pub fn convert(image: Image, mut settings: ConvertSettings) -> Result<PipelineOu
     let input_cs = input_base.color_space;
     let input_alpha = input_base.alpha;
 
-    let (target_fmt, encoder_step) = resolve_target(input_fmt, &mut settings)?;
-
     let target_cs = settings.output_color_space.unwrap_or(input_cs);
     let target_alpha = settings.output_alpha.unwrap_or(input_alpha);
+
+    let (target_fmt, encoder_step) = resolve_target(input_fmt, target_cs, &mut settings)?;
 
     // Format that ends up in the output container: the encoder's target when
     // one is set, otherwise the resolved target format.
@@ -109,6 +116,14 @@ pub fn convert(image: Image, mut settings: ConvertSettings) -> Result<PipelineOu
         .as_ref()
         .map(|s| s.target_format)
         .unwrap_or(target_fmt);
+
+    let matching_target_fmt = final_target_fmt.with_color_space(target_cs);
+    if matching_target_fmt != final_target_fmt {
+        return Err(Error::UnsupportedConversion(format!(
+            "output color space `{target_cs}` requires target format \
+             `{matching_target_fmt:?}`, not `{final_target_fmt:?}`"
+        )));
+    }
 
     let final_has_alpha = final_target_fmt.has_alpha_channel();
     if warn_discarding_alpha(
@@ -134,13 +149,10 @@ pub fn convert(image: Image, mut settings: ConvertSettings) -> Result<PipelineOu
     );
 
     // Passthrough whenever the bytes already represent the requested output:
-    // identical format (modulo the sRGB tag, which rides on the surface),
-    // matching color space and alpha, and no pixel-level rewrite. Covers
-    // compressed-in == compressed-out and avoids a lossy load/store roundtrip
-    // for uncompressed identity conversions.
-    let (input_base_fmt, _) = input_fmt.normalize();
-    let (target_base_fmt, _) = final_target_fmt.normalize();
-    let formats_match = input_base_fmt == target_base_fmt;
+    // identical format, matching color space and alpha, and no pixel-level
+    // rewrite. Covers compressed-in == compressed-out and avoids a lossy
+    // load/store roundtrip for uncompressed identity conversions.
+    let formats_match = input_fmt == final_target_fmt;
     let no_pixel_work = settings.swizzle.is_none() && !settings.mipmap;
 
     if formats_match && input_cs == target_cs && input_alpha == target_alpha && no_pixel_work {
@@ -259,8 +271,11 @@ fn load_store_alpha(
 ///
 /// Returns the format the store step should produce (= encoder input for
 /// compressed targets, = `TargetFormat::Uncompressed` or input for non-compressed).
+/// Without a target format, the input format is kept in the variant that agrees
+/// with `target_cs`.
 fn resolve_target(
     input_fmt: ktx2::Format,
+    target_cs: ColorSpace,
     settings: &mut ConvertSettings,
 ) -> Result<(ktx2::Format, Option<encode::EncoderStep>)> {
     match settings.format.take() {
@@ -274,7 +289,7 @@ fn resolve_target(
             Ok((required_input, Some(step)))
         }
         Some(TargetFormat::Uncompressed(fmt)) => Ok((fmt, None)),
-        None => Ok((input_fmt, None)),
+        None => Ok((input_fmt.with_color_space(target_cs), None)),
     }
 }
 
@@ -963,6 +978,155 @@ mod tests {
             }
             _ => panic!("expected Encoded output"),
         }
+    }
+
+    /// Every compiled-in encoder accepts the sRGB variants it lists, requires
+    /// the same input as for the UNORM variant, and the output carries the
+    /// exact target format.
+    #[test]
+    fn convert_srgb_target_with_every_encoder() {
+        for info in crate::encoders::compiled_in_encoders() {
+            let srgb_formats = info
+                .supported_formats
+                .iter()
+                .filter(|f| f.normalize().1 == ColorSpace::Srgb);
+            for &format in srgb_formats {
+                let required_input = |target_format| {
+                    encode::EncoderStep {
+                        target_format,
+                        quality: Quality::UltraFast,
+                        encoder: crate::format::encoder_for_prefix(info.name),
+                    }
+                    .required_input()
+                    .unwrap()
+                };
+                assert_eq!(
+                    required_input(format),
+                    required_input(format.normalize().0),
+                    "encoder {} {format:?}",
+                    info.name,
+                );
+
+                let (bw, bh) = format.block_size().unwrap();
+                let (w, h) = (u32::from(bw), u32::from(bh));
+                let image = make_image(
+                    vec![128u8; (w * h * 4) as usize],
+                    w,
+                    h,
+                    ktx2::Format::R8G8B8A8_SRGB,
+                    ColorSpace::Srgb,
+                    AlphaMode::Opaque,
+                );
+                let out = convert(
+                    image,
+                    ConvertSettings {
+                        format: Some(TargetFormat::Compressed {
+                            format,
+                            encoder: crate::format::encoder_for_prefix(info.name),
+                        }),
+                        container: Container::Raw,
+                        quality: Quality::UltraFast,
+                        ..Default::default()
+                    },
+                )
+                .unwrap_or_else(|e| panic!("{} {format:?}: {e}", info.name));
+                let PipelineOutput::Raw(out) = out else {
+                    panic!("expected Raw output");
+                };
+                let s = &out.surfaces[0][0];
+                assert_eq!(s.format, format, "encoder {}", info.name);
+                assert_eq!(s.color_space, ColorSpace::Srgb, "encoder {}", info.name);
+            }
+        }
+    }
+
+    #[test]
+    fn convert_target_color_space_mismatch_errors() {
+        let cases = [
+            (ktx2::Format::BC7_SRGB_BLOCK, ColorSpace::Linear),
+            (ktx2::Format::BC7_UNORM_BLOCK, ColorSpace::Srgb),
+        ];
+        for (format, output_cs) in cases {
+            let image = make_image(
+                vec![128u8; 4 * 4 * 4],
+                4,
+                4,
+                ktx2::Format::R8G8B8A8_UNORM,
+                ColorSpace::Linear,
+                AlphaMode::Opaque,
+            );
+            let err = convert(
+                image,
+                ConvertSettings {
+                    format: Some(TargetFormat::Compressed {
+                        format,
+                        encoder: crate::encoders::Encoder::Auto,
+                    }),
+                    container: Container::Raw,
+                    output_color_space: Some(output_cs),
+                    ..Default::default()
+                },
+            )
+            .unwrap_err();
+            assert!(
+                matches!(err, Error::UnsupportedConversion(_)),
+                "{format:?}/{output_cs:?}: expected UnsupportedConversion, got {err:?}",
+            );
+        }
+    }
+
+    #[test]
+    fn convert_uncompressed_target_color_space_mismatch_errors() {
+        let image = make_image(
+            vec![128u8; 4],
+            1,
+            1,
+            ktx2::Format::R8G8B8A8_SRGB,
+            ColorSpace::Srgb,
+            AlphaMode::Opaque,
+        );
+        let err = convert(
+            image,
+            ConvertSettings {
+                format: Some(TargetFormat::Uncompressed(ktx2::Format::R8G8B8A8_UNORM)),
+                container: Container::Raw,
+                ..Default::default()
+            },
+        )
+        .unwrap_err();
+        assert!(
+            matches!(err, Error::UnsupportedConversion(_)),
+            "expected UnsupportedConversion, got {err:?}",
+        );
+    }
+
+    /// Without a target format, a color space change keeps the input format
+    /// in the variant that agrees with the new color space.
+    #[test]
+    fn convert_no_target_follows_output_color_space() {
+        let image = make_image(
+            vec![128u8; 4],
+            1,
+            1,
+            ktx2::Format::R8G8B8A8_SRGB,
+            ColorSpace::Srgb,
+            AlphaMode::Opaque,
+        );
+        let out = convert(
+            image,
+            ConvertSettings {
+                container: Container::Raw,
+                output_color_space: Some(ColorSpace::Linear),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let PipelineOutput::Raw(out) = out else {
+            panic!("expected Raw output");
+        };
+        let s = &out.surfaces[0][0];
+        assert_eq!(s.format, ktx2::Format::R8G8B8A8_UNORM);
+        assert_eq!(s.color_space, ColorSpace::Linear);
     }
 
     #[test]

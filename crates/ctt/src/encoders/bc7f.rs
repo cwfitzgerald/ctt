@@ -27,7 +27,7 @@ impl Encoder for Bc7fEncoder {
     }
 
     fn supported_formats() -> &'static [ktx2::Format] {
-        &[ktx2::Format::BC7_UNORM_BLOCK]
+        &[ktx2::Format::BC7_UNORM_BLOCK, ktx2::Format::BC7_SRGB_BLOCK]
     }
 
     fn required_input_format(_format: ktx2::Format, _settings: &Bc7fSettings) -> ktx2::Format {

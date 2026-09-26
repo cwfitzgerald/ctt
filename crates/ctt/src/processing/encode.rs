@@ -68,8 +68,7 @@ pub fn encode_all(image: Image, step: &EncoderStep) -> Result<Image> {
             encoder_name(&step.encoder),
         );
 
-        let output_format = step.target_format.denormalize(surface.color_space);
-        let data = compress_with(&step.encoder, &surface, output_format, step.quality)?;
+        let data = compress_with(&step.encoder, &surface, step.target_format, step.quality)?;
 
         let bpp_block = step.target_format.bytes_per_block().unwrap_or(16) as u32;
         let (bw, _bh) = step.target_format.block_size().unwrap_or((4, 4));
@@ -184,10 +183,9 @@ fn compress_with(
     output_format: ktx2::Format,
     quality: Quality,
 ) -> Result<Vec<u8>> {
-    let (base, _) = output_format.normalize();
     match encoder {
         Encoder::Auto => {
-            let resolved = pick_auto(base)?;
+            let resolved = pick_auto(output_format)?;
             compress_with(&resolved, surface, output_format, quality)
         }
         #[cfg(feature = "encoder-bc7f")]

@@ -240,7 +240,7 @@ fn r8g8b8a8_unorm_identity() {
 
 #[test]
 fn r8g8b8a8_srgb_identity() {
-    assert_uncompressed_ktx2_passthrough(Format::R8G8B8A8_UNORM, ColorSpace::Srgb);
+    assert_uncompressed_ktx2_passthrough(Format::R8G8B8A8_SRGB, ColorSpace::Srgb);
 }
 
 #[test]
