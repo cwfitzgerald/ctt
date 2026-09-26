@@ -32,6 +32,12 @@ fn main() {
         .include("cpp/shaders")
         .include("cpp/cmp_math");
 
+    // The BC4S/BC5S kernels use `char` for signed data. `char` is unsigned on
+    // some targets (e.g. aarch64 Linux). MSVC `char` is always signed.
+    if !is_msvc {
+        main_build.flag("-fsigned-char");
+    }
+
     for &src in MAIN_SOURCES {
         main_build.file(src);
     }
