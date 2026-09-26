@@ -163,13 +163,6 @@ impl Image {
                         "layer {layer_idx} mip {mip_idx}: depth must be >= 1",
                     )));
                 }
-                if s.width == 0 || s.height == 0 {
-                    return Err(Error::InvalidImage(format!(
-                        "layer {layer_idx} mip {mip_idx}: width and height must be >= 1, \
-                         got {}x{}",
-                        s.width, s.height,
-                    )));
-                }
             }
         }
 
@@ -221,76 +214,14 @@ impl Image {
             }
         }
 
-        // 5. Stride/length checks. By here we know depth==1 implies a 2D-ish
-        // image with no slice axis to worry about, and depth>1 implies 3D
-        // with the per-mip depth chain already verified.
+        // 5. Size, stride, and length checks. By here we know depth==1 implies
+        // a 2D-ish image with no slice axis to worry about, and depth>1
+        // implies 3D with the per-mip depth chain already verified.
         for (layer_idx, layer) in self.surfaces.iter().enumerate() {
             for (mip_idx, s) in layer.iter().enumerate() {
-                let Some(tight_row) = s.tight_row_bytes() else {
-                    return Err(Error::InvalidImage(format!(
-                        "layer {layer_idx} mip {mip_idx}: format {:?} has no known pixel/block size",
-                        s.format,
-                    )));
-                };
-                if s.stride < tight_row {
-                    return Err(Error::InvalidImage(format!(
-                        "layer {layer_idx} mip {mip_idx}: stride {} is below the tight \
-                         minimum {tight_row} for {:?} at width={}",
-                        s.stride, s.format, s.width,
-                    )));
-                }
-                let rows = if let Some((_, bh)) = s.format.block_size() {
-                    s.height.div_ceil(bh as u32) as usize
-                } else {
-                    s.height as usize
-                };
-                // Height zero was rejected above, so at least one physical row
-                // (or block row) is present.
-                let row_span = (rows - 1)
-                    .checked_mul(s.stride as usize)
-                    .and_then(|v| v.checked_add(tight_row as usize))
-                    .ok_or_else(|| {
-                        Error::InvalidImage(format!(
-                            "layer {layer_idx} mip {mip_idx}: row/slice span overflows"
-                        ))
-                    })?;
-                if s.depth > 1 {
-                    if row_span > u32::MAX as usize {
-                        return Err(Error::InvalidImage(format!(
-                            "layer {layer_idx} mip {mip_idx}: padded slice span {row_span} \
-                             overflows the u32 slice_stride representation"
-                        )));
-                    }
-                    if (s.slice_stride as usize) < row_span {
-                        return Err(Error::InvalidImage(format!(
-                            "layer {layer_idx} mip {mip_idx}: slice_stride {} is below the \
-                             minimum {row_span} required by the padded row layout",
-                            s.slice_stride,
-                        )));
-                    }
-                }
-                let required = if s.depth > 1 {
-                    (s.depth as usize - 1)
-                        .checked_mul(s.slice_stride as usize)
-                        .and_then(|v| v.checked_add(row_span))
-                        .ok_or_else(|| {
-                            Error::InvalidImage(format!(
-                                "layer {layer_idx} mip {mip_idx}: total 3D data span overflows"
-                            ))
-                        })?
-                } else {
-                    row_span
-                };
-                if s.data.len() < required {
-                    return Err(Error::InvalidImage(format!(
-                        "layer {layer_idx} mip {mip_idx}: data is {} bytes, need at least \
-                         {required} to read width={}, height={}, depth={} at the declared strides",
-                        s.data.len(),
-                        s.width,
-                        s.height,
-                        s.depth,
-                    )));
-                }
+                s.validate_layout().map_err(|msg| {
+                    Error::InvalidImage(format!("layer {layer_idx} mip {mip_idx}: {msg}"))
+                })?;
             }
         }
 
@@ -313,6 +244,71 @@ impl Image {
 }
 
 impl Surface {
+    /// Check that the size is nonzero and that `data` covers the rows and
+    /// slices at the declared strides. Returns the error message on failure.
+    ///
+    /// Treats `depth <= 1` as a single slice.
+    pub(crate) fn validate_layout(&self) -> std::result::Result<(), String> {
+        if self.width == 0 || self.height == 0 {
+            return Err(format!(
+                "width and height must be >= 1, got {}x{}",
+                self.width, self.height,
+            ));
+        }
+        let Some(tight_row) = self.tight_row_bytes() else {
+            return Err(format!(
+                "format {:?} has no known pixel/block size",
+                self.format,
+            ));
+        };
+        if self.stride < tight_row {
+            return Err(format!(
+                "stride {} is below the tight minimum {tight_row} for {:?} at width={}",
+                self.stride, self.format, self.width,
+            ));
+        }
+        // Height zero was rejected above, so at least one physical row (or
+        // block row) is present.
+        let rows = self.rows_in_image() as usize;
+        let row_span = (rows - 1)
+            .checked_mul(self.stride as usize)
+            .and_then(|v| v.checked_add(tight_row as usize))
+            .ok_or_else(|| "row/slice span overflows".to_string())?;
+        if self.depth > 1 {
+            if row_span > u32::MAX as usize {
+                return Err(format!(
+                    "padded slice span {row_span} overflows the u32 slice_stride representation"
+                ));
+            }
+            if (self.slice_stride as usize) < row_span {
+                return Err(format!(
+                    "slice_stride {} is below the minimum {row_span} required by the padded \
+                     row layout",
+                    self.slice_stride,
+                ));
+            }
+        }
+        let required = if self.depth > 1 {
+            (self.depth as usize - 1)
+                .checked_mul(self.slice_stride as usize)
+                .and_then(|v| v.checked_add(row_span))
+                .ok_or_else(|| "total 3D data span overflows".to_string())?
+        } else {
+            row_span
+        };
+        if self.data.len() < required {
+            return Err(format!(
+                "data is {} bytes, need at least {required} to read width={}, height={}, \
+                 depth={} at the declared strides",
+                self.data.len(),
+                self.width,
+                self.height,
+                self.depth,
+            ));
+        }
+        Ok(())
+    }
+
     /// Number of rows or rows-of-blocks in this surface — `height` for
     /// uncompressed formats, `ceil(height / block_h)` for compressed.
     fn rows_in_image(&self) -> u32 {
