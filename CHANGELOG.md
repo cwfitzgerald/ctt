@@ -37,6 +37,7 @@ Per Keep a Changelog there are 6 main categories of changes:
 ### Fixed
 
 - All encoders accept the sRGB variants of the block formats they support (for example `BC7_SRGB_BLOCK`). Before, only the UNORM variants were accepted.
+- AMD encoder: `BC4_SNORM_BLOCK` and `BC5_SNORM_BLOCK` encode SNORM input correctly. Before, SNORM input was converted to UNORM and then read as signed, which corrupted the output. UNORM input is converted by value and is not remapped to `[-1, 1]`.
 
 ## v0.5.0
 
