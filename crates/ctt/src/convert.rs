@@ -56,6 +56,10 @@ pub struct ConvertSettings {
     ///
     /// Must agree with the output color space, by the same rules as
     /// [`Surface::format`].
+    ///
+    /// Values keep their meaning and are not remapped: UNORM input to a SNORM
+    /// target stays in `[0, 1]`. To use the full SNORM range (for example, a
+    /// normal map for `BC5_SNORM_BLOCK`), supply SNORM input.
     pub format: Option<TargetFormat>,
     /// Output container format. Defaults to KTX2 with no supercompression
     /// ([`Container::Ktx2(None)`](Container::Ktx2)).

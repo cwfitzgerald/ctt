@@ -127,8 +127,10 @@ impl Encoder for CompressonatorEncoder {
     fn required_input_format(format: ktx2::Format, _settings: &AmdSettings) -> ktx2::Format {
         use ktx2::Format as F;
         match format {
-            F::BC4_UNORM_BLOCK | F::BC4_SNORM_BLOCK => F::R8_UNORM,
-            F::BC5_UNORM_BLOCK | F::BC5_SNORM_BLOCK => F::R8G8_UNORM,
+            F::BC4_UNORM_BLOCK => F::R8_UNORM,
+            F::BC4_SNORM_BLOCK => F::R8_SNORM,
+            F::BC5_UNORM_BLOCK => F::R8G8_UNORM,
+            F::BC5_SNORM_BLOCK => F::R8G8_SNORM,
             F::BC6H_UFLOAT_BLOCK | F::BC6H_SFLOAT_BLOCK => F::R16G16B16_SFLOAT,
             _ => F::R8G8B8A8_UNORM,
         }
@@ -470,6 +472,71 @@ mod tests {
             )
             .unwrap()
         });
+    }
+
+    /// Convert a 4×4 SNORM surface to `target` through the full pipeline and
+    /// return the single encoded block.
+    fn convert_snorm_block(data: &[i8], format: ktx2::Format, target: ktx2::Format) -> Vec<u8> {
+        let channels = data.len() as u32 / 16;
+        let image = crate::Image {
+            surfaces: vec![vec![Surface {
+                data: bytemuck::cast_slice(data).to_vec(),
+                width: 4,
+                height: 4,
+                depth: 1,
+                stride: 4 * channels,
+                slice_stride: 0,
+                format,
+                color_space: ColorSpace::Linear,
+                alpha: AlphaMode::Opaque,
+            }]],
+            kind: crate::TextureKind::Texture2D,
+        };
+        let out = crate::convert(
+            image,
+            crate::ConvertSettings {
+                format: Some(crate::TargetFormat::Compressed {
+                    format: target,
+                    encoder: crate::encoders::Encoder::Amd(AmdSettings::default()),
+                }),
+                container: crate::Container::Raw,
+                quality: Quality::Slow,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let crate::PipelineOutput::Raw(mut out) = out else {
+            panic!("expected Raw output");
+        };
+        out.surfaces.remove(0).remove(0).data
+    }
+
+    fn assert_close(actual: &[i8], expected: impl Iterator<Item = i8>, what: &str) {
+        for (i, (&a, e)) in actual.iter().zip(expected).enumerate() {
+            assert!(
+                (i16::from(a) - i16::from(e)).abs() <= 4,
+                "{what} pixel {i}: got {a}, expected {e}"
+            );
+        }
+    }
+
+    #[test]
+    fn bc4_snorm_input_roundtrip() {
+        let r: Vec<i8> = (0..16).map(|i| ((i % 8) * 32 - 112) as i8).collect();
+        let block = convert_snorm_block(&r, ktx2::Format::R8_SNORM, ktx2::Format::BC4_SNORM_BLOCK);
+        let decoded = cmp::bc4s::decompress_block(&block.try_into().unwrap()).unwrap();
+        assert_close(&decoded, r.iter().copied(), "R");
+    }
+
+    #[test]
+    fn bc5_snorm_input_roundtrip() {
+        let r: Vec<i8> = (0..16).map(|i| ((i % 8) * 32 - 112) as i8).collect();
+        let rg: Vec<i8> = r.iter().flat_map(|&v| [v, -v]).collect();
+        let block =
+            convert_snorm_block(&rg, ktx2::Format::R8G8_SNORM, ktx2::Format::BC5_SNORM_BLOCK);
+        let (dr, dg) = cmp::bc5s::decompress_block(&block.try_into().unwrap()).unwrap();
+        assert_close(&dr, r.iter().copied(), "R");
+        assert_close(&dg, r.iter().map(|&v| -v), "G");
     }
 
     #[test]
