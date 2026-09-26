@@ -51,8 +51,21 @@ pub struct Surface {
     /// surfaces.
     pub slice_stride: u32,
     /// Pixel or block format of `data`.
+    ///
+    /// Must agree with `color_space`:
+    ///
+    /// - [`ColorSpace::Srgb`]: if the format has an sRGB variant, the format
+    ///   must be that variant. `R8G8B8A8_SRGB` is valid and `R8G8B8A8_UNORM`
+    ///   is not. `R16G16B16A16_SFLOAT` has no sRGB variant, so it is valid.
+    /// - [`ColorSpace::Linear`]: the format must not be an sRGB variant.
+    ///   `R8G8B8A8_UNORM` and `R16G16B16A16_SFLOAT` are valid and
+    ///   `R8G8B8A8_SRGB` is not.
+    ///
+    /// See [`FormatExt::with_color_space`].
     pub format: ktx2::Format,
     /// Color space the pixel values live in (sRGB or linear).
+    ///
+    /// Limits which formats are valid. See [`Surface::format`].
     pub color_space: ColorSpace,
     /// How the alpha channel relates to the color channels.
     pub alpha: AlphaMode,
@@ -153,7 +166,17 @@ impl Image {
             }
         }
 
-        // 3. Kind invariants. Done before stride/length so that "Texture2D
+        // 3. The format's sRGB-ness agrees with the color space. Step 2 makes
+        // this check on the head sufficient.
+        let matching_format = expected_format.with_color_space(expected_cs);
+        if matching_format != expected_format {
+            return Err(Error::InvalidImage(format!(
+                "color space `{expected_cs}` requires format `{matching_format:?}`, \
+                 not `{expected_format:?}`",
+            )));
+        }
+
+        // 4. Kind invariants. Done before stride/length so that "Texture2D
         // with depth>1" errors with the structural message instead of
         // "slice_stride below minimum".
         match self.kind {
@@ -191,7 +214,7 @@ impl Image {
             }
         }
 
-        // 4. Stride/length checks. By here we know depth==1 implies a 2D-ish
+        // 5. Stride/length checks. By here we know depth==1 implies a 2D-ish
         // image with no slice axis to worry about, and depth>1 implies 3D
         // with the per-mip depth chain already verified.
         for (layer_idx, layer) in self.surfaces.iter().enumerate() {
@@ -747,6 +770,38 @@ mod tests {
         };
         let err = img.validate().unwrap_err();
         assert!(err.to_string().contains("format"), "got: {err}");
+    }
+
+    #[test]
+    fn validate_format_color_space_mismatch() {
+        let mut unorm_srgb = s2d(4, 4);
+        unorm_srgb.format = ktx2::Format::R8G8B8A8_UNORM;
+        unorm_srgb.color_space = ColorSpace::Srgb;
+        let mut srgb_linear = s2d(4, 4);
+        srgb_linear.format = ktx2::Format::R8G8B8A8_SRGB;
+        srgb_linear.color_space = ColorSpace::Linear;
+        for s in [unorm_srgb, srgb_linear] {
+            let img = Image {
+                surfaces: vec![vec![s]],
+                kind: TextureKind::Texture2D,
+            };
+            let err = img.validate().unwrap_err();
+            assert!(matches!(err, Error::InvalidImage(_)), "got: {err:?}");
+        }
+    }
+
+    #[test]
+    fn validate_no_srgb_variant_accepts_srgb() {
+        let mut s = s2d(4, 4);
+        s.format = ktx2::Format::R16G16B16A16_UNORM;
+        s.stride = 4 * 8;
+        s.data = vec![0; 4 * 4 * 8];
+        s.color_space = ColorSpace::Srgb;
+        let img = Image {
+            surfaces: vec![vec![s]],
+            kind: TextureKind::Texture2D,
+        };
+        img.validate().unwrap();
     }
 
     #[test]

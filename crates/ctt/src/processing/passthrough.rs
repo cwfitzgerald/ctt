@@ -6,12 +6,11 @@
 use crate::convert::Container;
 use crate::error::{Error, Result};
 use crate::surface::Image;
-use crate::vk_format::FormatExt;
 
 use super::PipelineOutput;
 
 /// Run the passthrough path for a compressed input whose format already
-/// matches (or effectively matches) the target.
+/// matches the target.
 pub fn run(
     image: Image,
     target_format: ktx2::Format,
@@ -19,12 +18,7 @@ pub fn run(
 ) -> Result<PipelineOutput> {
     let first_fmt = image.surfaces[0][0].format;
 
-    // Require identical normalized format. sRGB variants are considered
-    // the same for passthrough since the color space rides on the Surface.
-    let (first_base, _) = first_fmt.normalize();
-    let (target_base, _) = target_format.normalize();
-
-    if first_base != target_base {
+    if first_fmt != target_format {
         return Err(Error::UnsupportedConversion(format!(
             "passthrough: input format {first_fmt:?} does not match target {target_format:?}"
         )));

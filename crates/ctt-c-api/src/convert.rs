@@ -635,9 +635,13 @@ pub struct CompressedTargetFormat {
 
 /// The target format for a conversion.
 ///
-/// `None` keeps the input format (no conversion). `Uncompressed` produces a
+/// `None` keeps the input format without compression, changed to the
+/// variant that agrees with the output color space. `Uncompressed` produces a
 /// plain pixel format. `Compressed` block-encodes with the chosen
 /// [`Encoder`].
+///
+/// The format in `Uncompressed` and `Compressed` must agree with the output
+/// color space, by the same rules as the `format` of `ctt_surface_create`.
 #[repr(C, u8)]
 #[derive(Debug, Clone, Copy)]
 pub enum TargetFormat {
@@ -733,9 +737,15 @@ impl From<Container> for ctt::Container {
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct ConvertSettings {
+    /// Target format. Must agree with the output color space. See
+    /// [`TargetFormat`].
     pub format: TargetFormat,
     pub container: Container,
     pub quality: Quality,
+    /// Override the output color space. Not present keeps the input's color
+    /// space.
+    ///
+    /// Limits which target formats are valid. See [`TargetFormat`].
     pub output_color_space: OptionalColorSpace,
     pub output_alpha: OptionalAlphaMode,
     /// Suppress the warning emitted when a meaningful (`Straight`) alpha

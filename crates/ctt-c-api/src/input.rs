@@ -35,6 +35,8 @@ impl From<ctt::input::InputFormat> for InputFormat {
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct InputOverrides {
+    /// Overrides the color space of every surface when present. The surface
+    /// format changes to the variant that agrees with the new color space.
     pub color_space: OptionalColorSpace,
     pub alpha: OptionalAlphaMode,
 }

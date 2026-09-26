@@ -56,7 +56,7 @@ pub fn parse_format(s: &str) -> Result<TargetFormat, Error> {
     })
 }
 
-fn encoder_for_prefix(name: &str) -> Encoder {
+pub(crate) fn encoder_for_prefix(name: &str) -> Encoder {
     match name {
         #[cfg(feature = "encoder-bc7f")]
         "bc7f" => Encoder::Bc7f(Default::default()),

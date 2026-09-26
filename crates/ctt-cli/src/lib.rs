@@ -141,11 +141,18 @@ pub fn run(args: Args) -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let swizzle = args.swizzle.as_deref().map(parse_swizzle).transpose()?;
+    // Format names like `bc7` name no color space, so pick the variant that
+    // agrees with the output color space.
+    let output_color_space = args
+        .output_color_space
+        .map(map_color_space)
+        .unwrap_or(image.surfaces[0][0].color_space);
     let target_format = args
         .format
         .as_deref()
         .map(parse_format)
         .transpose()?
+        .map(|tf| with_color_space(tf, output_color_space))
         .map(|tf| merge_encoder_opts(tf, &args))
         .transpose()?;
 
@@ -297,7 +304,12 @@ pub fn encoder_table_string() -> String {
     for (i, encoder) in encoders.iter().enumerate() {
         let mut formats = Vec::new();
         let mut has_astc = false;
-        for &f in encoder.supported_formats {
+        // Short names cover both variants, so list each UNORM/sRGB pair once.
+        let linear_formats = encoder
+            .supported_formats
+            .iter()
+            .filter(|f| f.normalize().1 == ColorSpace::Linear);
+        for &f in linear_formats {
             if f.block_size().is_some() && f.is_compressed() {
                 let (bw, bh) = f.block_size().unwrap();
                 let is_astc = matches!(
@@ -445,7 +457,7 @@ fn load_standard_image(
         _ => ColorSpace::Srgb,
     });
 
-    let surface = match img {
+    let mut surface = match img {
         image::DynamicImage::ImageLuma8(buf) => {
             let (width, height) = buf.dimensions();
             Surface {
@@ -602,6 +614,8 @@ fn load_standard_image(
             }
         }
     };
+    // The arms above name UNORM formats; pick the variant for the color space.
+    surface.format = surface.format.with_color_space(color_space);
 
     Ok(surface)
 }
@@ -932,6 +946,19 @@ fn map_quality(q: QualityArg) -> Quality {
         QualityArg::Basic => Quality::Basic,
         QualityArg::Slow => Quality::Slow,
         QualityArg::VerySlow => Quality::VerySlow,
+    }
+}
+
+/// Change the format in `tf` to the variant that agrees with `cs`.
+fn with_color_space(tf: TargetFormat, cs: ColorSpace) -> TargetFormat {
+    match tf {
+        TargetFormat::Compressed { format, encoder } => TargetFormat::Compressed {
+            format: format.with_color_space(cs),
+            encoder,
+        },
+        TargetFormat::Uncompressed(format) => {
+            TargetFormat::Uncompressed(format.with_color_space(cs))
+        }
     }
 }
 

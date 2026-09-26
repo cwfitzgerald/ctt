@@ -59,12 +59,16 @@ impl Encoder for IspcEncoder {
     fn supported_formats() -> &'static [ktx2::Format] {
         &[
             ktx2::Format::BC1_RGBA_UNORM_BLOCK,
+            ktx2::Format::BC1_RGBA_SRGB_BLOCK,
             ktx2::Format::BC3_UNORM_BLOCK,
+            ktx2::Format::BC3_SRGB_BLOCK,
             ktx2::Format::BC4_UNORM_BLOCK,
             ktx2::Format::BC5_UNORM_BLOCK,
             ktx2::Format::BC6H_UFLOAT_BLOCK,
             ktx2::Format::BC7_UNORM_BLOCK,
+            ktx2::Format::BC7_SRGB_BLOCK,
             ktx2::Format::ETC2_R8G8B8_UNORM_BLOCK,
+            ktx2::Format::ETC2_R8G8B8_SRGB_BLOCK,
         ]
     }
 

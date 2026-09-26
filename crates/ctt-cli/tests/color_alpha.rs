@@ -1,6 +1,6 @@
 //! Color-space and alpha-mode tests.
 
-use ctt::{AlphaMode, ColorSpace, Format};
+use ctt::{AlphaMode, ColorSpace, Format, FormatExt};
 
 use crate::common::synth::{make_image, write_ktx2};
 use crate::common::{TestFixture, assert, read, run_cli};
@@ -14,7 +14,8 @@ fn write_solid_rgba8_ktx2(
     alpha: AlphaMode,
 ) {
     let pixels = pixel.repeat(4 * 4);
-    let img = make_image(pixels, 4, 4, Format::R8G8B8A8_UNORM, color_space, alpha);
+    let format = Format::R8G8B8A8_UNORM.with_color_space(color_space);
+    let img = make_image(pixels, 4, 4, format, color_space, alpha);
     write_ktx2(img, path);
 }
 

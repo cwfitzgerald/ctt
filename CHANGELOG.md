@@ -29,9 +29,14 @@ Per Keep a Changelog there are 6 main categories of changes:
 
 ### Changed
 
+- **BREAKING:** Formats must agree with their color space: `ColorSpace::Srgb` requires the sRGB variant when the format has one (`R8G8B8A8_SRGB`, not `R8G8B8A8_UNORM`), and `ColorSpace::Linear` rejects sRGB variants. `Image::validate` checks input surfaces, and `convert` checks the target format against the output color space. The KTX2 and DDS readers with input color-space overrides produce the matching variant. When the CLI is used with short format names (eg. `-f bc7`, `-f rgba8`) it derives the full format from the input/output color space.
 - With the `rayon` feature, all mips and layers of an image now encode concurrently instead of one surface at a time, improving worker utilization on images with many small surfaces.
 - With the `rayon` feature, the pre-compression pipeline (load, swizzle, mipmap, store) also runs concurrently across mips and layers; only the per-layer mip resize chain remains serial.
 - CLI: input images are read and decoded in parallel. `--threads` now governs input decoding as well as compression.
+
+### Fixed
+
+- All encoders accept the sRGB variants of the block formats they support (for example `BC7_SRGB_BLOCK`). Before, only the UNORM variants were accepted.
 
 ## v0.5.0
 

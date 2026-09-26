@@ -122,19 +122,33 @@ pub struct AstcencSettings {
 /// All 14 valid ASTC 2D block sizes.
 const SUPPORTED_FORMATS: &[ktx2::Format] = &[
     ktx2::Format::ASTC_4x4_UNORM_BLOCK,
+    ktx2::Format::ASTC_4x4_SRGB_BLOCK,
     ktx2::Format::ASTC_5x4_UNORM_BLOCK,
+    ktx2::Format::ASTC_5x4_SRGB_BLOCK,
     ktx2::Format::ASTC_5x5_UNORM_BLOCK,
+    ktx2::Format::ASTC_5x5_SRGB_BLOCK,
     ktx2::Format::ASTC_6x5_UNORM_BLOCK,
+    ktx2::Format::ASTC_6x5_SRGB_BLOCK,
     ktx2::Format::ASTC_6x6_UNORM_BLOCK,
+    ktx2::Format::ASTC_6x6_SRGB_BLOCK,
     ktx2::Format::ASTC_8x5_UNORM_BLOCK,
+    ktx2::Format::ASTC_8x5_SRGB_BLOCK,
     ktx2::Format::ASTC_8x6_UNORM_BLOCK,
+    ktx2::Format::ASTC_8x6_SRGB_BLOCK,
     ktx2::Format::ASTC_8x8_UNORM_BLOCK,
+    ktx2::Format::ASTC_8x8_SRGB_BLOCK,
     ktx2::Format::ASTC_10x5_UNORM_BLOCK,
+    ktx2::Format::ASTC_10x5_SRGB_BLOCK,
     ktx2::Format::ASTC_10x6_UNORM_BLOCK,
+    ktx2::Format::ASTC_10x6_SRGB_BLOCK,
     ktx2::Format::ASTC_10x8_UNORM_BLOCK,
+    ktx2::Format::ASTC_10x8_SRGB_BLOCK,
     ktx2::Format::ASTC_10x10_UNORM_BLOCK,
+    ktx2::Format::ASTC_10x10_SRGB_BLOCK,
     ktx2::Format::ASTC_12x10_UNORM_BLOCK,
+    ktx2::Format::ASTC_12x10_SRGB_BLOCK,
     ktx2::Format::ASTC_12x12_UNORM_BLOCK,
+    ktx2::Format::ASTC_12x12_SRGB_BLOCK,
 ];
 
 pub struct AstcencEncoder;

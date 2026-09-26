@@ -15,7 +15,7 @@
 //!     depth: 1,
 //!     stride: 512 * 4,
 //!     slice_stride: 0,
-//!     format: Format::R8G8B8A8_UNORM,
+//!     format: Format::R8G8B8A8_SRGB,
 //!     color_space: ColorSpace::Srgb,
 //!     alpha: AlphaMode::Straight,
 //! };
@@ -26,7 +26,7 @@
 //!
 //! let _ktx2_bytes = convert(image, ConvertSettings {
 //!     format: Some(TargetFormat::Compressed {
-//!         format: Format::BC7_UNORM_BLOCK,
+//!         format: Format::BC7_SRGB_BLOCK,
 //!         encoder: Encoder::Auto,
 //!     }),
 //!     container: Container::ktx2(),

@@ -26,7 +26,7 @@ header = """\
  * A typical encode pipeline:
  *
  *     ctt_surface *s = ctt_surface_create(pixels, len, w, h, 1, w*4, 0,
- *                          CTT_FORMAT_R8G8B8A8_UNORM,
+ *                          CTT_FORMAT_R8G8B8A8_SRGB,
  *                          CTT_COLOR_SPACE_SRGB,
  *                          CTT_ALPHA_MODE_STRAIGHT);
  *     ctt_image *img = ctt_image_create(CTT_TEXTURE_KIND_TEXTURE2D);
@@ -36,7 +36,7 @@ header = """\
  *     ctt_convert_settings cfg = ctt_convert_settings_default();
  *     cfg.format = (ctt_target_format){
  *         .tag = CTT_TARGET_FORMAT_COMPRESSED,
- *         .compressed = { CTT_FORMAT_BC7_UNORM_BLOCK, ctt_encoder_auto() },
+ *         .compressed = { CTT_FORMAT_BC7_SRGB_BLOCK, ctt_encoder_auto() },
  *     };
  *     cfg.mipmap = true;
  *

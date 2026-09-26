@@ -61,11 +61,15 @@ impl Encoder for EtcpakEncoder {
     fn supported_formats() -> &'static [ktx2::Format] {
         &[
             ktx2::Format::ETC2_R8G8B8_UNORM_BLOCK,
+            ktx2::Format::ETC2_R8G8B8_SRGB_BLOCK,
             ktx2::Format::ETC2_R8G8B8A8_UNORM_BLOCK,
+            ktx2::Format::ETC2_R8G8B8A8_SRGB_BLOCK,
             ktx2::Format::EAC_R11_UNORM_BLOCK,
             ktx2::Format::EAC_R11G11_UNORM_BLOCK,
             ktx2::Format::BC1_RGBA_UNORM_BLOCK,
+            ktx2::Format::BC1_RGBA_SRGB_BLOCK,
             ktx2::Format::BC3_UNORM_BLOCK,
+            ktx2::Format::BC3_SRGB_BLOCK,
             ktx2::Format::BC4_UNORM_BLOCK,
             ktx2::Format::BC5_UNORM_BLOCK,
         ]
@@ -76,7 +80,9 @@ impl Encoder for EtcpakEncoder {
         match format {
             // ETC/EAC codecs expect BGRA pixel layout.
             F::ETC2_R8G8B8_UNORM_BLOCK
+            | F::ETC2_R8G8B8_SRGB_BLOCK
             | F::ETC2_R8G8B8A8_UNORM_BLOCK
+            | F::ETC2_R8G8B8A8_SRGB_BLOCK
             | F::EAC_R11_UNORM_BLOCK
             | F::EAC_R11G11_UNORM_BLOCK => F::B8G8R8A8_UNORM,
             // BC codecs expect RGBA pixel layout.

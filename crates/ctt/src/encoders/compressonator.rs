@@ -108,8 +108,11 @@ impl Encoder for CompressonatorEncoder {
     fn supported_formats() -> &'static [ktx2::Format] {
         &[
             ktx2::Format::BC1_RGBA_UNORM_BLOCK,
+            ktx2::Format::BC1_RGBA_SRGB_BLOCK,
             ktx2::Format::BC2_UNORM_BLOCK,
+            ktx2::Format::BC2_SRGB_BLOCK,
             ktx2::Format::BC3_UNORM_BLOCK,
+            ktx2::Format::BC3_SRGB_BLOCK,
             ktx2::Format::BC4_UNORM_BLOCK,
             ktx2::Format::BC4_SNORM_BLOCK,
             ktx2::Format::BC5_UNORM_BLOCK,
@@ -117,6 +120,7 @@ impl Encoder for CompressonatorEncoder {
             ktx2::Format::BC6H_UFLOAT_BLOCK,
             ktx2::Format::BC6H_SFLOAT_BLOCK,
             ktx2::Format::BC7_UNORM_BLOCK,
+            ktx2::Format::BC7_SRGB_BLOCK,
         ]
     }
 
