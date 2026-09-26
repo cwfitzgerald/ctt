@@ -117,8 +117,8 @@ impl Image {
             }
         }
 
-        // 2. Cross-surface uniformity (mip count, format, color space, alpha)
-        // and depth >= 1.
+        // 2. Cross-surface uniformity (mip count, format, color space, alpha,
+        // size per mip level) and depth >= 1.
         let expected_mips = self.surfaces[0].len();
         let head = &self.surfaces[0][0];
         let expected_format = head.format;
@@ -149,6 +149,13 @@ impl Image {
                     return Err(Error::InvalidImage(format!(
                         "layer {layer_idx} mip {mip_idx}: alpha {:?} differs from layer 0 ({:?})",
                         s.alpha, expected_alpha,
+                    )));
+                }
+                let reference = &self.surfaces[0][mip_idx];
+                if (s.width, s.height) != (reference.width, reference.height) {
+                    return Err(Error::InvalidImage(format!(
+                        "layer {layer_idx} mip {mip_idx}: size {}x{} differs from layer 0 ({}x{})",
+                        s.width, s.height, reference.width, reference.height,
                     )));
                 }
                 if s.depth == 0 {
@@ -630,6 +637,30 @@ mod tests {
             kind: TextureKind::Cubemap,
         };
         img.validate().unwrap();
+    }
+
+    #[test]
+    fn validate_layer_size_mismatch_rejected() {
+        for kind in [TextureKind::Texture2D, TextureKind::Cubemap] {
+            let mut surfaces = vec![vec![s2d(4, 4)]; 6];
+            surfaces[3] = vec![s2d(2, 2)];
+            let img = Image { surfaces, kind };
+            let err = img.validate().unwrap_err();
+            assert!(
+                err.to_string().contains("differs from layer 0"),
+                "got: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn validate_mip_size_mismatch_rejected() {
+        let img = Image {
+            surfaces: vec![vec![s2d(4, 4), s2d(2, 2)], vec![s2d(4, 4), s2d(1, 1)]],
+            kind: TextureKind::Texture2D,
+        };
+        let err = img.validate().unwrap_err();
+        assert!(err.to_string().contains("layer 1 mip 1"), "got: {err}");
     }
 
     #[test]
