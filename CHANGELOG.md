@@ -23,20 +23,128 @@ Per Keep a Changelog there are 6 main categories of changes:
 
 ## Unreleased
 
+### Migrating to `FormatDesc` and `ImageRef`
+
+Format, color space and alpha mode moved from each `Surface` to one `FormatDesc` on the image: `Image::desc`.
+
+`convert` takes an `ImageRef`, the borrowed form of `Image`. `SurfaceRef` is the borrowed form of `Surface`. The surface helpers (`tight_data`, `tile_to_blocks`, ...) and `validate` moved to the borrowed types and take the format as an argument.
+
+`split_cubemap` returns a cubemap `Image`. `CubemapInput::SeparateFaces` is removed: build the cubemap `Image` yourself.
+
+#### Rust
+
+```diff
+ let image = Image {
+     surfaces: vec![vec![Surface {
+         data, width, height, depth: 1, stride, slice_stride: 0,
+-        format: Format::R8G8B8A8_SRGB,
+-        color_space: ColorSpace::Srgb,
+-        alpha: AlphaMode::Straight,
+     }]],
+     kind: TextureKind::Texture2D,
++    desc: FormatDesc {
++        format: Format::R8G8B8A8_SRGB,
++        color_space: ColorSpace::Srgb,
++        alpha: AlphaMode::Straight,
++    },
+ };
+-let output = convert(image, settings)?;
++let output = convert(image.to_ref(), settings)?;
+```
+
+To convert borrowed bytes, build an `ImageRef`:
+
+```rust
+let image = ImageRef {
+    surfaces: vec![vec![SurfaceRef { data: &pixels, width, height, depth: 1, stride, slice_stride: 0 }]],
+    kind: TextureKind::Texture2D,
+    desc,
+};
+let output = convert(image, settings)?;
+```
+
+Metadata and helpers:
+
+```diff
+-let format = image.surfaces[0][0].format;
++let format = image.desc.format;
+
+-let bytes = surface.tight_data();
++let bytes = surface.as_ref().tight_data(image.desc.format);
+```
+
+Cubemaps:
+
+```diff
+-let faces: [Surface; 6] = split_cubemap(CubemapInput::Cross(atlas))?;
+-let cube = Image { surfaces: faces.map(|f| vec![f]).into(), kind: TextureKind::Cubemap };
++let cube: Image = split_cubemap(CubemapInput::Cross { surface: atlas.as_ref(), desc })?;
+
+-let faces = split_cubemap(CubemapInput::SeparateFaces(Box::new(faces)))?;
++// Faces in +X, -X, +Y, -Y, +Z, -Z order.
++let cube = Image {
++    surfaces: faces.into_iter().map(|face| vec![face]).collect(),
++    kind: TextureKind::Cubemap,
++    desc,
++};
+```
+
+#### C
+
+```diff
+-ctt_surface *s = ctt_surface_create(px, len, w, h, 1, w * 4, 0,
+-    CTT_FORMAT_R8G8B8A8_SRGB, CTT_COLOR_SPACE_SRGB, CTT_ALPHA_MODE_STRAIGHT);
+-ctt_image *img = ctt_image_create(CTT_TEXTURE_KIND_TEXTURE2D);
++ctt_surface *s = ctt_surface_create(px, len, w, h, 1, w * 4, 0);
++ctt_format_desc desc = {
++    CTT_FORMAT_R8G8B8A8_SRGB, CTT_COLOR_SPACE_SRGB, CTT_ALPHA_MODE_STRAIGHT};
++ctt_image *img = ctt_image_create(CTT_TEXTURE_KIND_TEXTURE2D, desc);
+
+-ctt_status st = ctt_convert(img, &cfg, &out); /* consumes img */
++ctt_status st = ctt_convert(img, &cfg, &out);
++ctt_image_destroy(img); /* not consumed */
+
+-ctt_format f = ctt_image_surface_format(img, layer, mip);
++ctt_format f = ctt_image_desc(img).format;
+```
+
+`ctt_image_create` returns NULL if `desc.format` is zero or disagrees with `desc.color_space`.
+
+The `ctt_cubemap_input` handle is removed. The split functions borrow the atlas and write one cubemap image:
+
+```diff
+-ctt_cubemap_input *in = ctt_cubemap_input_cross(atlas); /* consumes atlas */
+-ctt_surface *faces[6];
+-ctt_status st = ctt_split_cubemap(in, faces);           /* consumes in */
++ctt_image *cube = NULL;
++ctt_status st = ctt_split_cubemap_cross(atlas, desc, &cube);
++ctt_surface_destroy(atlas); /* not consumed */
+```
+
+To replace `ctt_cubemap_input_separate_faces`, create a `CTT_TEXTURE_KIND_CUBEMAP` image, add six layers with `ctt_image_add_layer`, and push one face into each with `ctt_image_push_mip`.
+
 ### Added
 
 - BC7F bindings and Rust/CLI support for BC7 compression, with six quality presets. Automatic selection prefers BC7F after bc7enc. @cwfitzgerald
 
 ### Changed
 
-- **BREAKING:** Formats must agree with their color space: `ColorSpace::Srgb` requires the sRGB variant when the format has one (`R8G8B8A8_SRGB`, not `R8G8B8A8_UNORM`), and `ColorSpace::Linear` rejects sRGB variants. `Image::validate` checks input surfaces, and `convert` checks the target format against the output color space. The KTX2 and DDS readers with input color-space overrides produce the matching variant. When the CLI is used with short format names (eg. `-f bc7`, `-f rgba8`) it derives the full format from the input/output color space.
+- **BREAKING:** Formats must agree with their color space: `ColorSpace::Srgb` requires the sRGB variant when the format has one (`R8G8B8A8_SRGB`, not `R8G8B8A8_UNORM`), and `ColorSpace::Linear` rejects sRGB variants. `ImageRef::validate` checks input surfaces, and `convert` checks the target format against the output color space. The KTX2 and DDS readers with input color-space overrides produce the matching variant. When the CLI is used with short format names (eg. `-f bc7`, `-f rgba8`) it derives the full format from the input/output color space.
 - With the `rayon` feature, all mips and layers of an image now encode concurrently instead of one surface at a time, improving worker utilization on images with many small surfaces.
 - With the `rayon` feature, the pre-compression pipeline (load, swizzle, mipmap, store) also runs concurrently across mips and layers; only the per-layer mip resize chain remains serial.
 - CLI: input images are read and decoded in parallel. `--threads` now governs input decoding as well as compression.
+- **BREAKING:** Format metadata moved from `Surface` to `Image`, `convert` takes a borrowed `ImageRef`, and `split_cubemap` returns a cubemap `Image`. In the C API, `ctt_convert` no longer consumes the image. See [Migrating to `FormatDesc` and `ImageRef`](#migrating-to-formatdesc-and-imageref). @cwfitzgerald
+
+### Removed
+
+- **BREAKING:** `CubemapInput::SeparateFaces`. Build a cubemap `Image` from the six faces directly. @cwfitzgerald
+- **BREAKING:** `Error::CubemapNonUniformFaces` and the C status `CTT_STATUS_CUBEMAP_NON_UNIFORM_FACES`. `ImageRef::validate` reports faces of different sizes as `Error::InvalidImage`. @cwfitzgerald
+- **BREAKING:** C API: `ctt_surface_format`, `ctt_surface_color_space`, `ctt_surface_alpha`, `ctt_image_surface_format`, `ctt_image_surface_color_space`, `ctt_image_surface_alpha`, `ctt_split_cubemap` and the `ctt_cubemap_input_*` functions and type. @cwfitzgerald
 
 ### Fixed
 
 - All encoders accept the sRGB variants of the block formats they support (for example `BC7_SRGB_BLOCK`). Before, only the UNORM variants were accepted.
+- `ImageRef::validate` rejects images whose layers have different sizes at the same mip level. Before, such 2D arrays and cubemaps were accepted. @cwfitzgerald
 - AMD encoder: `BC4_SNORM_BLOCK` and `BC5_SNORM_BLOCK` encode SNORM input correctly. Before, SNORM input was converted to UNORM and then read as signed, which corrupted the output. UNORM input is converted by value and is not remapped to `[-1, 1]`.
 
 ## v0.5.0
