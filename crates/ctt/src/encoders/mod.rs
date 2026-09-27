@@ -13,6 +13,9 @@ pub(crate) mod parallel;
 #[cfg(any(feature = "encoder-intel", feature = "encoder-etcpak"))]
 mod edge;
 
+#[cfg(any(feature = "encoder-intel", feature = "encoder-amd"))]
+mod bc6h;
+
 #[cfg(feature = "encoder-intel")]
 pub mod ispc;
 

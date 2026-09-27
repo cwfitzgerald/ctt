@@ -146,6 +146,7 @@ To replace `ctt_cubemap_input_separate_faces`, create a `CTT_TEXTURE_KIND_CUBEMA
 - All encoders accept the sRGB variants of the block formats they support (for example `BC7_SRGB_BLOCK`). Before, only the UNORM variants were accepted.
 - `ImageRef::validate` rejects images whose layers have different sizes at the same mip level. Before, such 2D arrays and cubemaps were accepted. @cwfitzgerald
 - AMD encoder: `BC4_SNORM_BLOCK` and `BC5_SNORM_BLOCK` encode SNORM input correctly. Before, SNORM input was converted to UNORM and then read as signed, which corrupted the output. UNORM input is converted by value and is not remapped to `[-1, 1]`.
+- Intel and AMD encoders: `BC6H_UFLOAT_BLOCK` encodes negative input as 0. Before, negative values (for example the ringing of the Lanczos3 mipmap filter near bright HDR pixels) encoded as the f16 maximum, 65504. @cwfitzgerald
 
 ## v0.5.0
 

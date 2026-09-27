@@ -5,6 +5,7 @@ use ctt_compressonator as cmp;
 use crate::alpha::AlphaMode;
 use crate::encoders::Quality;
 use crate::encoders::backend::Encoder;
+use crate::encoders::bc6h;
 use crate::error::{Error, Result};
 use crate::surface::{ColorSpace, FormatDesc, SurfaceRef};
 use crate::vk_format::FormatExt as _;
@@ -224,7 +225,7 @@ impl Encoder for CompressonatorEncoder {
                 if let Some(mask) = settings.bc6h_mode_mask {
                     opts.set_mask(mask).map_err(cmp_err)?;
                 }
-                let src = u16_slice(data);
+                let src = bc6h::clamp_negative_f16(data);
                 compress_rows(&src, width, height, 3, 16, |src, w, h, dst| {
                     cmp::bc6h::compress_blocks_into(src, w, h, &opts, dst)
                 })
@@ -576,5 +577,42 @@ mod tests {
             resolve_bc7_alpha(AmdBc7Alpha::Restricted, AlphaMode::Opaque),
             (true, true, true),
         );
+    }
+
+    /// A 4x4 block of `channels`-wide f16 pixels with values in about
+    /// [-0.2, 1.0]. With `clamp`, every negative value is +0 instead.
+    fn f16_ramp(clamp: bool) -> Surface {
+        let mut data = Vec::new();
+        for i in 0..16 * 3 {
+            let v = (i % 7) as f32 * 0.2 - 0.2 * (i % 3) as f32;
+            let v = if clamp { v.max(0.0) } else { v };
+            data.extend_from_slice(&half::f16::from_f32(v).to_ne_bytes());
+        }
+        Surface {
+            data,
+            width: 4,
+            height: 4,
+            depth: 1,
+            stride: 4 * 3 * 2,
+            slice_stride: 0,
+        }
+    }
+
+    #[test]
+    fn bc6h_ufloat_treats_negatives_as_zero() {
+        let encode = |surface: Surface| {
+            CompressonatorEncoder::compress(
+                surface.as_ref(),
+                FormatDesc {
+                    format: ktx2::Format::R16G16B16_SFLOAT,
+                    ..DESC
+                },
+                ktx2::Format::BC6H_UFLOAT_BLOCK,
+                Quality::Basic,
+                &AmdSettings::default(),
+            )
+            .unwrap()
+        };
+        assert_eq!(encode(f16_ramp(false)), encode(f16_ramp(true)));
     }
 }

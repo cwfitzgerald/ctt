@@ -3,7 +3,7 @@ use ctt_intel_texture_compressor as itc;
 use crate::alpha::AlphaMode;
 use crate::encoders::Quality;
 use crate::encoders::backend::Encoder;
-use crate::encoders::edge;
+use crate::encoders::{bc6h, edge};
 use crate::error::{Error, Result};
 use crate::surface::{FormatDesc, SurfaceRef};
 use crate::vk_format::FormatExt as _;
@@ -149,8 +149,9 @@ impl Encoder for IspcEncoder {
             )),
             F::BC6H_UFLOAT_BLOCK => {
                 let bc6_settings = bc6h_settings(quality);
+                let clamped = bc6h::clamp_negative_f16(data);
                 Ok(encode_unaligned(
-                    data,
+                    bytemuck::cast_slice(&clamped),
                     width,
                     height,
                     stride,
@@ -518,5 +519,42 @@ mod tests {
         )
         .unwrap();
         assert_eq!(out.len(), 16);
+    }
+
+    /// A 4x4 block of `channels`-wide f16 pixels with values in about
+    /// [-0.2, 1.0]. With `clamp`, every negative value is +0 instead.
+    fn f16_ramp(clamp: bool) -> Surface {
+        let mut data = Vec::new();
+        for i in 0..16 * 4 {
+            let v = (i % 7) as f32 * 0.2 - 0.2 * (i % 3) as f32;
+            let v = if clamp { v.max(0.0) } else { v };
+            data.extend_from_slice(&half::f16::from_f32(v).to_ne_bytes());
+        }
+        Surface {
+            data,
+            width: 4,
+            height: 4,
+            depth: 1,
+            stride: 4 * 4 * 2,
+            slice_stride: 0,
+        }
+    }
+
+    #[test]
+    fn bc6h_ufloat_treats_negatives_as_zero() {
+        let encode = |surface: Surface| {
+            IspcEncoder::compress(
+                surface.as_ref(),
+                FormatDesc {
+                    format: ktx2::Format::R16G16B16A16_SFLOAT,
+                    ..DESC
+                },
+                ktx2::Format::BC6H_UFLOAT_BLOCK,
+                Quality::Basic,
+                &IspcSettings::default(),
+            )
+            .unwrap()
+        };
+        assert_eq!(encode(f16_ramp(false)), encode(f16_ramp(true)));
     }
 }
