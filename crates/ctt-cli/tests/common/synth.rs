@@ -199,7 +199,7 @@ pub fn to_dds(image: Image) -> Vec<u8> {
 /// Encode an `Image` into a container, returning the encoded bytes.
 fn encode(image: Image, container: Container) -> Vec<u8> {
     match ctt::convert(
-        image,
+        image.to_ref(),
         ConvertSettings {
             format: None,
             container,
@@ -216,7 +216,7 @@ fn encode(image: Image, container: Container) -> Vec<u8> {
 /// Encode an `Image` with a generated `mip_count`-deep mip chain into KTX2.
 pub fn to_ktx2_with_mips(image: Image, mip_count: usize) -> Vec<u8> {
     match ctt::convert(
-        image,
+        image.to_ref(),
         ConvertSettings {
             format: None,
             container: Container::Ktx2(None),

@@ -56,7 +56,7 @@ unsafe fn split(
     surface: *const Surface,
     desc: FormatDesc,
     out_image: *mut *mut Image,
-    input: impl FnOnce(&ctt::Surface, ctt::FormatDesc) -> ctt::CubemapInput<'_>,
+    input: impl FnOnce(ctt::SurfaceRef<'_>, ctt::FormatDesc) -> ctt::CubemapInput<'_>,
 ) -> Status {
     catch_panic(Status::Internal, || {
         let Some(surface) = (unsafe { surface.as_ref() }) else {
@@ -74,7 +74,7 @@ unsafe fn split(
                 return Status::InvalidArgument;
             }
         };
-        match ctt::split_cubemap(input(&surface.0, desc)) {
+        match ctt::split_cubemap(input(surface.0.as_ref(), desc)) {
             Ok(image) => {
                 unsafe { *out_image = Box::into_raw(Box::new(Image(image))) };
                 Status::Ok

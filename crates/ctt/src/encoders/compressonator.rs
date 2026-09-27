@@ -6,7 +6,7 @@ use crate::alpha::AlphaMode;
 use crate::encoders::Quality;
 use crate::encoders::backend::Encoder;
 use crate::error::{Error, Result};
-use crate::surface::{ColorSpace, FormatDesc, Surface};
+use crate::surface::{ColorSpace, FormatDesc, SurfaceRef};
 use crate::vk_format::FormatExt as _;
 
 /// What the texture data represents. Drives default channel weighting for
@@ -137,7 +137,7 @@ impl Encoder for CompressonatorEncoder {
     }
 
     fn compress(
-        surface: &Surface,
+        surface: SurfaceRef<'_>,
         desc: FormatDesc,
         format: ktx2::Format,
         quality: Quality,
@@ -344,7 +344,7 @@ fn u16_slice(data: &[u8]) -> Cow<'_, [u16]> {
 mod tests {
     use super::*;
     use crate::alpha::AlphaMode;
-    use crate::surface::ColorSpace;
+    use crate::surface::{ColorSpace, Surface};
 
     const DESC: FormatDesc = FormatDesc {
         format: ktx2::Format::R8G8B8A8_UNORM,
@@ -374,7 +374,7 @@ mod tests {
         // toolchains (Linux, macOS). Use Slow so the NPOT coverage is
         // independent of that upstream quirk.
         let out = CompressonatorEncoder::compress(
-            &surface,
+            surface.as_ref(),
             DESC,
             ktx2::Format::BC7_UNORM_BLOCK,
             Quality::Slow,
@@ -396,7 +396,7 @@ mod tests {
     fn bc1_non_aligned_7x3() {
         let surface = solid_red(7, 3);
         let out = CompressonatorEncoder::compress(
-            &surface,
+            surface.as_ref(),
             DESC,
             ktx2::Format::BC1_RGBA_UNORM_BLOCK,
             Quality::UltraFast,
@@ -446,7 +446,7 @@ mod tests {
         let tight = patterned(8, 8, 8 * 4);
         let padded = patterned(8, 8, 8 * 4 + 16);
         let a = CompressonatorEncoder::compress(
-            &tight,
+            tight.as_ref(),
             DESC,
             ktx2::Format::BC1_RGBA_UNORM_BLOCK,
             Quality::Fast,
@@ -454,7 +454,7 @@ mod tests {
         )
         .unwrap();
         let b = CompressonatorEncoder::compress(
-            &padded,
+            padded.as_ref(),
             DESC,
             ktx2::Format::BC1_RGBA_UNORM_BLOCK,
             Quality::Fast,
@@ -470,7 +470,7 @@ mod tests {
         let surface = patterned(19, 13, 19 * 4 + 12);
         crate::encoders::assert_parallel_matches_serial(|| {
             CompressonatorEncoder::compress(
-                &surface,
+                surface.as_ref(),
                 DESC,
                 ktx2::Format::BC1_RGBA_UNORM_BLOCK,
                 Quality::Fast,
@@ -501,7 +501,7 @@ mod tests {
             },
         };
         let out = crate::convert(
-            image,
+            image.to_ref(),
             crate::ConvertSettings {
                 format: Some(crate::TargetFormat::Compressed {
                     format: target,

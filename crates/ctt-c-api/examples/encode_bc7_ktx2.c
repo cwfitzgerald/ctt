@@ -62,7 +62,7 @@ int main(void) {
 
     ctt_pipeline_output *out = NULL;
     ctt_status st = ctt_convert(img, &cfg, &out);
-    /* `img` consumed regardless of result. */
+    ctt_image_destroy(img); /* not consumed */
     if (st != CTT_STATUS_OK) {
         fprintf(stderr, "ctt_convert failed (%d): %s\n", st, ctt_last_error_message());
         return 5;

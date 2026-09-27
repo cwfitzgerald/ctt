@@ -83,7 +83,7 @@ fn bench_load(c: &mut Criterion) {
     for (channels, surface) in &surfaces {
         let name = format!("load_f16_f32_ch{channels}");
         g.bench_function(&name, |b| {
-            b.iter(|| load_f16_f32(black_box(surface), *channels).unwrap());
+            b.iter(|| load_f16_f32(black_box(surface.as_ref()), *channels).unwrap());
         });
     }
 

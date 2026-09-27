@@ -29,6 +29,7 @@ int main(void) {
     settings.container = (ctt_container){.tag = CTT_CONTAINER_RAW};
     ctt_pipeline_output *output = NULL;
     ctt_status status = ctt_convert(image, &settings, &output);
+    ctt_image_destroy(image);
     if (status != CTT_STATUS_OK) {
         fprintf(stderr, "conversion failed: %s\n", ctt_last_error_message());
         return 4;

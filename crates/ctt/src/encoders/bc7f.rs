@@ -3,7 +3,7 @@ use ctt_bc7f::bindings::*;
 use crate::encoders::backend::Encoder;
 use crate::error::{Error, Result};
 use crate::quality::Quality;
-use crate::surface::{FormatDesc, Surface};
+use crate::surface::{FormatDesc, SurfaceRef};
 use crate::vk_format::FormatExt;
 
 /// BC7F options applied to the quality preset.
@@ -35,7 +35,7 @@ impl Encoder for Bc7fEncoder {
     }
 
     fn compress(
-        surface: &Surface,
+        surface: SurfaceRef<'_>,
         desc: FormatDesc,
         format: ktx2::Format,
         quality: Quality,
@@ -78,7 +78,7 @@ impl Encoder for Bc7fEncoder {
 mod tests {
     use super::*;
     use crate::alpha::AlphaMode;
-    use crate::surface::ColorSpace;
+    use crate::surface::{ColorSpace, Surface};
 
     const DESC: FormatDesc = FormatDesc {
         format: ktx2::Format::R8G8B8A8_UNORM,
@@ -117,7 +117,7 @@ mod tests {
                 Quality::VerySlow,
             ] {
                 let encoded = Bc7fEncoder::compress(
-                    &surface,
+                    surface.as_ref(),
                     DESC,
                     ktx2::Format::BC7_UNORM_BLOCK,
                     quality,
@@ -142,7 +142,7 @@ mod tests {
     fn rejects_other_formats() {
         assert!(
             Bc7fEncoder::compress(
-                &solid_surface(255),
+                solid_surface(255).as_ref(),
                 DESC,
                 ktx2::Format::BC1_RGB_UNORM_BLOCK,
                 Quality::Basic,
@@ -161,7 +161,7 @@ mod tests {
         }
         crate::encoders::assert_parallel_matches_serial(|| {
             Bc7fEncoder::compress(
-                &surface,
+                surface.as_ref(),
                 DESC,
                 ktx2::Format::BC7_SRGB_BLOCK,
                 Quality::Slow,

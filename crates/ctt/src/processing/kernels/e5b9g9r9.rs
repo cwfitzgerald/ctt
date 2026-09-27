@@ -29,11 +29,11 @@ use fearless_simd::{Level, Simd, dispatch, prelude::*};
 
 use crate::error::Result;
 use crate::processing::Buffer;
-use crate::surface::Surface;
+use crate::surface::SurfaceRef;
 
 use super::driver;
 
-pub fn load_e5b9g9r9_f32(surface: &Surface) -> Result<Buffer<f32>> {
+pub fn load_e5b9g9r9_f32(surface: SurfaceRef<'_>) -> Result<Buffer<f32>> {
     profiling::scope!("load_e5b9g9r9_f32");
     load_e5b9g9r9_f32_at(Level::new(), surface)
 }
@@ -41,7 +41,7 @@ pub fn load_e5b9g9r9_f32(surface: &Surface) -> Result<Buffer<f32>> {
 /// SIMD kernel behind [`load_e5b9g9r9_f32`], at a caller-chosen [`Level`] so
 /// benches can force each backend.
 #[doc(hidden)]
-pub fn load_e5b9g9r9_f32_at(level: Level, surface: &Surface) -> Result<Buffer<f32>> {
+pub fn load_e5b9g9r9_f32_at(level: Level, surface: SurfaceRef<'_>) -> Result<Buffer<f32>> {
     dispatch!(level, simd => driver::load_packed32(
         simd,
         surface,
@@ -209,6 +209,7 @@ fn clamp_channel_simd<S: Simd>(simd: S, c: S::f32s) -> S::f32s {
 mod load_tests {
     use super::*;
     use crate::processing::kernels::constructible_levels;
+    use crate::surface::Surface;
 
     /// Per-pixel oracle: the shared exponent has no implicit leading one and no
     /// denormal special case, so each channel is simply `mantissa · 2^(exp−24)`.
@@ -333,7 +334,7 @@ mod load_tests {
         let width = words.len() as u32;
         let s = e5_surface(&words, width, 1, width * 4);
         for (label, level) in constructible_levels() {
-            let simd = load_e5b9g9r9_f32_at(level, &s).unwrap();
+            let simd = load_e5b9g9r9_f32_at(level, s.as_ref()).unwrap();
             assert_load_bit_exact(&simd.pixels, &s, label);
         }
     }
@@ -358,7 +359,7 @@ mod load_tests {
                 }
             }
             for (label, level) in constructible_levels() {
-                let simd = load_e5b9g9r9_f32_at(level, &s).unwrap();
+                let simd = load_e5b9g9r9_f32_at(level, s.as_ref()).unwrap();
                 assert_load_bit_exact(&simd.pixels, &s, &format!("{label} w={width}"));
             }
         }
@@ -395,7 +396,7 @@ mod load_tests {
             slice_stride: 0,
         };
         for (label, level) in constructible_levels() {
-            let got = load_e5b9g9r9_f32_at(level, &s).unwrap();
+            let got = load_e5b9g9r9_f32_at(level, s.as_ref()).unwrap();
             assert_load_bit_exact(&got.pixels, &s, label);
         }
     }

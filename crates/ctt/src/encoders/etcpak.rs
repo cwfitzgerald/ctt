@@ -4,7 +4,7 @@ use crate::encoders::Quality;
 use crate::encoders::backend::Encoder;
 use crate::encoders::edge;
 use crate::error::Result;
-use crate::surface::{FormatDesc, Surface};
+use crate::surface::{FormatDesc, SurfaceRef};
 use crate::vk_format::FormatExt as _;
 
 /// etcpak encoder settings.
@@ -91,7 +91,7 @@ impl Encoder for EtcpakEncoder {
     }
 
     fn compress(
-        surface: &Surface,
+        surface: SurfaceRef<'_>,
         _desc: FormatDesc,
         format: ktx2::Format,
         quality: Quality,
@@ -143,7 +143,7 @@ impl Encoder for EtcpakEncoder {
         };
 
         Ok(encode_with_edges(
-            &surface.data,
+            surface.data,
             surface.width,
             surface.height,
             surface.stride,
@@ -229,7 +229,7 @@ fn encode_with_edges(
 mod tests {
     use super::*;
     use crate::alpha::AlphaMode;
-    use crate::surface::ColorSpace;
+    use crate::surface::{ColorSpace, Surface};
 
     const DESC: FormatDesc = FormatDesc {
         format: ktx2::Format::R8G8B8A8_UNORM,
@@ -291,7 +291,7 @@ mod tests {
         };
         crate::encoders::assert_parallel_matches_serial(|| {
             EtcpakEncoder::compress(
-                &surface,
+                surface.as_ref(),
                 DESC,
                 ktx2::Format::BC1_RGBA_UNORM_BLOCK,
                 Quality::Fast,
@@ -306,7 +306,7 @@ mod tests {
         // BC3 has a working etcpak decoder, so round-trip solid red.
         let surface = solid_surface(7, 5, [255, 0, 0, 255]);
         let out = EtcpakEncoder::compress(
-            &surface,
+            surface.as_ref(),
             DESC,
             ktx2::Format::BC3_UNORM_BLOCK,
             Quality::Fast,
@@ -327,7 +327,7 @@ mod tests {
         // palette-invariant, then verify the round-trip through decode_rgba.
         let surface = solid_surface(5, 5, [255, 255, 255, 255]);
         let out = EtcpakEncoder::compress(
-            &surface,
+            surface.as_ref(),
             DESC,
             ktx2::Format::ETC2_R8G8B8A8_UNORM_BLOCK,
             Quality::Fast,
@@ -352,7 +352,7 @@ mod tests {
         // 8×8 is aligned and tight-packed → fast path direct call.
         let surface = solid_surface(8, 8, [128, 128, 128, 255]);
         let out = EtcpakEncoder::compress(
-            &surface,
+            surface.as_ref(),
             DESC,
             ktx2::Format::BC3_UNORM_BLOCK,
             Quality::Fast,

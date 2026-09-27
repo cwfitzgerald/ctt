@@ -5,7 +5,7 @@ use crate::encoders::Quality;
 use crate::encoders::backend::Encoder;
 use crate::encoders::edge;
 use crate::error::{Error, Result};
-use crate::surface::{FormatDesc, Surface};
+use crate::surface::{FormatDesc, SurfaceRef};
 use crate::vk_format::FormatExt as _;
 
 /// How the BC7 encoder should treat the alpha channel.
@@ -83,7 +83,7 @@ impl Encoder for IspcEncoder {
     }
 
     fn compress(
-        surface: &Surface,
+        surface: SurfaceRef<'_>,
         desc: FormatDesc,
         format: ktx2::Format,
         quality: Quality,
@@ -95,12 +95,8 @@ impl Encoder for IspcEncoder {
         // here instead of panicking inside the lower crate.
         check_i32_dims(surface.width, surface.height, surface.stride)?;
 
-        let (data, width, height, stride) = (
-            &*surface.data,
-            surface.width,
-            surface.height,
-            surface.stride,
-        );
+        let (data, width, height, stride) =
+            (surface.data, surface.width, surface.height, surface.stride);
         use ktx2::Format as F;
         match base {
             F::BC1_RGBA_UNORM_BLOCK => Ok(encode_unaligned(
@@ -368,7 +364,7 @@ fn etc1_settings() -> itc::etc1::EncodeSettings {
 mod tests {
     use super::*;
     use crate::alpha::AlphaMode;
-    use crate::surface::ColorSpace;
+    use crate::surface::{ColorSpace, Surface};
 
     const DESC: FormatDesc = FormatDesc {
         format: ktx2::Format::R8G8B8A8_UNORM,
@@ -426,7 +422,7 @@ mod tests {
         let surface = patterned(19, 13, 19 * 4 + 12);
         crate::encoders::assert_parallel_matches_serial(|| {
             IspcEncoder::compress(
-                &surface,
+                surface.as_ref(),
                 DESC,
                 ktx2::Format::BC7_UNORM_BLOCK,
                 Quality::Fast,
@@ -441,7 +437,7 @@ mod tests {
     fn bc7_non_aligned_5x5() {
         let surface = solid_red_surface(5, 5);
         let out = IspcEncoder::compress(
-            &surface,
+            surface.as_ref(),
             DESC,
             ktx2::Format::BC7_UNORM_BLOCK,
             Quality::UltraFast,
@@ -470,7 +466,7 @@ mod tests {
         // block), so round-trip through it.
         let surface = solid_red_surface(7, 3);
         let out = IspcEncoder::compress(
-            &surface,
+            surface.as_ref(),
             DESC,
             ktx2::Format::BC1_RGBA_UNORM_BLOCK,
             Quality::UltraFast,
@@ -514,7 +510,7 @@ mod tests {
         // 4×4 aligned image: fast path and slow path should both work.
         let surface = solid_red_surface(4, 4);
         let out = IspcEncoder::compress(
-            &surface,
+            surface.as_ref(),
             DESC,
             ktx2::Format::BC7_UNORM_BLOCK,
             Quality::UltraFast,

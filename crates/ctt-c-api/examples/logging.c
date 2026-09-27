@@ -53,7 +53,8 @@ static int drive_conversion(void) {
     cfg.container = (ctt_container){.tag = CTT_CONTAINER_RAW};
 
     ctt_pipeline_output *out = NULL;
-    ctt_status st = ctt_convert(img, &cfg, &out); /* consumes img */
+    ctt_status st = ctt_convert(img, &cfg, &out);
+    ctt_image_destroy(img); /* not consumed */
     if (st != CTT_STATUS_OK) {
         fprintf(stderr, "ctt_convert failed (%d): %s\n", st, ctt_last_error_message());
         return -1;

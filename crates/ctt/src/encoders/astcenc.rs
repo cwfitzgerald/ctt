@@ -3,7 +3,7 @@ pub use ctt_astcenc as astc;
 use crate::encoders::Quality;
 use crate::encoders::backend::Encoder;
 use crate::error::Result;
-use crate::surface::{ColorSpace, FormatDesc, Surface};
+use crate::surface::{ColorSpace, FormatDesc, SurfaceRef};
 use crate::vk_format::FormatExt as _;
 
 /// How a normal map's X/Y components are laid out across the four astcenc
@@ -172,7 +172,7 @@ impl Encoder for AstcencEncoder {
     }
 
     fn compress(
-        surface: &Surface,
+        surface: SurfaceRef<'_>,
         desc: FormatDesc,
         format: ktx2::Format,
         quality: Quality,
@@ -365,7 +365,7 @@ fn check_i32_dims(width: u32, height: u32) -> Result<()> {
 mod tests {
     use super::*;
     use crate::alpha::AlphaMode;
-    use crate::surface::ColorSpace;
+    use crate::surface::{ColorSpace, Surface};
 
     const DESC: FormatDesc = FormatDesc {
         format: ktx2::Format::R8G8B8A8_UNORM,
@@ -446,7 +446,7 @@ mod tests {
         let tight = patterned(8, 8, 8 * 4);
         let padded = patterned(8, 8, 8 * 4 + 16);
         let a = AstcencEncoder::compress(
-            &tight,
+            tight.as_ref(),
             DESC,
             ktx2::Format::ASTC_4x4_UNORM_BLOCK,
             Quality::Fast,
@@ -454,7 +454,7 @@ mod tests {
         )
         .unwrap();
         let b = AstcencEncoder::compress(
-            &padded,
+            padded.as_ref(),
             DESC,
             ktx2::Format::ASTC_4x4_UNORM_BLOCK,
             Quality::Fast,
@@ -470,7 +470,7 @@ mod tests {
         let surface = patterned(19, 13, 19 * 4 + 12);
         crate::encoders::assert_parallel_matches_serial(|| {
             AstcencEncoder::compress(
-                &surface,
+                surface.as_ref(),
                 DESC,
                 ktx2::Format::ASTC_4x4_UNORM_BLOCK,
                 Quality::Fast,

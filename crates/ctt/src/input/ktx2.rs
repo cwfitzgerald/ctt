@@ -433,7 +433,7 @@ mod tests {
             },
         };
 
-        let encoded = encode_ktx2_image(&original, None).unwrap();
+        let encoded = encode_ktx2_image(&original.to_ref(), None).unwrap();
         let decoded = decode_ktx2_image(&encoded).unwrap();
 
         assert_eq!(decoded.surfaces.len(), 1);
@@ -484,7 +484,7 @@ mod tests {
             },
         };
 
-        let encoded = encode_ktx2_image(&original, None).unwrap();
+        let encoded = encode_ktx2_image(&original.to_ref(), None).unwrap();
         let decoded = decode_ktx2_image(&encoded).unwrap();
 
         assert_eq!(decoded.surfaces.len(), 1);
@@ -514,7 +514,7 @@ mod tests {
             },
         };
 
-        let encoded = encode_ktx2_image(&original, None).unwrap();
+        let encoded = encode_ktx2_image(&original.to_ref(), None).unwrap();
         let decoded = decode_ktx2_image(&encoded).unwrap();
 
         assert_eq!(decoded.desc.format, ktx2::Format::BC7_SRGB_BLOCK);
@@ -548,7 +548,7 @@ mod tests {
             },
         };
 
-        let encoded = encode_ktx2_image(&original, None).unwrap();
+        let encoded = encode_ktx2_image(&original.to_ref(), None).unwrap();
         let decoded = decode_ktx2_image(&encoded).unwrap();
 
         assert_eq!(decoded.kind, TextureKind::Cubemap);
@@ -581,8 +581,11 @@ mod tests {
             },
         };
 
-        let mut bytes =
-            encode_ktx2_image(&image, Some(Ktx2Supercompression::Zstd { level: 3 })).unwrap();
+        let mut bytes = encode_ktx2_image(
+            &image.to_ref(),
+            Some(Ktx2Supercompression::Zstd { level: 3 }),
+        )
+        .unwrap();
 
         // Sanity: it decodes fine before tampering.
         assert!(decode_ktx2_image(&bytes).is_ok());
@@ -620,7 +623,7 @@ mod tests {
             },
         };
 
-        let encoded = encode_ktx2_image(&original, None).unwrap();
+        let encoded = encode_ktx2_image(&original.to_ref(), None).unwrap();
         let decoded = decode_ktx2_image(&encoded).unwrap();
         assert_eq!(decoded.desc.alpha, AlphaMode::Premultiplied);
     }
@@ -643,7 +646,7 @@ mod tests {
                 alpha: AlphaMode::Straight,
             },
         };
-        let mut bytes = encode_ktx2_image(&image, None).unwrap();
+        let mut bytes = encode_ktx2_image(&image.to_ref(), None).unwrap();
         bytes[36..40].copy_from_slice(&2u32.to_le_bytes());
 
         let err = decode_ktx2_image(&bytes).unwrap_err();
@@ -668,7 +671,7 @@ mod tests {
                 alpha: AlphaMode::Straight,
             },
         };
-        let mut bytes = encode_ktx2_image(&image, None).unwrap();
+        let mut bytes = encode_ktx2_image(&image.to_ref(), None).unwrap();
         bytes[32..36].copy_from_slice(&u32::MAX.to_le_bytes());
 
         let err = decode_ktx2_image(&bytes).unwrap_err();
@@ -693,7 +696,7 @@ mod tests {
                 alpha: AlphaMode::Straight,
             },
         };
-        let mut bytes = encode_ktx2_image(&image, None).unwrap();
+        let mut bytes = encode_ktx2_image(&image.to_ref(), None).unwrap();
         bytes[24..28].copy_from_slice(&0u32.to_le_bytes());
 
         let decoded = decode_ktx2_image(&bytes).unwrap();
@@ -724,7 +727,7 @@ mod tests {
                 alpha: AlphaMode::Straight,
             },
         };
-        let encoded = encode_ktx2_image(&image, None).unwrap();
+        let encoded = encode_ktx2_image(&image.to_ref(), None).unwrap();
 
         for bad_height in [0u32, 1] {
             let mut bytes = encoded.clone();

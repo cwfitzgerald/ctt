@@ -49,7 +49,7 @@ use crate::error::Result;
 use crate::processing::Buffer;
 use crate::processing::load_kernels::read_pixels;
 use crate::processing::store_kernels::write_pixels;
-use crate::surface::Surface;
+use crate::surface::SurfaceRef;
 
 use super::curve_pass::{CurveKernel, curve_in_place_with_token};
 use super::driver::{self, clamp01};
@@ -82,7 +82,7 @@ fn srgb_eotf_precise(c: f32) -> f32 {
     }
 }
 
-pub fn load_srgb8_f32(surface: &Surface, channels: usize) -> Result<Buffer<f32>> {
+pub fn load_srgb8_f32(surface: SurfaceRef<'_>, channels: usize) -> Result<Buffer<f32>> {
     profiling::scope!("load_srgb8_f32");
 
     if channels == 4 {
@@ -94,7 +94,7 @@ pub fn load_srgb8_f32(surface: &Surface, channels: usize) -> Result<Buffer<f32>>
 
 /// Per-pixel exact-LUT path for the 1/2/3-channel sRGB formats, whose pixels
 /// are not one packed 32-bit word and so have no SIMD kernel.
-fn load_srgb8_f32_scalar(surface: &Surface, channels: usize) -> Result<Buffer<f32>> {
+fn load_srgb8_f32_scalar(surface: SurfaceRef<'_>, channels: usize) -> Result<Buffer<f32>> {
     profiling::scope!("load_srgb8_f32_scalar");
 
     let lut = &*EOTF_LUT;
@@ -116,12 +116,12 @@ fn load_srgb8_f32_scalar(surface: &Surface, channels: usize) -> Result<Buffer<f3
     )
 }
 
-pub fn load_bgra8_srgb_f32(surface: &Surface) -> Result<Buffer<f32>> {
+pub fn load_bgra8_srgb_f32(surface: SurfaceRef<'_>) -> Result<Buffer<f32>> {
     profiling::scope!("load_bgra8_srgb_f32");
     load_srgb8_f32_at::<true>(Level::new(), surface)
 }
 
-pub fn load_bgr8_srgb_f32(surface: &Surface) -> Result<Buffer<f32>> {
+pub fn load_bgr8_srgb_f32(surface: SurfaceRef<'_>) -> Result<Buffer<f32>> {
     profiling::scope!("load_bgr8_srgb_f32");
     let lut = &*EOTF_LUT;
     read_pixels(surface, 3, 1, [0.0, 0.0, 0.0, 1.0], |bytes, lanes| {
@@ -138,7 +138,10 @@ pub fn load_bgr8_srgb_f32(surface: &Surface) -> Result<Buffer<f32>> {
 /// caller-chosen [`Level`] so benches can force each backend. `BGRA` selects
 /// the surface byte order.
 #[doc(hidden)]
-pub fn load_srgb8_f32_at<const BGRA: bool>(level: Level, surface: &Surface) -> Result<Buffer<f32>> {
+pub fn load_srgb8_f32_at<const BGRA: bool>(
+    level: Level,
+    surface: SurfaceRef<'_>,
+) -> Result<Buffer<f32>> {
     dispatch!(level, simd => driver::load_packed32(
         simd,
         surface,
@@ -542,6 +545,7 @@ mod load_tests {
     use crate::processing::srgb_test_support::{
         assert_curve_close, curve_test_pixels, eotf_exact, eotf_exact_clamped, in_place_pixels,
     };
+    use crate::surface::Surface;
 
     // ---- in-place EOTF ----
 
@@ -734,7 +738,7 @@ mod load_tests {
         let s = full_domain_surface();
         let want = oracle_pixels::<false>(&s);
         for (label, level) in constructible_levels() {
-            let got = load_srgb8_f32_at::<false>(level, &s).unwrap();
+            let got = load_srgb8_f32_at::<false>(level, s.as_ref()).unwrap();
             assert_load_close(&got.pixels, &want, label);
         }
     }
@@ -745,7 +749,7 @@ mod load_tests {
             for width in 1..=49u32 {
                 let s = tail_stride_surface(width);
                 let want = oracle_pixels::<false>(&s);
-                let got = load_srgb8_f32_at::<false>(level, &s).unwrap();
+                let got = load_srgb8_f32_at::<false>(level, s.as_ref()).unwrap();
                 assert_load_close(&got.pixels, &want, &format!("{label} w={width}"));
             }
         }
@@ -758,7 +762,7 @@ mod load_tests {
         let s = full_domain_surface();
         let want = oracle_pixels::<true>(&s);
         for (label, level) in constructible_levels() {
-            let got = load_srgb8_f32_at::<true>(level, &s).unwrap();
+            let got = load_srgb8_f32_at::<true>(level, s.as_ref()).unwrap();
             assert_load_close(&got.pixels, &want, &format!("{label} bgra"));
         }
     }
@@ -769,7 +773,7 @@ mod load_tests {
             for width in 1..=49u32 {
                 let s = tail_stride_surface(width);
                 let want = oracle_pixels::<true>(&s);
-                let got = load_srgb8_f32_at::<true>(level, &s).unwrap();
+                let got = load_srgb8_f32_at::<true>(level, s.as_ref()).unwrap();
                 assert_load_close(&got.pixels, &want, &format!("{label} bgra w={width}"));
             }
         }
@@ -789,7 +793,7 @@ mod load_tests {
                 }
             }
             let s = srgb_surface(data, w, 1, w * channels as u32);
-            let got = load_srgb8_f32(&s, channels).unwrap();
+            let got = load_srgb8_f32(s.as_ref(), channels).unwrap();
             for (x, px) in got.pixels.iter().enumerate() {
                 for (c, &lane) in px.iter().enumerate() {
                     let want = if c < channels {

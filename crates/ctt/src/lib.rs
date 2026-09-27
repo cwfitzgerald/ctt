@@ -3,20 +3,20 @@
 //! # Quick start
 //!
 //! ```no_run
-//! use ctt::{convert, ConvertSettings, Container, TargetFormat, Format, FormatDesc, Image, Surface, ColorSpace, AlphaMode, TextureKind};
+//! use ctt::{convert, ConvertSettings, Container, TargetFormat, Format, FormatDesc, ImageRef, SurfaceRef, ColorSpace, AlphaMode, TextureKind};
 //! use ctt::encoders::Encoder;
 //!
 //! # fn main() -> Result<(), ctt::Error> {
 //! let pixel_bytes = vec![0u8; 512 * 512 * 4];
-//! let surface = Surface {
-//!     data: pixel_bytes,
+//! let surface = SurfaceRef {
+//!     data: &pixel_bytes,
 //!     width: 512,
 //!     height: 512,
 //!     depth: 1,
 //!     stride: 512 * 4,
 //!     slice_stride: 0,
 //! };
-//! let image = Image {
+//! let image = ImageRef {
 //!     surfaces: vec![vec![surface]],
 //!     kind: TextureKind::Texture2D,
 //!     desc: FormatDesc {
@@ -73,7 +73,7 @@ pub use format::{TargetFormat, format_short_name, parse_format};
 pub use processing::equirectangular::{EquirectangularFront, EquirectangularOrientation};
 pub use processing::{MipmapFilter, PipelineOutput, Swizzle, SwizzleChannel};
 pub use quality::Quality;
-pub use surface::{ColorSpace, FormatDesc, Image, Surface, TextureKind};
+pub use surface::{ColorSpace, FormatDesc, Image, ImageRef, Surface, SurfaceRef, TextureKind};
 pub use vk_format::{ChannelKind, FormatExt};
 
 // ---- Public modules for advanced use ----

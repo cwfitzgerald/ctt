@@ -40,7 +40,8 @@
  *     cfg.mipmap = true;
  *
  *     ctt_pipeline_output *out = NULL;
- *     ctt_status st = ctt_convert(img, &cfg, &out);   // consumes `img`
+ *     ctt_status st = ctt_convert(img, &cfg, &out);
+ *     ctt_image_destroy(img);
  *     // st == CTT_STATUS_OK: `out` carries KTX2 bytes (the default container).
  *     ctt_pipeline_output_destroy(out);
  *
@@ -53,7 +54,7 @@
  * (`ctt_surface`, `ctt_image`, `ctt_pipeline_output`)
  * has a matching `*_destroy` function; passing `NULL` is always safe.
  *
- * APIs that consume an input (e.g. `ctt_convert`, `ctt_image_push_mip`) take
+ * APIs that consume an input (e.g. `ctt_image_push_mip`) take
  * ownership of the passed-in handle on both success and failure: the caller
  * must not call `*_destroy` on a consumed handle. Each consuming function's
  * doc comment calls this out.
@@ -1462,13 +1463,11 @@ extern "C" {
 /**
  * Run the conversion pipeline.
  *
- * **Consumes** `image` on both success and failure — the handle must not be
- * destroyed by the caller after this call. On success, writes a freshly
- * allocated `ctt_pipeline_output_t` handle into `*out` (caller frees with
- * `ctt_pipeline_output_destroy`).
+ * Does not consume `image`. On success, writes a new `ctt_pipeline_output_t`
+ * handle into `*out` (caller frees with `ctt_pipeline_output_destroy`).
  */
 
-ctt_status ctt_convert(ctt_image *image,
+ctt_status ctt_convert(const ctt_image *image,
                        const ctt_convert_settings *settings,
                        ctt_pipeline_output **out);
 

@@ -248,12 +248,3 @@ pub unsafe extern "C" fn ctt_image_surface_slice_stride(
     };
     surface_at(image, layer, mip).map_or(0, |s| s.slice_stride)
 }
-
-pub(crate) unsafe fn take_image(ptr: *mut Image) -> Result<ctt::Image, Status> {
-    if ptr.is_null() {
-        set_last_error("expected non-null image handle");
-        return Err(Status::NullPointer);
-    }
-    let boxed = unsafe { Box::from_raw(ptr) };
-    Ok(boxed.0)
-}

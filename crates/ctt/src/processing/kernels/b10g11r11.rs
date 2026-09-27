@@ -28,7 +28,7 @@ use fearless_simd::{Level, Simd, dispatch, prelude::*};
 
 use crate::error::Result;
 use crate::processing::Buffer;
-use crate::surface::Surface;
+use crate::surface::SurfaceRef;
 
 use super::driver;
 
@@ -64,7 +64,7 @@ fn decode_small_float<const MANT_BITS: u32>(v: u32) -> f32 {
     }
 }
 
-pub fn load_b10g11r11_f32(surface: &Surface) -> Result<Buffer<f32>> {
+pub fn load_b10g11r11_f32(surface: SurfaceRef<'_>) -> Result<Buffer<f32>> {
     profiling::scope!("load_b10g11r11_f32");
     load_b10g11r11_f32_at(Level::new(), surface)
 }
@@ -72,7 +72,7 @@ pub fn load_b10g11r11_f32(surface: &Surface) -> Result<Buffer<f32>> {
 /// SIMD kernel behind [`load_b10g11r11_f32`], at a caller-chosen [`Level`] so
 /// benches can force each backend.
 #[doc(hidden)]
-pub fn load_b10g11r11_f32_at(level: Level, surface: &Surface) -> Result<Buffer<f32>> {
+pub fn load_b10g11r11_f32_at(level: Level, surface: SurfaceRef<'_>) -> Result<Buffer<f32>> {
     dispatch!(level, simd => driver::load_packed32(
         simd,
         surface,
@@ -247,6 +247,7 @@ fn encode_codes<S: Simd, const M: u32>(simd: S, bits: S::u32s) -> S::u32s {
 mod load_tests {
     use super::*;
     use crate::processing::kernels::constructible_levels;
+    use crate::surface::Surface;
 
     /// Per-pixel oracle: decode one packed word into `[R, G, B, 1.0]` with
     /// [`decode_small_float`].
@@ -381,7 +382,7 @@ mod load_tests {
     fn simd_sweep_matches_oracle() {
         let s = sweep_surface();
         for (label, level) in constructible_levels() {
-            let simd = load_b10g11r11_f32_at(level, &s).unwrap();
+            let simd = load_b10g11r11_f32_at(level, s.as_ref()).unwrap();
             assert_load_bit_exact(&simd.pixels, &s, label);
         }
     }
@@ -391,7 +392,7 @@ mod load_tests {
         for (label, level) in constructible_levels() {
             for width in 1..=49u32 {
                 let s = tail_stride_surface(width);
-                let simd = load_b10g11r11_f32_at(level, &s).unwrap();
+                let simd = load_b10g11r11_f32_at(level, s.as_ref()).unwrap();
                 assert_load_bit_exact(&simd.pixels, &s, label);
             }
         }
@@ -421,7 +422,7 @@ mod load_tests {
         }
         let s = b10_surface(data, width, height, stride);
         for (label, level) in constructible_levels() {
-            let got = load_b10g11r11_f32_at(level, &s).unwrap();
+            let got = load_b10g11r11_f32_at(level, s.as_ref()).unwrap();
             assert_load_bit_exact(&got.pixels, &s, label);
         }
     }

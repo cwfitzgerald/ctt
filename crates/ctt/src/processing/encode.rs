@@ -17,7 +17,7 @@ use crate::encoders::Encoder;
 use crate::encoders::backend::Encoder as _;
 use crate::error::{Error, Result};
 use crate::quality::Quality;
-use crate::surface::{FormatDesc, Image, Surface};
+use crate::surface::{FormatDesc, Image, ImageRef, Surface, SurfaceRef};
 use crate::vk_format::FormatExt;
 
 /// A resolved encoder step: what format to encode to, the chosen encoder
@@ -42,10 +42,10 @@ impl EncoderStep {
 /// With the `rayon` feature, all surfaces encode concurrently as one flat job
 /// list, so small mips from different layers fill workers left idle by the
 /// row-chunk jobs of larger surfaces.
-pub fn encode_all(image: Image, step: &EncoderStep) -> Result<Image> {
+pub fn encode_all(image: ImageRef<'_>, step: &EncoderStep) -> Result<Image> {
     profiling::scope!("encode_all");
 
-    let indexed: Vec<Vec<(usize, usize, Surface)>> = image
+    let indexed: Vec<Vec<(usize, usize, SurfaceRef<'_>)>> = image
         .surfaces
         .into_iter()
         .enumerate()
@@ -71,7 +71,7 @@ pub fn encode_all(image: Image, step: &EncoderStep) -> Result<Image> {
 
         let data = compress_with(
             &step.encoder,
-            &surface,
+            surface,
             desc,
             step.target_format,
             step.quality,
@@ -187,7 +187,7 @@ fn required_input_for(encoder: &Encoder, target: ktx2::Format) -> Result<ktx2::F
 
 fn compress_with(
     encoder: &Encoder,
-    surface: &Surface,
+    surface: SurfaceRef<'_>,
     desc: FormatDesc,
     output_format: ktx2::Format,
     quality: Quality,

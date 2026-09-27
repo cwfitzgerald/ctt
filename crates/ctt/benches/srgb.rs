@@ -98,17 +98,17 @@ fn bench_load(c: &mut Criterion) {
 
     // RGBA sweep — `load_srgb8_f32` (4 channels) routes through this path.
     common::bench_levels(&mut g, "", |b, level| {
-        b.iter(|| k::load_srgb8_f32_at::<false>(level, black_box(&rgba)).unwrap());
+        b.iter(|| k::load_srgb8_f32_at::<false>(level, black_box(rgba.as_ref())).unwrap());
     });
     // BGRA sweep — `load_bgra8_srgb_f32` routes through this path.
     common::bench_levels(&mut g, "_bgra", |b, level| {
-        b.iter(|| k::load_srgb8_f32_at::<true>(level, black_box(&rgba)).unwrap());
+        b.iter(|| k::load_srgb8_f32_at::<true>(level, black_box(rgba.as_ref())).unwrap());
     });
 
     // 3 bytes per pixel is not one packed word, so this production path is
     // per-pixel scalar at every level — one row, not a level sweep.
     g.bench_function("bgr8_scalar", |b| {
-        b.iter(|| k::load_bgr8_srgb_f32(black_box(&bgr)).unwrap());
+        b.iter(|| k::load_bgr8_srgb_f32(black_box(bgr.as_ref())).unwrap());
     });
 
     g.finish();

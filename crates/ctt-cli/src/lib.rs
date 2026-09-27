@@ -169,7 +169,7 @@ pub fn run(args: Args) -> Result<(), Box<dyn std::error::Error>> {
         mipmap_filter: map_mipmap_filter(args.mipmap_filter),
     };
 
-    let converted = install_in(&pool, || ctt::convert(image, settings));
+    let converted = install_in(&pool, || ctt::convert(image.to_ref(), settings));
     let output_bytes = match converted? {
         PipelineOutput::Encoded(bytes) => bytes,
         PipelineOutput::Raw(_) => {
@@ -750,6 +750,7 @@ fn build_cubemap_image(
         let [surface] = layer.as_slice() else {
             return Err(split_shape_error().into());
         };
+        let surface = surface.as_ref();
         let desc = image.desc;
         let cubemap_input = match layout {
             CubemapLayout::Cross => CubemapInput::Cross { surface, desc },

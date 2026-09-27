@@ -151,7 +151,7 @@ fn write_bc7_solid(
     let data = rgba8_solid(w, h, color);
     let image = make_rgba8_image(data, w, h, ColorSpace::Linear, AlphaMode::Opaque);
     let bytes = match ctt::convert(
-        image,
+        image.to_ref(),
         ConvertSettings {
             format: Some(TargetFormat::Compressed {
                 format: Format::BC7_UNORM_BLOCK,
@@ -173,7 +173,7 @@ fn write_bc7_solid(
 
 fn write_container(path: PathBuf, image: Image, container: Container) -> Result<()> {
     let bytes = match ctt::convert(
-        image,
+        image.to_ref(),
         ConvertSettings {
             format: None,
             container,

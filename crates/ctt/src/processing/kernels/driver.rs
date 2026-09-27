@@ -21,7 +21,7 @@ use fearless_simd::{Simd, prelude::*};
 
 use crate::error::Result;
 use crate::processing::Buffer;
-use crate::surface::Surface;
+use crate::surface::SurfaceRef;
 
 /// Widest native vector across the `fearless_simd` levels is 512-bit: 16 lanes.
 pub(crate) const MAX_LANES: usize = 16;
@@ -41,7 +41,7 @@ pub(crate) fn clamp01<S: Simd>(simd: S, x: S::f32s) -> S::f32s {
 #[inline(always)]
 pub(crate) fn load_packed32<S: Simd, T: Pod>(
     simd: S,
-    surface: &Surface,
+    surface: SurfaceRef<'_>,
     mut load_row: impl FnMut(S, &[u32], &mut [T]),
 ) -> Result<Buffer<T>> {
     crate::processing::load_kernels::validate_surface(surface, 4)?;

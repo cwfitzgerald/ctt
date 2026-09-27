@@ -477,7 +477,7 @@ mod tests {
             },
         };
 
-        let encoded = encode_dds_image(&original).unwrap();
+        let encoded = encode_dds_image(&original.to_ref()).unwrap();
         let decoded = decode_dds_image(&encoded).unwrap();
 
         assert_eq!(decoded.surfaces.len(), 1);
@@ -510,7 +510,7 @@ mod tests {
             },
         };
 
-        let encoded = encode_dds_image(&original).unwrap();
+        let encoded = encode_dds_image(&original.to_ref()).unwrap();
         let decoded = decode_dds_image(&encoded).unwrap();
 
         assert_eq!(decoded.desc.format, ktx2::Format::BC7_UNORM_BLOCK);
@@ -556,7 +556,7 @@ mod tests {
             },
         };
 
-        let encoded = encode_dds_image(&original).unwrap();
+        let encoded = encode_dds_image(&original.to_ref()).unwrap();
         let decoded = decode_dds_image(&encoded).unwrap();
 
         assert_eq!(decoded.surfaces.len(), 1);
@@ -592,7 +592,7 @@ mod tests {
             },
         };
 
-        let encoded = encode_dds_image(&original).unwrap();
+        let encoded = encode_dds_image(&original.to_ref()).unwrap();
         let decoded = decode_dds_image(&encoded).unwrap();
 
         assert_eq!(decoded.kind, TextureKind::Cubemap);

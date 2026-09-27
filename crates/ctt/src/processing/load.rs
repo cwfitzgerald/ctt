@@ -9,14 +9,14 @@
 use crate::alpha::AlphaMode;
 use crate::error::{Error, Result};
 use crate::format_kind::{FormatFamily, FormatKind, classify};
-use crate::surface::{ColorSpace, FormatDesc, Surface};
+use crate::surface::{ColorSpace, FormatDesc, SurfaceRef};
 
 use super::buffer::Buffer;
 use super::kernels::alpha;
 use super::load_kernels as k;
 
 /// Load a surface into the f32 pipeline (linear + premultiplied).
-pub fn load_f32(surface: &Surface, desc: FormatDesc) -> Result<Buffer<f32>> {
+pub fn load_f32(surface: SurfaceRef<'_>, desc: FormatDesc) -> Result<Buffer<f32>> {
     profiling::scope!("load_f32");
     let info = classify(desc.format, desc.color_space).ok_or_else(|| {
         Error::UnsupportedFormat(format!(
@@ -73,7 +73,7 @@ pub fn load_f32(surface: &Surface, desc: FormatDesc) -> Result<Buffer<f32>> {
 }
 
 /// Load a surface into the f64 pipeline (float only, no sRGB / no integer).
-pub fn load_f64(surface: &Surface, desc: FormatDesc) -> Result<Buffer<f64>> {
+pub fn load_f64(surface: SurfaceRef<'_>, desc: FormatDesc) -> Result<Buffer<f64>> {
     profiling::scope!("load_f64");
     let info = classify(desc.format, desc.color_space).ok_or_else(|| {
         Error::UnsupportedFormat(format!(
@@ -107,7 +107,7 @@ pub fn load_f64(surface: &Surface, desc: FormatDesc) -> Result<Buffer<f64>> {
 }
 
 /// Load a surface into the u32 pipeline (UINT/SINT only, sign-extended bit-cast).
-pub fn load_u32(surface: &Surface, desc: FormatDesc) -> Result<Buffer<u32>> {
+pub fn load_u32(surface: SurfaceRef<'_>, desc: FormatDesc) -> Result<Buffer<u32>> {
     profiling::scope!("load_u32");
     let info = classify(desc.format, desc.color_space).ok_or_else(|| {
         Error::UnsupportedFormat(format!(
@@ -141,7 +141,7 @@ pub fn load_u32(surface: &Surface, desc: FormatDesc) -> Result<Buffer<u32>> {
 }
 
 /// Load a surface into the u64 pipeline (R64_UINT / R64_SINT only).
-pub fn load_u64(surface: &Surface, desc: FormatDesc) -> Result<Buffer<u64>> {
+pub fn load_u64(surface: SurfaceRef<'_>, desc: FormatDesc) -> Result<Buffer<u64>> {
     profiling::scope!("load_u64");
     let info = classify(desc.format, desc.color_space).ok_or_else(|| {
         Error::UnsupportedFormat(format!(

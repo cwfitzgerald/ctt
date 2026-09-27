@@ -1,6 +1,6 @@
 use crate::error::{Status, catch_panic, map_error, set_last_error};
 use crate::formats::to_ctt_format;
-use crate::image::{Image, take_image};
+use crate::image::Image;
 use crate::output::PipelineOutput;
 use crate::types::{
     AlphaMode, ColorSpace, Format, MipmapFilter, OptionalAlphaMode, OptionalColorSpace,
@@ -801,35 +801,26 @@ pub extern "C" fn ctt_convert_settings_default() -> ConvertSettings {
 
 /// Run the conversion pipeline.
 ///
-/// **Consumes** `image` on both success and failure — the handle must not be
-/// destroyed by the caller after this call. On success, writes a freshly
-/// allocated `ctt_pipeline_output_t` handle into `*out` (caller frees with
-/// `ctt_pipeline_output_destroy`).
+/// Does not consume `image`. On success, writes a new `ctt_pipeline_output_t`
+/// handle into `*out` (caller frees with `ctt_pipeline_output_destroy`).
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn ctt_convert(
-    image: *mut Image,
+    image: *const Image,
     settings: *const ConvertSettings,
     out: *mut *mut PipelineOutput,
 ) -> Status {
     catch_panic(Status::Internal, || {
+        let Some(image) = (unsafe { image.as_ref() }) else {
+            set_last_error("ctt_convert: image is null");
+            return Status::NullPointer;
+        };
         if out.is_null() {
-            if !image.is_null() {
-                drop(unsafe { Box::from_raw(image) });
-            }
             set_last_error("ctt_convert: out is null");
             return Status::NullPointer;
         }
         let Some(settings) = (unsafe { settings.as_ref() }) else {
-            if !image.is_null() {
-                drop(unsafe { Box::from_raw(image) });
-            }
             set_last_error("ctt_convert: settings is null");
             return Status::NullPointer;
-        };
-
-        let image = match unsafe { take_image(image) } {
-            Ok(i) => i,
-            Err(s) => return s,
         };
 
         let format = match settings.format.into_inner() {
@@ -865,7 +856,7 @@ pub unsafe extern "C" fn ctt_convert(
             mipmap_filter: settings.mipmap_filter.into(),
         };
 
-        let converted = match crate::threading::install(|| ctt::convert(image, inner)) {
+        let converted = match crate::threading::install(|| ctt::convert(image.0.to_ref(), inner)) {
             Ok(converted) => converted,
             Err(status) => return status,
         };

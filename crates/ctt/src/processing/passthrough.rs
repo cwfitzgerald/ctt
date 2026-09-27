@@ -5,14 +5,14 @@
 
 use crate::convert::Container;
 use crate::error::{Error, Result};
-use crate::surface::Image;
+use crate::surface::{Image, ImageRef};
 
 use super::PipelineOutput;
 
 /// Run the passthrough path for a compressed input whose format already
 /// matches the target.
 pub fn run(
-    image: Image,
+    image: ImageRef<'_>,
     target_format: ktx2::Format,
     container: Container,
 ) -> Result<PipelineOutput> {
@@ -24,11 +24,20 @@ pub fn run(
         )));
     }
 
-    emit(image, container)
+    emit_ref(image, container)
 }
 
 /// Encode an image into the requested container, or return it raw.
 pub fn emit(image: Image, container: Container) -> Result<PipelineOutput> {
+    match container {
+        Container::Raw => Ok(PipelineOutput::Raw(image)),
+        _ => emit_ref(image.to_ref(), container),
+    }
+}
+
+/// Encode a borrowed image into the requested container, or return an owned
+/// copy for [`Container::Raw`].
+fn emit_ref(image: ImageRef<'_>, container: Container) -> Result<PipelineOutput> {
     match container {
         Container::Dds => {
             profiling::scope!("encode_dds");
@@ -40,6 +49,6 @@ pub fn emit(image: Image, container: Container) -> Result<PipelineOutput> {
             let bytes = crate::output::ktx2::encode_ktx2_image(&image, sc)?;
             Ok(PipelineOutput::Encoded(bytes))
         }
-        Container::Raw => Ok(PipelineOutput::Raw(image)),
+        Container::Raw => Ok(PipelineOutput::Raw(image.to_owned())),
     }
 }

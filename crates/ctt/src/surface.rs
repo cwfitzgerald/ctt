@@ -64,7 +64,7 @@ impl FormatDesc {
 ///
 /// 2D surfaces use `depth == 1`; 3D (volume) surfaces use `depth > 1` with all
 /// Z slices packed contiguously in `data`. The [`FormatDesc`] of the owning
-/// [`Image`] tells how to read `data`.
+/// [`Image`] tells how to read `data`. [`SurfaceRef`] is the borrowed form.
 #[derive(Debug, Clone)]
 pub struct Surface {
     /// Raw bytes: uncompressed pixels or compressed blocks, laid out row by
@@ -89,6 +89,37 @@ pub struct Surface {
     pub slice_stride: u32,
 }
 
+/// Borrowed form of [`Surface`].
+#[derive(Debug, Clone, Copy)]
+pub struct SurfaceRef<'a> {
+    /// Raw bytes. See [`Surface::data`].
+    pub data: &'a [u8],
+    /// Width in pixels.
+    pub width: u32,
+    /// Height in pixels.
+    pub height: u32,
+    /// Number of Z slices. See [`Surface::depth`].
+    pub depth: u32,
+    /// Bytes between adjacent rows. See [`Surface::stride`].
+    pub stride: u32,
+    /// Bytes between adjacent Z slices. See [`Surface::slice_stride`].
+    pub slice_stride: u32,
+}
+
+impl Surface {
+    /// Borrow this surface.
+    pub fn as_ref(&self) -> SurfaceRef<'_> {
+        SurfaceRef {
+            data: &self.data,
+            width: self.width,
+            height: self.height,
+            depth: self.depth,
+            stride: self.stride,
+            slice_stride: self.slice_stride,
+        }
+    }
+}
+
 /// Texture topology — distinguishes 2D, cubemap, and 3D textures.
 ///
 /// Array-ness is implicit in `Image::surfaces.len()`:
@@ -111,7 +142,8 @@ pub enum TextureKind {
 /// Multi-layer, multi-mip image.
 ///
 /// `surfaces[i][j]` is slice `i` (layer or face), mip level `j`. The meaning
-/// of the slice axis depends on `kind`; see [`TextureKind`].
+/// of the slice axis depends on `kind`; see [`TextureKind`]. [`ImageRef`] is
+/// the borrowed form.
 #[derive(Debug, Clone)]
 pub struct Image {
     /// Surfaces by slice, then mip level.
@@ -122,8 +154,47 @@ pub struct Image {
     pub desc: FormatDesc,
 }
 
+/// Borrowed form of [`Image`].
+#[derive(Debug, Clone)]
+pub struct ImageRef<'a> {
+    /// Surfaces by slice, then mip level.
+    pub surfaces: Vec<Vec<SurfaceRef<'a>>>,
+    /// Texture topology. Sets the meaning of the slice axis.
+    pub kind: TextureKind,
+    /// How to read the bytes of every surface.
+    pub desc: FormatDesc,
+}
+
 impl Image {
-    /// Verify that this `Image` satisfies the invariants implied by its `kind`,
+    /// Borrow this image. Allocates the outer `Vec`s of surface references.
+    pub fn to_ref(&self) -> ImageRef<'_> {
+        ImageRef {
+            surfaces: self
+                .surfaces
+                .iter()
+                .map(|layer| layer.iter().map(Surface::as_ref).collect())
+                .collect(),
+            kind: self.kind,
+            desc: self.desc,
+        }
+    }
+}
+
+impl ImageRef<'_> {
+    /// Copy the borrowed bytes into an owned [`Image`].
+    pub fn to_owned(&self) -> Image {
+        Image {
+            surfaces: self
+                .surfaces
+                .iter()
+                .map(|layer| layer.iter().map(SurfaceRef::to_owned).collect())
+                .collect(),
+            kind: self.kind,
+            desc: self.desc,
+        }
+    }
+
+    /// Verify that this image satisfies the invariants implied by its `kind`,
     /// that `desc` is valid, and that all layers have the same mip count and
     /// sizes.
     pub fn validate(&self) -> Result<()> {
@@ -236,12 +307,25 @@ impl Image {
     }
 }
 
-impl Surface {
+impl<'a> SurfaceRef<'a> {
+    /// Copy the borrowed bytes into an owned [`Surface`].
+    // Takes `&self` so that method lookup picks it over `ToOwned::to_owned`.
+    pub fn to_owned(&self) -> Surface {
+        Surface {
+            data: self.data.to_vec(),
+            width: self.width,
+            height: self.height,
+            depth: self.depth,
+            stride: self.stride,
+            slice_stride: self.slice_stride,
+        }
+    }
+
     /// Check that the size is nonzero and that `data` covers the rows and
     /// slices at the declared strides. Returns the error message on failure.
     ///
     /// Treats `depth <= 1` as a single slice.
-    pub(crate) fn validate_layout(&self, format: ktx2::Format) -> std::result::Result<(), String> {
+    pub(crate) fn validate_layout(self, format: ktx2::Format) -> std::result::Result<(), String> {
         if self.width == 0 || self.height == 0 {
             return Err(format!(
                 "width and height must be >= 1, got {}x{}",
@@ -301,7 +385,7 @@ impl Surface {
 
     /// Number of rows or rows-of-blocks in this surface — `height` for
     /// uncompressed formats, `ceil(height / block_h)` for compressed.
-    fn rows_in_image(&self, format: ktx2::Format) -> u32 {
+    fn rows_in_image(self, format: ktx2::Format) -> u32 {
         if let Some((_, bh)) = format.block_size() {
             self.height.div_ceil(bh as u32)
         } else {
@@ -312,7 +396,7 @@ impl Surface {
     /// Bytes for one tightly-packed row (or row-of-blocks for compressed
     /// formats). Returns `None` if the format's pixel/block size is unknown or
     /// the byte count overflows `u32`.
-    pub fn tight_row_bytes(&self, format: ktx2::Format) -> Option<u32> {
+    pub fn tight_row_bytes(self, format: ktx2::Format) -> Option<u32> {
         if let Some((bw, _)) = format.block_size() {
             let bpb = format.bytes_per_block()? as u32;
             self.width.div_ceil(bw as u32).checked_mul(bpb)
@@ -325,7 +409,7 @@ impl Surface {
     /// Bytes for one tightly-packed Z slice. For 2D surfaces this is the
     /// whole image; for 3D it's one entry along the depth axis. Returns `None`
     /// if the format size is unknown or the byte count overflows `u32`.
-    pub fn tight_slice_bytes(&self, format: ktx2::Format) -> Option<u32> {
+    pub fn tight_slice_bytes(self, format: ktx2::Format) -> Option<u32> {
         self.tight_row_bytes(format)?
             .checked_mul(self.rows_in_image(format))
     }
@@ -333,7 +417,7 @@ impl Surface {
     /// True when `stride` and (for `depth > 1`) `slice_stride` already match
     /// the tightly-packed minimums and `data` is exactly the right length —
     /// i.e., `data` can be reused without repacking.
-    pub fn is_tightly_packed(&self, format: ktx2::Format) -> bool {
+    pub fn is_tightly_packed(self, format: ktx2::Format) -> bool {
         let Some(tight_row) = self.tight_row_bytes(format) else {
             return false;
         };
@@ -356,10 +440,10 @@ impl Surface {
     /// Container output formats (KTX2, DDS) require tight packing; this is
     /// the bridge for surfaces that carry padded strides through the
     /// passthrough fast path. Panics if the format's pixel/block size is
-    /// unknown — `Image::validate` is the place that should reject those.
-    pub fn tight_data(&self, format: ktx2::Format) -> Cow<'_, [u8]> {
+    /// unknown — `ImageRef::validate` is the place that should reject those.
+    pub fn tight_data(self, format: ktx2::Format) -> Cow<'a, [u8]> {
         if self.is_tightly_packed(format) {
-            return Cow::Borrowed(&self.data);
+            return Cow::Borrowed(self.data);
         }
         let tight_row = self
             .tight_row_bytes(format)
@@ -390,7 +474,7 @@ impl Surface {
     ///
     /// Panics if the format is compressed or has unknown bytes-per-pixel, or
     /// if the surface is empty (width or height of 0).
-    pub fn tile_to_blocks(&self, format: ktx2::Format, block_w: u32, block_h: u32) -> Vec<u8> {
+    pub fn tile_to_blocks(self, format: ktx2::Format, block_w: u32, block_h: u32) -> Vec<u8> {
         let bpp = format
             .bytes_per_pixel()
             .expect("tile_to_blocks requires an uncompressed format with known bpp")
@@ -459,7 +543,7 @@ mod tests {
             slice_stride: 0,
         };
 
-        let blocks = surface.tile_to_blocks(RGBA8.format, 4, 4);
+        let blocks = surface.as_ref().tile_to_blocks(RGBA8.format, 4, 4);
         // 1 block of 4x4 pixels, 4 bytes each = 64 bytes
         assert_eq!(blocks.len(), 64);
         // First pixel should be (1,2,3,4)
@@ -496,7 +580,7 @@ mod tests {
             slice_stride: 0,
         };
 
-        let blocks = surface.tile_to_blocks(RGBA8.format, 4, 4);
+        let blocks = surface.as_ref().tile_to_blocks(RGBA8.format, 4, 4);
         assert_eq!(blocks.len(), 64);
 
         // Pixel (3, 0) should replicate pixel (2, 0) = (2, 0, 0, 255).
@@ -529,7 +613,7 @@ mod tests {
             slice_stride: 0,
         };
 
-        let blocks = surface.tile_to_blocks(RGBA8.format, 4, 4);
+        let blocks = surface.as_ref().tile_to_blocks(RGBA8.format, 4, 4);
         assert_eq!(blocks.len(), 64);
         // The padding byte 0xCC must never appear in the tiled output —
         // every pixel comes from the real width-2 source data, edge-replicated
@@ -558,6 +642,14 @@ mod tests {
         }
     }
 
+    /// The result borrows the surface bytes, not the temporary `SurfaceRef`.
+    #[test]
+    fn tight_data_outlives_surface_ref() {
+        let s = s2d(2, 2);
+        let data = s.as_ref().tight_data(RGBA8.format);
+        assert_eq!(data.len(), 16);
+    }
+
     #[test]
     fn validate_2d_ok() {
         let img = Image {
@@ -565,7 +657,7 @@ mod tests {
             kind: TextureKind::Texture2D,
             desc: RGBA8,
         };
-        img.validate().unwrap();
+        img.to_ref().validate().unwrap();
     }
 
     #[test]
@@ -579,7 +671,7 @@ mod tests {
             kind: TextureKind::Texture2D,
             desc: RGBA8,
         };
-        let err = img.validate().unwrap_err();
+        let err = img.to_ref().validate().unwrap_err();
         assert!(
             err.to_string().contains("width and height must be >= 1"),
             "got: {err}",
@@ -596,7 +688,7 @@ mod tests {
             kind: TextureKind::Texture2D,
             desc: RGBA8,
         };
-        let err = img.validate().unwrap_err();
+        let err = img.to_ref().validate().unwrap_err();
         assert!(
             err.to_string().contains("width and height must be >= 1"),
             "got: {err}",
@@ -610,7 +702,7 @@ mod tests {
             kind: TextureKind::Cubemap,
             desc: RGBA8,
         };
-        let err = img.validate().unwrap_err();
+        let err = img.to_ref().validate().unwrap_err();
         assert!(err.to_string().contains("multiple of 6"), "got: {err}");
     }
 
@@ -621,7 +713,7 @@ mod tests {
             kind: TextureKind::Cubemap,
             desc: RGBA8,
         };
-        img.validate().unwrap();
+        img.to_ref().validate().unwrap();
     }
 
     #[test]
@@ -634,7 +726,7 @@ mod tests {
                 kind,
                 desc: RGBA8,
             };
-            let err = img.validate().unwrap_err();
+            let err = img.to_ref().validate().unwrap_err();
             assert!(
                 err.to_string().contains("differs from layer 0"),
                 "got: {err}"
@@ -649,7 +741,7 @@ mod tests {
             kind: TextureKind::Texture2D,
             desc: RGBA8,
         };
-        let err = img.validate().unwrap_err();
+        let err = img.to_ref().validate().unwrap_err();
         assert!(err.to_string().contains("layer 1 mip 1"), "got: {err}");
     }
 
@@ -662,7 +754,7 @@ mod tests {
             kind: TextureKind::Texture2D,
             desc: RGBA8,
         };
-        let err = img.validate().unwrap_err();
+        let err = img.to_ref().validate().unwrap_err();
         assert!(err.to_string().contains("depth must be 1"), "got: {err}");
     }
 
@@ -683,7 +775,7 @@ mod tests {
             kind: TextureKind::Texture3D,
             desc: RGBA8,
         };
-        let err = img.validate().unwrap_err();
+        let err = img.to_ref().validate().unwrap_err();
         assert!(err.to_string().contains("overflows"), "got: {err}");
     }
 
@@ -706,7 +798,7 @@ mod tests {
             },
         };
 
-        let err = img.validate().unwrap_err();
+        let err = img.to_ref().validate().unwrap_err();
         assert!(err.to_string().contains("padded row layout"), "got: {err}");
     }
 
@@ -729,7 +821,7 @@ mod tests {
             },
         };
 
-        let result = std::panic::catch_unwind(|| img.validate());
+        let result = std::panic::catch_unwind(|| img.to_ref().validate());
         assert!(result.is_ok(), "extreme layout must not panic");
         assert!(result.unwrap().is_err(), "extreme layout must be rejected");
     }
@@ -741,7 +833,7 @@ mod tests {
             kind: TextureKind::Texture3D,
             desc: RGBA8,
         };
-        let err = img.validate().unwrap_err();
+        let err = img.to_ref().validate().unwrap_err();
         assert!(
             err.to_string().contains("exactly one surface"),
             "got: {err}",
@@ -764,7 +856,7 @@ mod tests {
             kind: TextureKind::Texture3D,
             desc: RGBA8,
         };
-        let err = img.validate().unwrap_err();
+        let err = img.to_ref().validate().unwrap_err();
         assert!(
             err.to_string().contains("does not match expected"),
             "got: {err}"
@@ -779,7 +871,7 @@ mod tests {
             desc: RGBA8,
         };
 
-        let result = std::panic::catch_unwind(|| img.validate());
+        let result = std::panic::catch_unwind(|| img.to_ref().validate());
         assert!(result.is_ok(), "large mip count must not panic");
         assert!(result.unwrap().is_ok());
     }
@@ -800,7 +892,7 @@ mod tests {
                     alpha: AlphaMode::Straight,
                 },
             };
-            let err = img.validate().unwrap_err();
+            let err = img.to_ref().validate().unwrap_err();
             assert!(matches!(err, Error::InvalidImage(_)), "got: {err:?}");
         }
     }
@@ -819,7 +911,7 @@ mod tests {
                 alpha: AlphaMode::Straight,
             },
         };
-        img.validate().unwrap();
+        img.to_ref().validate().unwrap();
     }
 
     #[test]
@@ -832,7 +924,7 @@ mod tests {
             kind: TextureKind::Texture2D,
             desc: RGBA8,
         };
-        let err = img.validate().unwrap_err();
+        let err = img.to_ref().validate().unwrap_err();
         assert!(err.to_string().contains("mip"), "got: {err}");
     }
 }

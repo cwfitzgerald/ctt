@@ -8,7 +8,7 @@ use crate::processing::{
     self, Buffer, PipelineOutput, Swizzle, Variant, encode, load, map_nested, mipmap, par_map,
     passthrough, store, swizzle,
 };
-use crate::surface::{ColorSpace, FormatDesc, Image, Surface};
+use crate::surface::{ColorSpace, FormatDesc, Image, ImageRef, SurfaceRef};
 use crate::vk_format::FormatExt;
 
 /// Output container format.
@@ -98,9 +98,9 @@ impl Default for Container {
 
 /// Convert an image.
 ///
-/// The input [`Image`] should already be fully assembled. Use
+/// The input image should already be fully assembled. Use
 /// [`split_cubemap`](crate::split_cubemap) to prepare cubemap inputs beforehand.
-pub fn convert(image: Image, mut settings: ConvertSettings) -> Result<PipelineOutput> {
+pub fn convert(image: ImageRef<'_>, mut settings: ConvertSettings) -> Result<PipelineOutput> {
     profiling::scope!("convert");
     image.validate()?;
 
@@ -297,7 +297,7 @@ fn resolve_target(
 }
 
 fn convert_f32(
-    image: Image,
+    image: ImageRef<'_>,
     settings: ConvertSettings,
     target_fmt: ktx2::Format,
     encoder_step: Option<encode::EncoderStep>,
@@ -335,9 +335,9 @@ fn convert_f32(
                 layer
                     .into_iter()
                     .take(target_count)
-                    .collect::<Vec<Surface>>(),
+                    .collect::<Vec<SurfaceRef<'_>>>(),
                 |surface| {
-                    let mut buf: Buffer<f32> = load::load_f32(&surface, load_desc)?;
+                    let mut buf: Buffer<f32> = load::load_f32(surface, load_desc)?;
                     if let Some(sw) = &settings.swizzle {
                         swizzle::apply_f32(&mut buf, sw);
                     }
@@ -352,7 +352,7 @@ fn convert_f32(
         // paths) so an input mip chain isn't silently dropped.
         map_nested(image.surfaces, |base| {
             profiling::scope!("convert_f32_surface");
-            let mut buf: Buffer<f32> = load::load_f32(&base, load_desc)?;
+            let mut buf: Buffer<f32> = load::load_f32(base, load_desc)?;
             if let Some(sw) = &settings.swizzle {
                 swizzle::apply_f32(&mut buf, sw);
             }
@@ -367,7 +367,7 @@ fn convert_f32(
     };
 
     let final_image = match encoder_step {
-        Some(step) => encode::encode_all(processed, &step)?,
+        Some(step) => encode::encode_all(processed.to_ref(), &step)?,
         None => processed,
     };
 
@@ -375,7 +375,7 @@ fn convert_f32(
 }
 
 fn convert_f64(
-    image: Image,
+    image: ImageRef<'_>,
     settings: ConvertSettings,
     target_fmt: ktx2::Format,
     encoder_step: Option<encode::EncoderStep>,
@@ -408,7 +408,7 @@ fn convert_f64(
 
     let out_layers = map_nested(image.surfaces, |base| {
         profiling::scope!("convert_f64_surface");
-        let mut buf = load::load_f64(&base, load_desc)?;
+        let mut buf = load::load_f64(base, load_desc)?;
         if let Some(sw) = &settings.swizzle {
             swizzle::apply_f64(&mut buf, sw);
         }
@@ -422,7 +422,7 @@ fn convert_f64(
     };
 
     let final_image = match encoder_step {
-        Some(step) => encode::encode_all(processed, &step)?,
+        Some(step) => encode::encode_all(processed.to_ref(), &step)?,
         None => processed,
     };
 
@@ -430,7 +430,7 @@ fn convert_f64(
 }
 
 fn convert_u32(
-    image: Image,
+    image: ImageRef<'_>,
     settings: ConvertSettings,
     target_fmt: ktx2::Format,
     encoder_step: Option<encode::EncoderStep>,
@@ -440,7 +440,7 @@ fn convert_u32(
 
     let out_layers = map_nested(image.surfaces, |base| {
         profiling::scope!("convert_u32_surface");
-        let mut buf = load::load_u32(&base, input_desc)?;
+        let mut buf = load::load_u32(base, input_desc)?;
         if let Some(sw) = &settings.swizzle {
             swizzle::apply_u32(&mut buf, sw);
         }
@@ -467,7 +467,7 @@ fn convert_u32(
 }
 
 fn convert_u64(
-    image: Image,
+    image: ImageRef<'_>,
     settings: ConvertSettings,
     target_fmt: ktx2::Format,
     encoder_step: Option<encode::EncoderStep>,
@@ -477,7 +477,7 @@ fn convert_u64(
 
     let out_layers = map_nested(image.surfaces, |base| {
         profiling::scope!("convert_u64_surface");
-        let mut buf = load::load_u64(&base, input_desc)?;
+        let mut buf = load::load_u64(base, input_desc)?;
         if let Some(sw) = &settings.swizzle {
             swizzle::apply_u64(&mut buf, sw);
         }
@@ -567,7 +567,7 @@ mod tests {
             AlphaMode::Opaque,
         );
         let out = convert(
-            image,
+            image.to_ref(),
             ConvertSettings {
                 container: Container::Raw,
                 ..Default::default()
@@ -598,7 +598,7 @@ mod tests {
             AlphaMode::Opaque,
         );
         let out = convert(
-            image,
+            image.to_ref(),
             ConvertSettings {
                 format: Some(TargetFormat::Uncompressed(
                     ktx2::Format::A2B10G10R10_UNORM_PACK32,
@@ -635,7 +635,7 @@ mod tests {
             AlphaMode::Opaque,
         );
         let out = convert(
-            image,
+            image.to_ref(),
             ConvertSettings {
                 format: Some(TargetFormat::Uncompressed(
                     ktx2::Format::E5B9G9R9_UFLOAT_PACK32,
@@ -667,7 +667,7 @@ mod tests {
             AlphaMode::Opaque,
         );
         let out = convert(
-            image,
+            image.to_ref(),
             ConvertSettings {
                 format: Some(TargetFormat::Uncompressed(
                     ktx2::Format::A2B10G10R10_UINT_PACK32,
@@ -703,7 +703,7 @@ mod tests {
             AlphaMode::Opaque,
         );
         let out = convert(
-            image,
+            image.to_ref(),
             ConvertSettings {
                 format: Some(TargetFormat::Uncompressed(ktx2::Format::R8_UNORM)),
                 container: Container::Raw,
@@ -732,7 +732,7 @@ mod tests {
             AlphaMode::Opaque,
         );
         let out = convert(
-            image,
+            image.to_ref(),
             ConvertSettings {
                 format: Some(TargetFormat::Uncompressed(ktx2::Format::R8G8B8A8_UNORM)),
                 container: Container::Raw,
@@ -776,7 +776,7 @@ mod tests {
         // R8_UNORM (channel drop) so this routes through the f32 pipeline
         // rather than the format-identity passthrough fast path.
         let out = convert(
-            three_mip_rgba8(),
+            three_mip_rgba8().to_ref(),
             ConvertSettings {
                 format: Some(TargetFormat::Uncompressed(ktx2::Format::R8_UNORM)),
                 container: Container::Raw,
@@ -801,7 +801,7 @@ mod tests {
         // The supplied 8×8, 4×4, and 2×2 levels are retained; only the
         // missing 1×1 tail is generated from the final existing level.
         let out = convert(
-            three_mip_rgba8(),
+            three_mip_rgba8().to_ref(),
             ConvertSettings {
                 format: Some(TargetFormat::Uncompressed(ktx2::Format::R8_UNORM)),
                 container: Container::Raw,
@@ -829,7 +829,7 @@ mod tests {
     #[test]
     fn convert_f32_mipmap_count_truncates_existing_chain() {
         let out = convert(
-            three_mip_rgba8(),
+            three_mip_rgba8().to_ref(),
             ConvertSettings {
                 format: Some(TargetFormat::Uncompressed(ktx2::Format::R8_UNORM)),
                 container: Container::Raw,
@@ -852,7 +852,7 @@ mod tests {
     #[test]
     fn convert_f32_mipmap_count_zero_errors() {
         let err = convert(
-            three_mip_rgba8(),
+            three_mip_rgba8().to_ref(),
             ConvertSettings {
                 format: Some(TargetFormat::Uncompressed(ktx2::Format::R8_UNORM)),
                 container: Container::Raw,
@@ -890,7 +890,7 @@ mod tests {
     #[test]
     fn convert_compressed_input_swizzle_errors() {
         let err = convert(
-            bc7_1block_image(),
+            bc7_1block_image().to_ref(),
             ConvertSettings {
                 container: Container::Raw,
                 swizzle: Some(Swizzle([
@@ -912,7 +912,7 @@ mod tests {
     #[test]
     fn convert_compressed_input_mipmap_errors() {
         let err = convert(
-            bc7_1block_image(),
+            bc7_1block_image().to_ref(),
             ConvertSettings {
                 container: Container::Raw,
                 mipmap: true,
@@ -929,7 +929,7 @@ mod tests {
     #[test]
     fn convert_compressed_input_color_space_change_errors() {
         let err = convert(
-            bc7_1block_image(),
+            bc7_1block_image().to_ref(),
             ConvertSettings {
                 container: Container::Raw,
                 output_color_space: Some(ColorSpace::Srgb),
@@ -946,7 +946,7 @@ mod tests {
     #[test]
     fn convert_compressed_input_alpha_change_errors() {
         let err = convert(
-            bc7_1block_image(),
+            bc7_1block_image().to_ref(),
             ConvertSettings {
                 container: Container::Raw,
                 output_alpha: Some(AlphaMode::Premultiplied),
@@ -971,7 +971,7 @@ mod tests {
             AlphaMode::Opaque,
         );
         let err = convert(
-            image,
+            image.to_ref(),
             ConvertSettings {
                 format: Some(TargetFormat::Uncompressed(ktx2::Format::R8G8B8A8_UINT)),
                 container: Container::Raw,
@@ -997,7 +997,7 @@ mod tests {
             AlphaMode::Opaque,
         );
         let out = convert(
-            image,
+            image.to_ref(),
             ConvertSettings {
                 format: Some(TargetFormat::Compressed {
                     format: ktx2::Format::BC7_UNORM_BLOCK,
@@ -1057,7 +1057,7 @@ mod tests {
                     AlphaMode::Opaque,
                 );
                 let out = convert(
-                    image,
+                    image.to_ref(),
                     ConvertSettings {
                         format: Some(TargetFormat::Compressed {
                             format,
@@ -1099,7 +1099,7 @@ mod tests {
                 AlphaMode::Opaque,
             );
             let err = convert(
-                image,
+                image.to_ref(),
                 ConvertSettings {
                     format: Some(TargetFormat::Compressed {
                         format,
@@ -1129,7 +1129,7 @@ mod tests {
             AlphaMode::Opaque,
         );
         let err = convert(
-            image,
+            image.to_ref(),
             ConvertSettings {
                 format: Some(TargetFormat::Uncompressed(ktx2::Format::R8G8B8A8_UNORM)),
                 container: Container::Raw,
@@ -1156,7 +1156,7 @@ mod tests {
             AlphaMode::Opaque,
         );
         let out = convert(
-            image,
+            image.to_ref(),
             ConvertSettings {
                 container: Container::Raw,
                 output_color_space: Some(ColorSpace::Linear),
@@ -1192,7 +1192,7 @@ mod tests {
             },
         };
         let out = convert(
-            image,
+            image.to_ref(),
             ConvertSettings {
                 container: Container::Raw,
                 ..Default::default()
@@ -1249,7 +1249,7 @@ mod tests {
     fn convert_padded_stride_swizzle_to_raw_is_tight() {
         let image = padded_rgba8_4x2();
         let out = convert(
-            image,
+            image.to_ref(),
             ConvertSettings {
                 container: Container::Raw,
                 swizzle: Some(Swizzle([
@@ -1293,7 +1293,7 @@ mod tests {
         // 4×2 isn't 4×4-aligned, but tile_to_blocks edge-replicates so this
         // still produces 1×1 blocks (rounded up to 4×4).
         let out = convert(
-            image,
+            image.to_ref(),
             ConvertSettings {
                 format: Some(TargetFormat::Compressed {
                     format: ktx2::Format::BC7_UNORM_BLOCK,
@@ -1321,7 +1321,7 @@ mod tests {
     fn convert_padded_stride_uncompressed_passthrough_is_tight() {
         let image = padded_rgba8_4x2();
         let out = convert(
-            image,
+            image.to_ref(),
             ConvertSettings {
                 container: Container::ktx2(),
                 ..Default::default()
@@ -1381,7 +1381,7 @@ mod tests {
         };
 
         let out = convert(
-            image,
+            image.to_ref(),
             ConvertSettings {
                 container: Container::ktx2(),
                 ..Default::default()
@@ -1460,7 +1460,7 @@ mod tests {
         };
 
         let out = convert(
-            image,
+            image.to_ref(),
             ConvertSettings {
                 container: Container::ktx2(),
                 ..Default::default()
@@ -1507,7 +1507,7 @@ mod tests {
             AlphaMode::Opaque,
         );
         let out = convert(
-            image,
+            image.to_ref(),
             ConvertSettings {
                 format: Some(TargetFormat::Uncompressed(ktx2::Format::R32G32B32A32_UINT)),
                 container: Container::Raw,
@@ -1570,7 +1570,7 @@ mod tests {
                 AlphaMode::Straight,
             );
             let output = convert(
-                image,
+                image.to_ref(),
                 ConvertSettings {
                     format: Some(TargetFormat::Uncompressed(ktx2::Format::R32G32B32_SFLOAT)),
                     output_alpha: Some(target_alpha),
@@ -1624,7 +1624,7 @@ mod bc6h_alpha_tests {
     /// Encode `image` to BC6H (Raw container) and decode the first texel's RGB.
     fn encode_bc6h_first_texel(image: Image, output_alpha: Option<AlphaMode>) -> [f32; 3] {
         let out = convert(
-            image,
+            image.to_ref(),
             ConvertSettings {
                 format: Some(TargetFormat::Compressed {
                     format: ktx2::Format::BC6H_UFLOAT_BLOCK,

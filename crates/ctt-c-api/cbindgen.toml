@@ -42,7 +42,8 @@ header = """\
  *     cfg.mipmap = true;
  *
  *     ctt_pipeline_output *out = NULL;
- *     ctt_status st = ctt_convert(img, &cfg, &out);   // consumes `img`
+ *     ctt_status st = ctt_convert(img, &cfg, &out);
+ *     ctt_image_destroy(img);
  *     // st == CTT_STATUS_OK: `out` carries KTX2 bytes (the default container).
  *     ctt_pipeline_output_destroy(out);
  *
@@ -55,7 +56,7 @@ header = """\
  * (`ctt_surface`, `ctt_image`, `ctt_pipeline_output`)
  * has a matching `*_destroy` function; passing `NULL` is always safe.
  *
- * APIs that consume an input (e.g. `ctt_convert`, `ctt_image_push_mip`) take
+ * APIs that consume an input (e.g. `ctt_image_push_mip`) take
  * ownership of the passed-in handle on both success and failure: the caller
  * must not call `*_destroy` on a consumed handle. Each consuming function's
  * doc comment calls this out.

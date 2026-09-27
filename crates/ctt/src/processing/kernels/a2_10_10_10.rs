@@ -38,7 +38,7 @@ use fearless_simd::{Level, Simd, dispatch, prelude::*};
 
 use crate::error::Result;
 use crate::processing::Buffer;
-use crate::surface::Surface;
+use crate::surface::SurfaceRef;
 
 use super::driver;
 
@@ -56,7 +56,7 @@ pub const A2R_R_SHIFT: u32 = 20;
 #[doc(hidden)]
 pub fn load_a2_f32_at<const R_SHIFT: u32, const SNORM: bool>(
     level: Level,
-    surface: &Surface,
+    surface: SurfaceRef<'_>,
 ) -> Result<Buffer<f32>> {
     dispatch!(level, simd => driver::load_packed32(
         simd,
@@ -147,7 +147,7 @@ fn decode_snorm2<S: Simd>(field: S::u32s) -> S::f32s {
 #[doc(hidden)]
 pub fn load_a2_u32_at<const R_SHIFT: u32, const SINT: bool>(
     level: Level,
-    surface: &Surface,
+    surface: SurfaceRef<'_>,
 ) -> Result<Buffer<u32>> {
     dispatch!(level, simd => driver::load_packed32(
         simd,
@@ -231,48 +231,48 @@ fn sext_bits<S: Simd>(field: S::u32s, shift: u32) -> S::i32s {
 
 // ---- UNORM (f32 pipeline) ----
 
-pub fn load_a2b10g10r10_unorm_f32(surface: &Surface) -> Result<Buffer<f32>> {
+pub fn load_a2b10g10r10_unorm_f32(surface: SurfaceRef<'_>) -> Result<Buffer<f32>> {
     profiling::scope!("load_a2b10g10r10_unorm_f32");
     load_a2_f32_at::<A2B_R_SHIFT, false>(Level::new(), surface)
 }
 
-pub fn load_a2r10g10b10_unorm_f32(surface: &Surface) -> Result<Buffer<f32>> {
+pub fn load_a2r10g10b10_unorm_f32(surface: SurfaceRef<'_>) -> Result<Buffer<f32>> {
     profiling::scope!("load_a2r10g10b10_unorm_f32");
     load_a2_f32_at::<A2R_R_SHIFT, false>(Level::new(), surface)
 }
 
 // ---- SNORM (f32 pipeline) ----
 
-pub fn load_a2b10g10r10_snorm_f32(surface: &Surface) -> Result<Buffer<f32>> {
+pub fn load_a2b10g10r10_snorm_f32(surface: SurfaceRef<'_>) -> Result<Buffer<f32>> {
     profiling::scope!("load_a2b10g10r10_snorm_f32");
     load_a2_f32_at::<A2B_R_SHIFT, true>(Level::new(), surface)
 }
 
-pub fn load_a2r10g10b10_snorm_f32(surface: &Surface) -> Result<Buffer<f32>> {
+pub fn load_a2r10g10b10_snorm_f32(surface: SurfaceRef<'_>) -> Result<Buffer<f32>> {
     profiling::scope!("load_a2r10g10b10_snorm_f32");
     load_a2_f32_at::<A2R_R_SHIFT, true>(Level::new(), surface)
 }
 
 // ---- UINT (u32 pipeline) ----
 
-pub fn load_a2b10g10r10_uint_u32(surface: &Surface) -> Result<Buffer<u32>> {
+pub fn load_a2b10g10r10_uint_u32(surface: SurfaceRef<'_>) -> Result<Buffer<u32>> {
     profiling::scope!("load_a2b10g10r10_uint_u32");
     load_a2_u32_at::<A2B_R_SHIFT, false>(Level::new(), surface)
 }
 
-pub fn load_a2r10g10b10_uint_u32(surface: &Surface) -> Result<Buffer<u32>> {
+pub fn load_a2r10g10b10_uint_u32(surface: SurfaceRef<'_>) -> Result<Buffer<u32>> {
     profiling::scope!("load_a2r10g10b10_uint_u32");
     load_a2_u32_at::<A2R_R_SHIFT, false>(Level::new(), surface)
 }
 
 // ---- SINT (u32 pipeline) ----
 
-pub fn load_a2b10g10r10_sint_u32(surface: &Surface) -> Result<Buffer<u32>> {
+pub fn load_a2b10g10r10_sint_u32(surface: SurfaceRef<'_>) -> Result<Buffer<u32>> {
     profiling::scope!("load_a2b10g10r10_sint_u32");
     load_a2_u32_at::<A2B_R_SHIFT, true>(Level::new(), surface)
 }
 
-pub fn load_a2r10g10b10_sint_u32(surface: &Surface) -> Result<Buffer<u32>> {
+pub fn load_a2r10g10b10_sint_u32(surface: SurfaceRef<'_>) -> Result<Buffer<u32>> {
     profiling::scope!("load_a2r10g10b10_sint_u32");
     load_a2_u32_at::<A2R_R_SHIFT, true>(Level::new(), surface)
 }
@@ -511,6 +511,7 @@ pub fn store_a2r10g10b10_sint_u32(buf: &Buffer<u32>) -> Vec<u8> {
 mod load_tests {
     use super::*;
     use crate::processing::kernels::constructible_levels;
+    use crate::surface::Surface;
 
     fn a2_surface(data: Vec<u8>, width: u32, height: u32, stride: u32) -> Surface {
         Surface {
@@ -715,7 +716,7 @@ mod load_tests {
             oracle_pixels(surface, oracle_unorm::<R_SHIFT>)
         };
         for (name, level) in constructible_levels() {
-            let got = load_a2_f32_at::<R_SHIFT, SNORM>(level, surface).unwrap();
+            let got = load_a2_f32_at::<R_SHIFT, SNORM>(level, surface.as_ref()).unwrap();
             assert_eq!(got.pixels.len(), want.len(), "{label} {name} count");
             for (i, (g, w)) in got.pixels.iter().zip(&want).enumerate() {
                 for c in 0..4 {
@@ -737,7 +738,7 @@ mod load_tests {
             oracle_pixels(surface, oracle_uint::<R_SHIFT>)
         };
         for (name, level) in constructible_levels() {
-            let got = load_a2_u32_at::<R_SHIFT, SINT>(level, surface).unwrap();
+            let got = load_a2_u32_at::<R_SHIFT, SINT>(level, surface.as_ref()).unwrap();
             assert_eq!(got.pixels, want, "{label} {name}");
         }
     }

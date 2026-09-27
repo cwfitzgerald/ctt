@@ -142,8 +142,11 @@ fn bench_a2b10g10r10_load(c: &mut Criterion) {
 
     common::bench_levels(&mut g, "", |b, level| {
         b.iter(|| {
-            ctt::bench_internals::load_a2_f32_at::<A2B_R_SHIFT, false>(level, black_box(&surface))
-                .unwrap()
+            ctt::bench_internals::load_a2_f32_at::<A2B_R_SHIFT, false>(
+                level,
+                black_box(surface.as_ref()),
+            )
+            .unwrap()
         });
     });
 
@@ -157,7 +160,9 @@ fn bench_b10g11r11_load(c: &mut Criterion) {
     g.throughput(Throughput::Elements(PIXEL_COUNT));
 
     common::bench_levels(&mut g, "", |b, level| {
-        b.iter(|| ctt::bench_internals::load_b10g11r11_f32_at(level, black_box(&surface)).unwrap());
+        b.iter(|| {
+            ctt::bench_internals::load_b10g11r11_f32_at(level, black_box(surface.as_ref())).unwrap()
+        });
     });
 
     g.finish();
@@ -170,7 +175,9 @@ fn bench_e5b9g9r9_load(c: &mut Criterion) {
     g.throughput(Throughput::Elements(PIXEL_COUNT));
 
     common::bench_levels(&mut g, "", |b, level| {
-        b.iter(|| ctt::bench_internals::load_e5b9g9r9_f32_at(level, black_box(&surface)).unwrap());
+        b.iter(|| {
+            ctt::bench_internals::load_e5b9g9r9_f32_at(level, black_box(surface.as_ref())).unwrap()
+        });
     });
 
     g.finish();
@@ -225,8 +232,11 @@ fn bench_a2b10g10r10_snorm_load(c: &mut Criterion) {
 
     common::bench_levels(&mut g, "", |b, level| {
         b.iter(|| {
-            ctt::bench_internals::load_a2_f32_at::<A2B_R_SHIFT, true>(level, black_box(&surface))
-                .unwrap()
+            ctt::bench_internals::load_a2_f32_at::<A2B_R_SHIFT, true>(
+                level,
+                black_box(surface.as_ref()),
+            )
+            .unwrap()
         });
     });
 
@@ -256,8 +266,11 @@ fn bench_a2b10g10r10_uint_load(c: &mut Criterion) {
 
     common::bench_levels(&mut g, "", |b, level| {
         b.iter(|| {
-            ctt::bench_internals::load_a2_u32_at::<A2B_R_SHIFT, false>(level, black_box(&surface))
-                .unwrap()
+            ctt::bench_internals::load_a2_u32_at::<A2B_R_SHIFT, false>(
+                level,
+                black_box(surface.as_ref()),
+            )
+            .unwrap()
         });
     });
 
@@ -287,8 +300,11 @@ fn bench_a2b10g10r10_sint_load(c: &mut Criterion) {
 
     common::bench_levels(&mut g, "", |b, level| {
         b.iter(|| {
-            ctt::bench_internals::load_a2_u32_at::<A2B_R_SHIFT, true>(level, black_box(&surface))
-                .unwrap()
+            ctt::bench_internals::load_a2_u32_at::<A2B_R_SHIFT, true>(
+                level,
+                black_box(surface.as_ref()),
+            )
+            .unwrap()
         });
     });
 

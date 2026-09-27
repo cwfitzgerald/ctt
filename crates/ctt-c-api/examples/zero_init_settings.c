@@ -39,12 +39,13 @@ static ctt_image *make_image(void) {
     return img;
 }
 
-/* Convert `img` (consumed) with `cfg`, returning the encoded bytes copied into
- * a freshly malloc'd buffer via `*out_buf` / `*out_len`. Returns 0 on success. */
+/* Convert `img` with `cfg` and destroy it. Copies the encoded bytes into a
+ * freshly malloc'd buffer via `*out_buf` / `*out_len`. Returns 0 on success. */
 static int convert_encoded(ctt_image *img, const ctt_convert_settings *cfg,
                            uint8_t **out_buf, size_t *out_len) {
     ctt_pipeline_output *out = NULL;
     ctt_status st = ctt_convert(img, cfg, &out);
+    ctt_image_destroy(img);
     if (st != CTT_STATUS_OK) {
         fprintf(stderr, "ctt_convert failed (%d): %s\n", st, ctt_last_error_message());
         return -1;

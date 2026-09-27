@@ -82,17 +82,17 @@ cargo add ctt --no-default-features --features encoder-bc7enc,encoder-intel,ispc
 
 ## Library usage
 
-The library API mirrors the CLI. Build a `Surface`, wrap it in an `Image` with a `FormatDesc` that tells how to read the bytes, and call `convert`:
+The library API mirrors the CLI. Borrow your pixel bytes in a `SurfaceRef`, wrap it in an `ImageRef` with a `FormatDesc` that tells how to read the bytes, and call `convert`. An owned `Image` (for example, from a decoder) gives an `ImageRef` with `Image::to_ref`.
 
 ```rust,no_run
 use ctt::{convert, ConvertSettings, Container, TargetFormat, Format};
-use ctt::{FormatDesc, Image, Surface, ColorSpace, AlphaMode, TextureKind};
+use ctt::{FormatDesc, ImageRef, SurfaceRef, ColorSpace, AlphaMode, TextureKind};
 use ctt::encoders::Encoder;
 
 fn main() -> Result<(), ctt::Error> {
     let pixel_bytes = vec![0u8; 512 * 512 * 4];
-    let surface = Surface {
-        data: pixel_bytes,
+    let surface = SurfaceRef {
+        data: &pixel_bytes,
         width: 512,
         height: 512,
         depth: 1,
@@ -100,7 +100,7 @@ fn main() -> Result<(), ctt::Error> {
         slice_stride: 0,
     };
 
-    let image = Image {
+    let image = ImageRef {
         surfaces: vec![vec![surface]],
         kind: TextureKind::Texture2D,
         desc: FormatDesc {

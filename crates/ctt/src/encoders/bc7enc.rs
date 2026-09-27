@@ -3,7 +3,7 @@ use std::borrow::Cow;
 use crate::encoders::Quality;
 use crate::encoders::backend::Encoder;
 use crate::error::{Error, Result};
-use crate::surface::{FormatDesc, Surface};
+use crate::surface::{FormatDesc, SurfaceRef};
 
 /// bc7enc-rdo encoder settings.
 ///
@@ -94,7 +94,7 @@ impl Encoder for Bc7encEncoder {
     }
 
     fn compress(
-        surface: &Surface,
+        surface: SurfaceRef<'_>,
         desc: FormatDesc,
         format: ktx2::Format,
         quality: Quality,
@@ -161,7 +161,7 @@ impl Encoder for Bc7encEncoder {
 mod tests {
     use super::*;
     use crate::alpha::AlphaMode;
-    use crate::surface::ColorSpace;
+    use crate::surface::{ColorSpace, Surface};
 
     const DESC: FormatDesc = FormatDesc {
         format: ktx2::Format::R8G8B8A8_UNORM,
@@ -219,7 +219,7 @@ mod tests {
         let surface = patterned(19, 13, 19 * 4 + 12);
         crate::encoders::assert_parallel_matches_serial(|| {
             Bc7encEncoder::compress(
-                &surface,
+                surface.as_ref(),
                 DESC,
                 ktx2::Format::BC7_UNORM_BLOCK,
                 Quality::Fast,
@@ -233,7 +233,7 @@ mod tests {
     fn bc7_non_aligned_5x5_edges_replicate() {
         let surface = solid_red(5, 5);
         let out = Bc7encEncoder::compress(
-            &surface,
+            surface.as_ref(),
             DESC,
             ktx2::Format::BC7_UNORM_BLOCK,
             Quality::UltraFast,
@@ -256,7 +256,7 @@ mod tests {
     fn mode6_only_still_produces_valid_output() {
         let surface = solid_red(4, 4);
         let out = Bc7encEncoder::compress(
-            &surface,
+            surface.as_ref(),
             DESC,
             ktx2::Format::BC7_UNORM_BLOCK,
             Quality::Slow,

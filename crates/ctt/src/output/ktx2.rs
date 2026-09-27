@@ -3,16 +3,16 @@ use ktx2::dfd;
 use crate::alpha::AlphaMode;
 use crate::convert::Ktx2Supercompression;
 use crate::error::{Error, Result};
-use crate::surface::{Image, TextureKind};
+use crate::surface::{ImageRef, TextureKind};
 use crate::vk_format::FormatExt as _;
 
-/// Encode an [`Image`] as a KTX2 file.
+/// Encode an image as a KTX2 file.
 ///
 /// Uses the new `ktx2` crate APIs for header serialization, DFD generation,
 /// and level index construction. When `supercompression` is `Some`, each mip
 /// level is compressed independently per the KTX2 spec.
 pub fn encode_ktx2_image(
-    image: &Image,
+    image: &ImageRef<'_>,
     supercompression: Option<Ktx2Supercompression>,
 ) -> Result<Vec<u8>> {
     let first = &image.surfaces[0][0];
@@ -35,7 +35,7 @@ pub fn encode_ktx2_image(
         desc.alpha,
     );
 
-    // Image::validate has already enforced kind invariants by the time we get
+    // ImageRef::validate has already enforced kind invariants by the time we get
     // here (Cubemap multiple-of-6, Texture3D single surface, depth==1 for 2D).
     let level_count = image.surfaces[0].len() as u32;
     let (face_count, layer_count, pixel_depth) = match image.kind {
@@ -242,6 +242,7 @@ fn align_up(value: usize, alignment: usize) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::surface::Image;
     use crate::surface::{ColorSpace, FormatDesc, Surface};
     use ktx2::Format as F;
 
@@ -269,7 +270,7 @@ mod tests {
     #[test]
     fn roundtrip_rgba8_srgb() {
         let image = make_test_image(F::R8G8B8A8_UNORM, ColorSpace::Srgb, AlphaMode::Straight);
-        let bytes = encode_ktx2_image(&image, None).unwrap();
+        let bytes = encode_ktx2_image(&image.to_ref(), None).unwrap();
         let reader = ktx2::Reader::new(&bytes[..]).expect("valid KTX2");
         let header = reader.header();
         assert_eq!(header.format, Some(F::R8G8B8A8_SRGB));
@@ -304,7 +305,7 @@ mod tests {
                 alpha: AlphaMode::Straight,
             },
         };
-        let bytes = encode_ktx2_image(&image, None).unwrap();
+        let bytes = encode_ktx2_image(&image.to_ref(), None).unwrap();
         let reader = ktx2::Reader::new(&bytes[..]).expect("valid KTX2");
         let header = reader.header();
         assert_eq!(header.format, Some(F::BC7_UNORM_BLOCK));
@@ -323,7 +324,7 @@ mod tests {
             ColorSpace::Linear,
             AlphaMode::Premultiplied,
         );
-        let bytes = encode_ktx2_image(&image, None).unwrap();
+        let bytes = encode_ktx2_image(&image.to_ref(), None).unwrap();
         let reader = ktx2::Reader::new(&bytes[..]).expect("valid KTX2");
         assert_eq!(reader.is_alpha_premultiplied(), Some(true));
     }
@@ -331,7 +332,7 @@ mod tests {
     #[test]
     fn straight_alpha_flag() {
         let image = make_test_image(F::R8G8B8A8_UNORM, ColorSpace::Linear, AlphaMode::Straight);
-        let bytes = encode_ktx2_image(&image, None).unwrap();
+        let bytes = encode_ktx2_image(&image.to_ref(), None).unwrap();
         let reader = ktx2::Reader::new(&bytes[..]).expect("valid KTX2");
         assert_eq!(reader.is_alpha_premultiplied(), Some(false));
     }
@@ -355,7 +356,7 @@ mod tests {
                 alpha: AlphaMode::Straight,
             },
         };
-        let bytes = encode_ktx2_image(&image, None).unwrap();
+        let bytes = encode_ktx2_image(&image.to_ref(), None).unwrap();
         let reader = ktx2::Reader::new(&bytes[..]).expect("valid KTX2");
         let levels: Vec<_> = reader.levels().collect();
         assert_eq!(levels.len(), 1);
@@ -402,7 +403,7 @@ mod tests {
                 alpha: AlphaMode::Straight,
             },
         };
-        let bytes = encode_ktx2_image(&image, None).unwrap();
+        let bytes = encode_ktx2_image(&image.to_ref(), None).unwrap();
         let reader = ktx2::Reader::new(&bytes[..]).expect("valid KTX2");
         assert_eq!(reader.header().level_count, 3);
 

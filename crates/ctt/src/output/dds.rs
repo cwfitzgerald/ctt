@@ -142,12 +142,12 @@ pub fn vk_format_to_dxgi(format: ktx2::Format, color_space: ColorSpace) -> Resul
     }
 }
 
-/// Encode an [`Image`](crate::surface::Image) as a DDS file.
-pub fn encode_dds_image(image: &crate::surface::Image) -> Result<Vec<u8>> {
+/// Encode an image as a DDS file.
+pub fn encode_dds_image(image: &crate::surface::ImageRef<'_>) -> Result<Vec<u8>> {
     let first = &image.surfaces[0][0];
     let dxgi_format = vk_format_to_dxgi(image.desc.format, image.desc.color_space)?;
 
-    // Image::validate has already enforced kind invariants by the time we get
+    // ImageRef::validate has already enforced kind invariants by the time we get
     // here (Cubemap multiple-of-6, Texture3D single surface).
     let is_cubemap = matches!(image.kind, TextureKind::Cubemap);
     let is_3d = matches!(image.kind, TextureKind::Texture3D);
