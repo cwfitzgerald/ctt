@@ -21,12 +21,11 @@ static ctt_image *make_image(void) {
     ctt_surface *s = ctt_surface_create(
         pixels, sizeof pixels,
         4, 4, 1,
-        4 * 4, 0,
-        CTT_FORMAT_R8G8B8A8_UNORM,
-        CTT_COLOR_SPACE_LINEAR,
-        CTT_ALPHA_MODE_STRAIGHT);
+        4 * 4, 0);
     if (!s) return NULL;
-    ctt_image *img = ctt_image_create(CTT_TEXTURE_KIND_TEXTURE2D);
+    ctt_format_desc desc = {
+        CTT_FORMAT_R8G8B8A8_UNORM, CTT_COLOR_SPACE_LINEAR, CTT_ALPHA_MODE_STRAIGHT};
+    ctt_image *img = ctt_image_create(CTT_TEXTURE_KIND_TEXTURE2D, desc);
     size_t layer = 0;
     if (ctt_image_add_layer(img, &layer) != CTT_STATUS_OK) {
         ctt_surface_destroy(s);

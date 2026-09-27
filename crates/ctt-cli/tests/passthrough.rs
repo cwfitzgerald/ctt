@@ -172,7 +172,7 @@ fn explicit_input_color_space_overrides_container_metadata() {
     );
 
     let img = assert::decode(&out_bytes);
-    assert_eq!(img.surfaces[0][0].color_space, ctt::ColorSpace::Srgb);
+    assert_eq!(img.desc.color_space, ctt::ColorSpace::Srgb);
 }
 
 // One representative test per supported compressed format. Each builds a

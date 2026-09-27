@@ -510,9 +510,7 @@ pub fn store_a2r10g10b10_sint_u32(buf: &Buffer<u32>) -> Vec<u8> {
 #[cfg(test)]
 mod load_tests {
     use super::*;
-    use crate::alpha::AlphaMode;
     use crate::processing::kernels::constructible_levels;
-    use crate::surface::ColorSpace;
 
     fn a2_surface(data: Vec<u8>, width: u32, height: u32, stride: u32) -> Surface {
         Surface {
@@ -522,9 +520,6 @@ mod load_tests {
             depth: 1,
             stride,
             slice_stride: 0,
-            format: ktx2::Format::A2B10G10R10_UNORM_PACK32,
-            color_space: ColorSpace::Linear,
-            alpha: AlphaMode::Straight,
         }
     }
 

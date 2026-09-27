@@ -6,7 +6,7 @@ use crate::alpha::AlphaMode;
 use crate::encoders::Quality;
 use crate::encoders::backend::Encoder;
 use crate::error::{Error, Result};
-use crate::surface::{ColorSpace, Surface};
+use crate::surface::{ColorSpace, FormatDesc, Surface};
 use crate::vk_format::FormatExt as _;
 
 /// What the texture data represents. Drives default channel weighting for
@@ -40,7 +40,7 @@ pub enum AmdUsage {
 /// pick from and can measurably improve color fidelity.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum AmdBc7Alpha {
-    /// Derive from the surface's [`AlphaMode`]: `Opaque` → behaves like
+    /// Derive from the image's [`AlphaMode`]: `Opaque` → behaves like
     /// `Opaque` below; anything else → `Full`.
     #[default]
     Auto,
@@ -138,6 +138,7 @@ impl Encoder for CompressonatorEncoder {
 
     fn compress(
         surface: &Surface,
+        desc: FormatDesc,
         format: ktx2::Format,
         quality: Quality,
         settings: &AmdSettings,
@@ -148,9 +149,9 @@ impl Encoder for CompressonatorEncoder {
         // row stride from width internally). Repack when the surface carries
         // padded rows; this copies the image once, only on the padded path
         // (tight surfaces borrow their data unchanged).
-        let tight = surface.tight_data();
+        let tight = surface.tight_data(desc.format);
         let (data, width, height) = (&*tight, surface.width, surface.height);
-        let is_srgb = surface.color_space == ColorSpace::Srgb;
+        let is_srgb = desc.color_space == ColorSpace::Srgb;
         let weights = settings
             .channel_weights
             .unwrap_or_else(|| default_rgb_weights(settings.usage));
@@ -244,7 +245,7 @@ impl Encoder for CompressonatorEncoder {
                 let mut opts = cmp::bc7::Options::new().map_err(cmp_err)?;
                 opts.set_quality(q).map_err(cmp_err)?;
                 let (image_needs_alpha, colour_restrict, alpha_restrict) =
-                    resolve_bc7_alpha(settings.bc7_alpha, surface.alpha);
+                    resolve_bc7_alpha(settings.bc7_alpha, desc.alpha);
                 opts.set_alpha_options(image_needs_alpha, colour_restrict, alpha_restrict)
                     .map_err(cmp_err)?;
                 if let Some(mask) = settings.bc7_mode_mask {
@@ -345,6 +346,12 @@ mod tests {
     use crate::alpha::AlphaMode;
     use crate::surface::ColorSpace;
 
+    const DESC: FormatDesc = FormatDesc {
+        format: ktx2::Format::R8G8B8A8_UNORM,
+        color_space: ColorSpace::Linear,
+        alpha: AlphaMode::Opaque,
+    };
+
     fn solid_red(width: u32, height: u32) -> Surface {
         let mut data = Vec::with_capacity((width * height * 4) as usize);
         for _ in 0..(width * height) {
@@ -357,9 +364,6 @@ mod tests {
             depth: 1,
             stride: width * 4,
             slice_stride: 0,
-            format: ktx2::Format::R8G8B8A8_UNORM,
-            color_space: ColorSpace::Linear,
-            alpha: AlphaMode::Opaque,
         }
     }
 
@@ -371,6 +375,7 @@ mod tests {
         // independent of that upstream quirk.
         let out = CompressonatorEncoder::compress(
             &surface,
+            DESC,
             ktx2::Format::BC7_UNORM_BLOCK,
             Quality::Slow,
             &AmdSettings::default(),
@@ -392,6 +397,7 @@ mod tests {
         let surface = solid_red(7, 3);
         let out = CompressonatorEncoder::compress(
             &surface,
+            DESC,
             ktx2::Format::BC1_RGBA_UNORM_BLOCK,
             Quality::UltraFast,
             &AmdSettings::default(),
@@ -432,9 +438,6 @@ mod tests {
             depth: 1,
             stride,
             slice_stride: 0,
-            format: ktx2::Format::R8G8B8A8_UNORM,
-            color_space: ColorSpace::Linear,
-            alpha: AlphaMode::Opaque,
         }
     }
 
@@ -444,6 +447,7 @@ mod tests {
         let padded = patterned(8, 8, 8 * 4 + 16);
         let a = CompressonatorEncoder::compress(
             &tight,
+            DESC,
             ktx2::Format::BC1_RGBA_UNORM_BLOCK,
             Quality::Fast,
             &AmdSettings::default(),
@@ -451,6 +455,7 @@ mod tests {
         .unwrap();
         let b = CompressonatorEncoder::compress(
             &padded,
+            DESC,
             ktx2::Format::BC1_RGBA_UNORM_BLOCK,
             Quality::Fast,
             &AmdSettings::default(),
@@ -466,6 +471,7 @@ mod tests {
         crate::encoders::assert_parallel_matches_serial(|| {
             CompressonatorEncoder::compress(
                 &surface,
+                DESC,
                 ktx2::Format::BC1_RGBA_UNORM_BLOCK,
                 Quality::Fast,
                 &AmdSettings::default(),
@@ -486,11 +492,13 @@ mod tests {
                 depth: 1,
                 stride: 4 * channels,
                 slice_stride: 0,
+            }]],
+            kind: crate::TextureKind::Texture2D,
+            desc: FormatDesc {
                 format,
                 color_space: ColorSpace::Linear,
                 alpha: AlphaMode::Opaque,
-            }]],
-            kind: crate::TextureKind::Texture2D,
+            },
         };
         let out = crate::convert(
             image,

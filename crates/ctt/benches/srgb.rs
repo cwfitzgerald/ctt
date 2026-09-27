@@ -21,8 +21,8 @@
 use std::hint::black_box;
 
 use criterion::{BatchSize, Criterion, Throughput, criterion_group, criterion_main};
+use ctt::Surface;
 use ctt::bench_internals::{Buffer, Level};
-use ctt::{AlphaMode, ColorSpace, Format, Surface};
 
 mod common;
 
@@ -48,9 +48,6 @@ fn make_rgba_surface() -> Surface {
         depth: 1,
         stride: SIDE * 4,
         slice_stride: 0,
-        format: Format::R8G8B8A8_SRGB,
-        color_space: ColorSpace::Srgb,
-        alpha: AlphaMode::Straight,
     }
 }
 
@@ -72,9 +69,6 @@ fn make_bgr_surface() -> Surface {
         depth: 1,
         stride: SIDE * 3,
         slice_stride: 0,
-        format: Format::B8G8R8_SRGB,
-        color_space: ColorSpace::Srgb,
-        alpha: AlphaMode::Opaque,
     }
 }
 

@@ -26,16 +26,15 @@ int main(void) {
     ctt_surface *s = ctt_surface_create(
         pixels, sizeof pixels,
         4, 4, 1,
-        4 * 4, 0,
-        CTT_FORMAT_R8G8B8A8_UNORM,
-        CTT_COLOR_SPACE_LINEAR,
-        CTT_ALPHA_MODE_STRAIGHT);
+        4 * 4, 0);
     if (!s) {
         fprintf(stderr, "ctt_surface_create failed: %s\n", ctt_last_error_message());
         return 1;
     }
 
-    ctt_image *img = ctt_image_create(CTT_TEXTURE_KIND_TEXTURE2D);
+    ctt_format_desc desc = {
+        CTT_FORMAT_R8G8B8A8_UNORM, CTT_COLOR_SPACE_LINEAR, CTT_ALPHA_MODE_STRAIGHT};
+    ctt_image *img = ctt_image_create(CTT_TEXTURE_KIND_TEXTURE2D, desc);
     if (!img) {
         fprintf(stderr, "ctt_image_create failed: %s\n", ctt_last_error_message());
         ctt_surface_destroy(s);

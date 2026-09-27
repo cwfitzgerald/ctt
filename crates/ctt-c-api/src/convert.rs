@@ -103,7 +103,7 @@ pub extern "C" fn ctt_bc7enc_settings_default() -> Bc7encSettings {
 #[repr(u8)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum IntelBc7Alpha {
-    /// Derive from the surface's [`AlphaMode`]: opaque → opaque presets,
+    /// Derive from the image's [`AlphaMode`]: opaque → opaque presets,
     /// anything else → alpha-aware presets.
     Auto,
     /// Force opaque presets — RGB-only modes 0–3.
@@ -174,7 +174,7 @@ pub enum AmdUsage {
 #[repr(u8)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AmdBc7Alpha {
-    /// Derive from the surface's [`AlphaMode`]: opaque → behaves like
+    /// Derive from the image's [`AlphaMode`]: opaque → behaves like
     /// `Opaque`, anything else → `Full`.
     Auto,
     /// No meaningful alpha — concentrate on RGB modes.
@@ -261,7 +261,7 @@ pub enum AstcencNormalSwizzle {
 #[repr(C, u8)]
 #[derive(Debug, Clone, Copy)]
 pub enum AstcencUsage {
-    /// Generic color (LDR or LDR sRGB based on the surface's color space).
+    /// Generic color (LDR or LDR sRGB based on the image's color space).
     Color,
     /// 2-channel tangent-space normal map. Sets `MAP_NORMAL`.
     NormalMap(AstcencNormalSwizzle),
@@ -641,7 +641,7 @@ pub struct CompressedTargetFormat {
 /// [`Encoder`].
 ///
 /// The format in `Uncompressed` and `Compressed` must agree with the output
-/// color space, by the same rules as the `format` of `ctt_surface_create`.
+/// color space, by the same rules as the `format` of `ctt_format_desc`.
 #[repr(C, u8)]
 #[derive(Debug, Clone, Copy)]
 pub enum TargetFormat {

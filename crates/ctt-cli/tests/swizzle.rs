@@ -50,7 +50,7 @@ fn assert_swizzle(pattern: &str, expected: [u8; 4]) {
 
     let decoded = assert::decode(&read(&output));
     let surface = &decoded.surfaces[0][0];
-    assert_eq!(surface.format, Format::R8G8B8A8_UNORM);
+    assert_eq!(decoded.desc.format, Format::R8G8B8A8_UNORM);
     for (i, px) in surface.data.chunks_exact(4).enumerate() {
         assert_eq!(
             px, &expected,

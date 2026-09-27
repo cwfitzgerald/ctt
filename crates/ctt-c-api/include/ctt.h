@@ -18,16 +18,17 @@
  *
  *   - Decode: call `ctt_decode_container` (auto-detect from magic bytes) or
  *     `ctt_decode_container_as` (caller specifies KTX2 vs DDS) on a buffer
- *     of file bytes; the returned `ctt_image` exposes per-`(layer, mip)`
- *     surface metadata and data via the `ctt_image_surface_*` accessors.
+ *     of file bytes; the returned `ctt_image` exposes its `ctt_format_desc`
+ *     via `ctt_image_desc` and per-`(layer, mip)` surface layout and data
+ *     via the `ctt_image_surface_*` accessors.
  *
  * A typical encode pipeline:
  *
- *     ctt_surface *s = ctt_surface_create(pixels, len, w, h, 1, w*4, 0,
- *                          CTT_FORMAT_R8G8B8A8_SRGB,
- *                          CTT_COLOR_SPACE_SRGB,
- *                          CTT_ALPHA_MODE_STRAIGHT);
- *     ctt_image *img = ctt_image_create(CTT_TEXTURE_KIND_TEXTURE2D);
+ *     ctt_surface *s = ctt_surface_create(pixels, len, w, h, 1, w*4, 0);
+ *     ctt_format_desc desc = {
+ *         CTT_FORMAT_R8G8B8A8_SRGB, CTT_COLOR_SPACE_SRGB, CTT_ALPHA_MODE_STRAIGHT,
+ *     };
+ *     ctt_image *img = ctt_image_create(CTT_TEXTURE_KIND_TEXTURE2D, desc);
  *     size_t layer; ctt_image_add_layer(img, &layer);
  *     ctt_image_push_mip(img, layer, s);          // consumes `s`
  *
@@ -49,13 +50,13 @@
  *
  * All heap allocation happens on the Rust side, so callers must not free
  * pointers returned by ctt with their own allocator. Each opaque type
- * (`ctt_surface`, `ctt_image`, `ctt_cubemap_input`, `ctt_pipeline_output`)
+ * (`ctt_surface`, `ctt_image`, `ctt_pipeline_output`)
  * has a matching `*_destroy` function; passing `NULL` is always safe.
  *
- * APIs that consume an input (e.g. `ctt_convert`, `ctt_split_cubemap`,
- * `ctt_image_push_mip`, `ctt_cubemap_input_*`) take ownership of the passed-in
- * handle on both success and failure: the caller must not call `*_destroy`
- * on a consumed handle. Each consuming function's doc comment calls this out.
+ * APIs that consume an input (e.g. `ctt_convert`, `ctt_image_push_mip`) take
+ * ownership of the passed-in handle on both success and failure: the caller
+ * must not call `*_destroy` on a consumed handle. Each consuming function's
+ * doc comment calls this out.
  *
  * Borrowed pointers returned by accessors (`ctt_surface_data`,
  * `ctt_image_surface_data`, `ctt_pipeline_output_encoded_data`) are valid
@@ -176,7 +177,7 @@ enum ctt_intel_bc7_alpha
 #endif // defined(__cplusplus) || __STDC_VERSION__ >= 202311L
  {
     /**
-     * Derive from the surface's [`AlphaMode`]: opaque → opaque presets,
+     * Derive from the image's [`AlphaMode`]: opaque → opaque presets,
      * anything else → alpha-aware presets.
      */
     CTT_INTEL_BC7_ALPHA_AUTO,
@@ -240,7 +241,7 @@ enum ctt_amd_bc7_alpha
 #endif // defined(__cplusplus) || __STDC_VERSION__ >= 202311L
  {
     /**
-     * Derive from the surface's [`AlphaMode`]: opaque → behaves like
+     * Derive from the image's [`AlphaMode`]: opaque → behaves like
      * `Opaque`, anything else → `Full`.
      */
     CTT_AMD_BC7_ALPHA_AUTO,
@@ -438,7 +439,6 @@ enum ctt_status
     CTT_STATUS_UNSUPPORTED_FORMAT = -2,
     CTT_STATUS_INVALID_SWIZZLE = -3,
     CTT_STATUS_CUBEMAP_FACE_COUNT = -4,
-    CTT_STATUS_CUBEMAP_NON_UNIFORM_FACES = -5,
     CTT_STATUS_COMPRESSION = -6,
     CTT_STATUS_OUTPUT_ENCODING = -7,
     CTT_STATUS_INPUT_DECODING = -8,
@@ -557,14 +557,6 @@ typedef enum ctt_pipeline_output_kind ctt_pipeline_output_kind;
 typedef uint8_t ctt_pipeline_output_kind;
 #endif // __STDC_VERSION__ >= 202311L
 #endif // __cplusplus
-
-/**
- * Opaque handle to a cubemap input — either six separate face surfaces, a
- * cross-layout image, or a horizontal strip of six faces.
- *
- * Pass to [`ctt_split_cubemap`] to extract the six face surfaces.
- */
-typedef struct ctt_cubemap_input ctt_cubemap_input;
 
 /**
  * Opaque handle to a multi-layer / multi-mip image.
@@ -750,7 +742,7 @@ enum ctt_astcenc_usage_Tag
 #endif // defined(__cplusplus) || __STDC_VERSION__ >= 202311L
  {
     /**
-     * Generic color (LDR or LDR sRGB based on the surface's color space).
+     * Generic color (LDR or LDR sRGB based on the image's color space).
      */
     CTT_ASTCENC_USAGE_COLOR,
     /**
@@ -1024,7 +1016,7 @@ typedef struct {
  * [`Encoder`].
  *
  * The format in `Uncompressed` and `Compressed` must agree with the output
- * color space, by the same rules as the `format` of `ctt_surface_create`.
+ * color space, by the same rules as the `format` of `ctt_format_desc`.
  */
 enum ctt_target_format_Tag
 #if defined(__cplusplus) || __STDC_VERSION__ >= 202311L
@@ -1178,6 +1170,34 @@ typedef struct {
     ctt_optional_size mipmap_count;
     ctt_mipmap_filter mipmap_filter;
 } ctt_convert_settings;
+
+/**
+ * How to read the bytes of every surface in an image.
+ *
+ * `format` must agree with `color_space`:
+ *
+ * - `CTT_COLOR_SPACE_SRGB`: if the format has an sRGB variant, the format
+ *   must be that variant. `CTT_FORMAT_R8G8B8A8_SRGB` is valid and
+ *   `CTT_FORMAT_R8G8B8A8_UNORM` is not. `CTT_FORMAT_R16G16B16A16_SFLOAT` has
+ *   no sRGB variant, so it is valid.
+ * - `CTT_COLOR_SPACE_LINEAR`: the format must not be an sRGB variant.
+ *   `CTT_FORMAT_R8G8B8A8_UNORM` and `CTT_FORMAT_R16G16B16A16_SFLOAT` are
+ *   valid and `CTT_FORMAT_R8G8B8A8_SRGB` is not.
+ */
+typedef struct {
+    /**
+     * VkFormat of every surface. Must be non-zero.
+     */
+    ctt_format format;
+    /**
+     * Color space the pixel values live in.
+     */
+    ctt_color_space color_space;
+    /**
+     * How the alpha channel relates to the color channels.
+     */
+    ctt_alpha_mode alpha;
+} ctt_format_desc;
 
 /**
  * Optional metadata overrides applied to every surface in a decoded image.
@@ -1453,40 +1473,30 @@ ctt_status ctt_convert(ctt_image *image,
                        ctt_pipeline_output **out);
 
 /**
- * Build a cubemap input from six separate face surfaces, ordered
- * `+X, -X, +Y, -Y, +Z, -Z`.
+ * Split a horizontal (4×3) or vertical (3×4) cross-layout atlas into a
+ * cubemap image with one mip level per face.
  *
- * `faces` must point to an array of exactly six surface handles; **all
- * six are consumed** on both success and failure.
+ * Does not consume `surface`. On success writes a new image handle into
+ * `*out_image`; the faces are in `+X, -X, +Y, -Y, +Z, -Z` order. On failure
+ * leaves `*out_image` untouched.
  */
- ctt_cubemap_input *ctt_cubemap_input_separate_faces(ctt_surface **faces);
+
+ctt_status ctt_split_cubemap_cross(const ctt_surface *surface,
+                                   ctt_format_desc desc,
+                                   ctt_image **out_image);
 
 /**
- * Build a cubemap input from a 4×3 cross-layout image. Consumes the surface.
- */
- ctt_cubemap_input *ctt_cubemap_input_cross(ctt_surface *surface);
-
-/**
- * Build a cubemap input from a horizontal strip of 6 faces. Consumes the
- * surface.
- */
- ctt_cubemap_input *ctt_cubemap_input_strip(ctt_surface *surface);
-
-/**
- * Destroy a cubemap input. `input` may be NULL.
- */
- void ctt_cubemap_input_destroy(ctt_cubemap_input *input);
-
-/**
- * Split a cubemap input into six face surfaces.
+ * Split a horizontal strip of six faces into a cubemap image with one mip
+ * level per face.
  *
- * **Consumes** `input` on both success and failure. On success writes six
- * new surface handles into `out_faces[0..6]`, in `+X, -X, +Y, -Y, +Z, -Z`
- * order. On failure leaves `out_faces` untouched.
- *
- * `out_faces` must point to space for six `ctt_surface_t` pointers.
+ * Does not consume `surface`. On success writes a new image handle into
+ * `*out_image`; the faces are in `+X, -X, +Y, -Y, +Z, -Z` order. On failure
+ * leaves `*out_image` untouched.
  */
- ctt_status ctt_split_cubemap(ctt_cubemap_input *input, ctt_surface **out_faces);
+
+ctt_status ctt_split_cubemap_strip(const ctt_surface *surface,
+                                   ctt_format_desc desc,
+                                   ctt_image **out_image);
 
 /**
  * Pointer to a NUL-terminated UTF-8 string describing the most recent error
@@ -1503,9 +1513,13 @@ ctt_status ctt_convert(ctt_image *image,
  void ctt_clear_last_error(void);
 
 /**
- * Create an empty image of the given kind.
+ * Create an empty image of the given kind whose surfaces are read as `desc`.
+ *
+ * `desc.format` must be non-zero and agree with `desc.color_space`.
+ *
+ * On failure returns `NULL` and sets the thread-local error message.
  */
- ctt_image *ctt_image_create(ctt_texture_kind kind);
+ ctt_image *ctt_image_create(ctt_texture_kind kind, ctt_format_desc desc);
 
 /**
  * Destroy an image. `img` may be NULL.
@@ -1543,6 +1557,13 @@ ctt_status ctt_convert(ctt_image *image,
  * is null.
  */
  ctt_texture_kind ctt_image_kind(const ctt_image *img);
+
+/**
+ * How to read the bytes of every surface in the image. Returns a desc with
+ * format `0` (`VK_FORMAT_UNDEFINED`), `CTT_COLOR_SPACE_LINEAR`, and
+ * `CTT_ALPHA_MODE_STRAIGHT` if `img` is null.
+ */
+ ctt_format_desc ctt_image_desc(const ctt_image *img);
 
 /**
  * Allocate a freshly cloned `ctt_surface_t` for the surface at the given
@@ -1598,27 +1619,6 @@ ctt_status ctt_convert(ctt_image *image,
  * of range.
  */
  uint32_t ctt_image_surface_slice_stride(const ctt_image *img, size_t layer, size_t mip);
-
-/**
- * VkFormat of the surface at `(layer, mip)`. Returns `0`
- * (`VK_FORMAT_UNDEFINED`) if `img` is null or `(layer, mip)` is out of
- * range.
- */
- ctt_format ctt_image_surface_format(const ctt_image *img, size_t layer, size_t mip);
-
-/**
- * Color space of the surface at `(layer, mip)`. Returns
- * `CTT_COLOR_SPACE_LINEAR` if `img` is null or `(layer, mip)` is out of
- * range.
- */
- ctt_color_space ctt_image_surface_color_space(const ctt_image *img, size_t layer, size_t mip);
-
-/**
- * Alpha mode of the surface at `(layer, mip)`. Returns
- * `CTT_ALPHA_MODE_STRAIGHT` if `img` is null or `(layer, mip)` is out of
- * range.
- */
- ctt_alpha_mode ctt_image_surface_alpha(const ctt_image *img, size_t layer, size_t mip);
 
  ctt_input_overrides ctt_input_overrides_default(void);
 
@@ -1724,21 +1724,9 @@ ctt_status ctt_decode_container_as(const uint8_t *data,
  * Create a new surface, copying `data_len` bytes from `data` into Rust's
  * allocator.
  *
- * `format` must be a valid VkFormat value (non-zero). `slice_stride` is
- * only meaningful when `depth > 1`; pass `0` for 2D surfaces.
- *
- * `format` must agree with `color_space`:
- *
- * - `CTT_COLOR_SPACE_SRGB`: if the format has an sRGB variant, the format
- *   must be that variant. `CTT_FORMAT_R8G8B8A8_SRGB` is valid and
- *   `CTT_FORMAT_R8G8B8A8_UNORM` is not. `CTT_FORMAT_R16G16B16A16_SFLOAT` has
- *   no sRGB variant, so it is valid.
- * - `CTT_COLOR_SPACE_LINEAR`: the format must not be an sRGB variant.
- *   `CTT_FORMAT_R8G8B8A8_UNORM` and `CTT_FORMAT_R16G16B16A16_SFLOAT` are
- *   valid and `CTT_FORMAT_R8G8B8A8_SRGB` is not.
- *
- * This function does not check the rule; `ctt_convert` fails with an error
- * for a surface that breaks it.
+ * `slice_stride` is only meaningful when `depth > 1`; pass `0` for 2D
+ * surfaces. The [`FormatDesc`](crate::FormatDesc) of the image that holds
+ * the surface tells how to read the bytes.
  *
  * On failure returns `NULL` and sets the thread-local error message.
  */
@@ -1749,10 +1737,7 @@ ctt_surface *ctt_surface_create(const uint8_t *data,
                                 uint32_t height,
                                 uint32_t depth,
                                 uint32_t stride,
-                                uint32_t slice_stride,
-                                ctt_format format,
-                                ctt_color_space color_space,
-                                ctt_alpha_mode alpha);
+                                uint32_t slice_stride);
 
 /**
  * Destroy a surface. `s` may be NULL.
@@ -1798,25 +1783,7 @@ ctt_surface *ctt_surface_create(const uint8_t *data,
  uint32_t ctt_surface_slice_stride(const ctt_surface *s);
 
 /**
- * VkFormat of the surface. Returns `0` (`VK_FORMAT_UNDEFINED`) if `s` is
- * null.
- */
- ctt_format ctt_surface_format(const ctt_surface *s);
-
-/**
- * Color space of the surface. Returns `CTT_COLOR_SPACE_LINEAR` if `s` is
- * null.
- */
- ctt_color_space ctt_surface_color_space(const ctt_surface *s);
-
-/**
- * Alpha mode of the surface. Returns `CTT_ALPHA_MODE_STRAIGHT` if `s` is
- * null.
- */
- ctt_alpha_mode ctt_surface_alpha(const ctt_surface *s);
-
-/**
- * Deep-copy a surface (data and metadata).
+ * Deep-copy a surface (data and layout).
  *
  * On failure returns `NULL` and sets the thread-local error message.
  */

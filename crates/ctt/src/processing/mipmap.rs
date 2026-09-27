@@ -56,6 +56,9 @@ pub fn complete(
     count: Option<usize>,
 ) -> Result<Vec<Buffer<f32>>> {
     profiling::scope!("mipmap::complete");
+    if count == Some(0) {
+        return Err(Error::UnsupportedFormat("mipmap count must be >= 1".into()));
+    }
     let base = out
         .first()
         .ok_or_else(|| Error::UnsupportedFormat("mip chain must not be empty".into()))?;
@@ -64,9 +67,6 @@ pub fn complete(
     // push duplicate 1×1 levels past the real chain.
     let full = full_mip_count(base.width, base.height);
     let target = count.map_or(full, |c| c.min(full));
-    if target == 0 {
-        return Err(Error::UnsupportedFormat("mipmap count must be >= 1".into()));
-    }
 
     let options = ResizeOptions::new()
         .resize_alg(filter.to_resize_alg())

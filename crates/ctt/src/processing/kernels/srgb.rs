@@ -538,12 +538,10 @@ pub fn srgb_oetf_in_place_f32_at(level: Level, pixels: &mut [[f32; 4]]) {
 #[cfg(test)]
 mod load_tests {
     use super::*;
-    use crate::alpha::AlphaMode;
     use crate::processing::kernels::constructible_levels;
     use crate::processing::srgb_test_support::{
         assert_curve_close, curve_test_pixels, eotf_exact, eotf_exact_clamped, in_place_pixels,
     };
-    use crate::surface::ColorSpace;
 
     // ---- in-place EOTF ----
 
@@ -611,9 +609,6 @@ mod load_tests {
             depth: 1,
             stride,
             slice_stride: 0,
-            format: ktx2::Format::R8G8B8A8_SRGB,
-            color_space: ColorSpace::Srgb,
-            alpha: AlphaMode::Opaque,
         }
     }
 
@@ -793,12 +788,7 @@ mod load_tests {
                     data[x * channels + c] = (x * (c + 1)) as u8;
                 }
             }
-            let mut s = srgb_surface(data, w, 1, w * channels as u32);
-            s.format = match channels {
-                1 => ktx2::Format::R8_SRGB,
-                2 => ktx2::Format::R8G8_SRGB,
-                _ => ktx2::Format::R8G8B8_SRGB,
-            };
+            let s = srgb_surface(data, w, 1, w * channels as u32);
             let got = load_srgb8_f32(&s, channels).unwrap();
             for (x, px) in got.pixels.iter().enumerate() {
                 for (c, &lane) in px.iter().enumerate() {

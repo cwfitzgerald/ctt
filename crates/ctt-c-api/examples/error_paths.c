@@ -3,10 +3,11 @@
  *   1. A buffer carrying the KTX2 magic but a garbage body is detected as a
  *      container and then fails to decode: ctt_decode_container must report a
  *      negative status and leave a non-empty error message.
- *   2. ctt_cubemap_input_separate_faces with a NULL face must fail (returning
- *      NULL) while still consuming the non-NULL faces — this exercises the
- *      "all six consumed on failure" contract. We cannot observe the freeing
- *      directly from C, but running under a leak checker would.
+ *   2. ctt_split_cubemap_cross with a NULL surface must fail with
+ *      CTT_STATUS_NULL_POINTER, and with a zero format must fail with
+ *      CTT_STATUS_INVALID_ARGUMENT. Neither writes an output image.
+ *   3. ctt_image_create with a format that disagrees with the color space
+ *      must return NULL.
  */
 #include "../include/ctt.h"
 #include <stddef.h>
@@ -22,10 +23,7 @@ static ctt_surface *make_face(void) {
     return ctt_surface_create(
         px, sizeof px,
         1, 1, 1,
-        4, 0,
-        CTT_FORMAT_R8G8B8A8_UNORM,
-        CTT_COLOR_SPACE_LINEAR,
-        CTT_ALPHA_MODE_OPAQUE);
+        4, 0);
 }
 
 int main(void) {
@@ -49,33 +47,42 @@ int main(void) {
         return 2;
     }
 
-    /* --- 2. separate-faces with a NULL face. --- */
-    ctt_surface *faces[6];
-    for (int i = 0; i < 6; ++i) {
-        faces[i] = make_face();
-        if (!faces[i]) {
-            fprintf(stderr, "make_face[%d] failed: %s\n", i, ctt_last_error_message());
-            for (int j = 0; j < i; ++j) ctt_surface_destroy(faces[j]);
-            return 3;
-        }
-    }
-    /* Poke a hole: face 2 is NULL. The other five must still be consumed. */
-    ctt_surface_destroy(faces[2]);
-    faces[2] = NULL;
-
+    /* --- 2. Cubemap split with a NULL surface or a zero format. --- */
+    ctt_format_desc desc = {
+        CTT_FORMAT_R8G8B8A8_UNORM, CTT_COLOR_SPACE_LINEAR, CTT_ALPHA_MODE_OPAQUE};
+    ctt_image *cube = NULL;
     ctt_clear_last_error();
-    ctt_cubemap_input *ci = ctt_cubemap_input_separate_faces(faces);
-    if (ci != NULL) {
-        fprintf(stderr, "expected NULL cubemap input for a NULL face\n");
-        ctt_cubemap_input_destroy(ci);
-        return 4;
+    st = ctt_split_cubemap_cross(NULL, desc, &cube);
+    if (st != CTT_STATUS_NULL_POINTER || cube != NULL) {
+        fprintf(stderr, "expected NULL_POINTER for a NULL surface, got %d\n", st);
+        return 3;
     }
     msg = ctt_last_error_message();
     if (!msg || msg[0] == '\0') {
-        fprintf(stderr, "expected a non-empty error message for NULL face\n");
+        fprintf(stderr, "expected a non-empty error message for a NULL surface\n");
+        return 4;
+    }
+
+    ctt_surface *face = make_face();
+    if (!face) {
+        fprintf(stderr, "make_face failed: %s\n", ctt_last_error_message());
         return 5;
     }
-    /* faces[0,1,3,4,5] were consumed by the (failed) call; do NOT destroy. */
+    desc.format = 0;
+    st = ctt_split_cubemap_cross(face, desc, &cube);
+    ctt_surface_destroy(face); /* not consumed by the split */
+    if (st != CTT_STATUS_INVALID_ARGUMENT || cube != NULL) {
+        fprintf(stderr, "expected INVALID_ARGUMENT for a zero format, got %d\n", st);
+        return 6;
+    }
+
+    /* --- 3. Image with a format that disagrees with the color space. --- */
+    ctt_format_desc mismatched = {
+        CTT_FORMAT_R8G8B8A8_UNORM, CTT_COLOR_SPACE_SRGB, CTT_ALPHA_MODE_OPAQUE};
+    if (ctt_image_create(CTT_TEXTURE_KIND_TEXTURE2D, mismatched) != NULL) {
+        fprintf(stderr, "expected NULL for a format that disagrees with the color space\n");
+        return 7;
+    }
 
     printf("ok\n");
     return 0;

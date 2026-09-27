@@ -5,7 +5,7 @@
 //! KTX2 stores them via `pixel_depth`; DDS via the `Texture3D` resource
 //! dimension.
 
-use ctt::{Format, TextureKind};
+use ctt::{Format, FormatDesc, TextureKind};
 
 use crate::common::synth::{make_volume_rgba8, write_ktx2, write_solid_rgba8_png};
 use crate::common::{TestFixture, assert, read, run_cli, try_parse_args};
@@ -257,11 +257,13 @@ fn bc7_volume_ktx2_passthrough_byte_equal() {
             depth,
             stride: stride as u32,
             slice_stride: slice_stride as u32,
+        }]],
+        kind: TextureKind::Texture3D,
+        desc: FormatDesc {
             format: Format::BC7_UNORM_BLOCK,
             color_space: ColorSpace::Linear,
             alpha: AlphaMode::Opaque,
-        }]],
-        kind: TextureKind::Texture3D,
+        },
     };
 
     let input = f.output_file("bc7_volume_in.ktx2");

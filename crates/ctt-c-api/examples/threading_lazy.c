@@ -5,16 +5,15 @@
 int main(void) {
     uint8_t pixel[4] = {200, 120, 60, 255};
     ctt_surface *surface = ctt_surface_create(
-        pixel, sizeof(pixel), 1, 1, 1, 4, 0,
-        CTT_FORMAT_R8G8B8A8_UNORM,
-        CTT_COLOR_SPACE_LINEAR,
-        CTT_ALPHA_MODE_OPAQUE);
+        pixel, sizeof(pixel), 1, 1, 1, 4, 0);
     if (surface == NULL) {
         fprintf(stderr, "surface creation failed: %s\n", ctt_last_error_message());
         return 1;
     }
 
-    ctt_image *image = ctt_image_create(CTT_TEXTURE_KIND_TEXTURE2D);
+    ctt_format_desc desc = {
+        CTT_FORMAT_R8G8B8A8_UNORM, CTT_COLOR_SPACE_LINEAR, CTT_ALPHA_MODE_OPAQUE};
+    ctt_image *image = ctt_image_create(CTT_TEXTURE_KIND_TEXTURE2D, desc);
     size_t layer = 0;
     if (image == NULL || ctt_image_add_layer(image, &layer) != CTT_STATUS_OK) {
         ctt_surface_destroy(surface);

@@ -246,9 +246,7 @@ fn encode_codes<S: Simd, const M: u32>(simd: S, bits: S::u32s) -> S::u32s {
 #[cfg(test)]
 mod load_tests {
     use super::*;
-    use crate::alpha::AlphaMode;
     use crate::processing::kernels::constructible_levels;
-    use crate::surface::ColorSpace;
 
     /// Per-pixel oracle: decode one packed word into `[R, G, B, 1.0]` with
     /// [`decode_small_float`].
@@ -323,9 +321,6 @@ mod load_tests {
             depth: 1,
             stride,
             slice_stride: 0,
-            format: ktx2::Format::B10G11R11_UFLOAT_PACK32,
-            color_space: ColorSpace::Linear,
-            alpha: AlphaMode::Opaque,
         }
     }
 

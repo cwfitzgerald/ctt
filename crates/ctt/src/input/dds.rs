@@ -2,7 +2,7 @@ use ddsfile::{Caps2, D3D10ResourceDimension, D3DFormat, Dds, DxgiFormat, MiscFla
 
 use crate::alpha::AlphaMode;
 use crate::error::{Error, Result};
-use crate::surface::{ColorSpace, Image, Surface, TextureKind};
+use crate::surface::{ColorSpace, FormatDesc, Image, Surface, TextureKind};
 use crate::vk_format::FormatExt as _;
 
 const MAX_SURFACE_COUNT: usize = 1 << 20;
@@ -398,9 +398,6 @@ pub fn decode_dds_image(data: &[u8]) -> Result<Image> {
                 depth: layout.depth,
                 stride: layout.stride,
                 slice_stride: layout.slice_stride,
-                format,
-                color_space,
-                alpha: AlphaMode::Straight,
             });
 
             offset = end;
@@ -409,7 +406,15 @@ pub fn decode_dds_image(data: &[u8]) -> Result<Image> {
         surfaces.push(mips);
     }
 
-    Ok(Image { surfaces, kind })
+    Ok(Image {
+        surfaces,
+        kind,
+        desc: FormatDesc {
+            format,
+            color_space,
+            alpha: AlphaMode::Straight,
+        },
+    })
 }
 
 /// Compute the byte size and stride for a single mip level.
@@ -463,11 +468,13 @@ mod tests {
                 depth: 1,
                 stride: 16,
                 slice_stride: 0,
+            }]],
+            kind: TextureKind::Texture2D,
+            desc: FormatDesc {
                 format: ktx2::Format::R8G8B8A8_SRGB,
                 color_space: ColorSpace::Srgb,
                 alpha: AlphaMode::Straight,
-            }]],
-            kind: TextureKind::Texture2D,
+            },
         };
 
         let encoded = encode_dds_image(&original).unwrap();
@@ -478,8 +485,8 @@ mod tests {
         let s = &decoded.surfaces[0][0];
         assert_eq!(s.width, 4);
         assert_eq!(s.height, 4);
-        assert_eq!(s.format, ktx2::Format::R8G8B8A8_SRGB);
-        assert_eq!(s.color_space, ColorSpace::Srgb);
+        assert_eq!(decoded.desc.format, ktx2::Format::R8G8B8A8_SRGB);
+        assert_eq!(decoded.desc.color_space, ColorSpace::Srgb);
         assert_eq!(s.data, vec![42u8; 64]);
     }
 
@@ -494,18 +501,20 @@ mod tests {
                 depth: 1,
                 stride: 16,
                 slice_stride: 0,
+            }]],
+            kind: TextureKind::Texture2D,
+            desc: FormatDesc {
                 format: ktx2::Format::BC7_UNORM_BLOCK,
                 color_space: ColorSpace::Linear,
                 alpha: AlphaMode::Straight,
-            }]],
-            kind: TextureKind::Texture2D,
+            },
         };
 
         let encoded = encode_dds_image(&original).unwrap();
         let decoded = decode_dds_image(&encoded).unwrap();
 
-        assert_eq!(decoded.surfaces[0][0].format, ktx2::Format::BC7_UNORM_BLOCK);
-        assert_eq!(decoded.surfaces[0][0].color_space, ColorSpace::Linear);
+        assert_eq!(decoded.desc.format, ktx2::Format::BC7_UNORM_BLOCK);
+        assert_eq!(decoded.desc.color_space, ColorSpace::Linear);
         assert_eq!(decoded.surfaces[0][0].data, vec![0xFF; 16]);
     }
 
@@ -521,9 +530,6 @@ mod tests {
                     depth: 1,
                     stride: 16,
                     slice_stride: 0,
-                    format: ktx2::Format::R8G8B8A8_UNORM,
-                    color_space: ColorSpace::Linear,
-                    alpha: AlphaMode::Straight,
                 },
                 Surface {
                     data: vec![0xBB; 2 * 2 * 4],
@@ -532,9 +538,6 @@ mod tests {
                     depth: 1,
                     stride: 8,
                     slice_stride: 0,
-                    format: ktx2::Format::R8G8B8A8_UNORM,
-                    color_space: ColorSpace::Linear,
-                    alpha: AlphaMode::Straight,
                 },
                 Surface {
                     data: vec![0xCC; 4],
@@ -543,12 +546,14 @@ mod tests {
                     depth: 1,
                     stride: 4,
                     slice_stride: 0,
-                    format: ktx2::Format::R8G8B8A8_UNORM,
-                    color_space: ColorSpace::Linear,
-                    alpha: AlphaMode::Straight,
                 },
             ]],
             kind: TextureKind::Texture2D,
+            desc: FormatDesc {
+                format: ktx2::Format::R8G8B8A8_UNORM,
+                color_space: ColorSpace::Linear,
+                alpha: AlphaMode::Straight,
+            },
         };
 
         let encoded = encode_dds_image(&original).unwrap();
@@ -573,9 +578,6 @@ mod tests {
                     depth: 1,
                     stride: 16,
                     slice_stride: 0,
-                    format: ktx2::Format::R8G8B8A8_UNORM,
-                    color_space: ColorSpace::Linear,
-                    alpha: AlphaMode::Straight,
                 }]
             })
             .collect();
@@ -583,6 +585,11 @@ mod tests {
         let original = Image {
             surfaces: faces,
             kind: TextureKind::Cubemap,
+            desc: FormatDesc {
+                format: ktx2::Format::R8G8B8A8_UNORM,
+                color_space: ColorSpace::Linear,
+                alpha: AlphaMode::Straight,
+            },
         };
 
         let encoded = encode_dds_image(&original).unwrap();

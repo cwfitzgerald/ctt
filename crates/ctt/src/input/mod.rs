@@ -71,19 +71,12 @@ pub fn decode_container_as(
         InputFormat::Dds => dds::decode_dds_image(data)?,
     };
 
-    // Apply overrides to all surfaces.
-    if overrides.color_space.is_some() || overrides.alpha.is_some() {
-        for layer in &mut image.surfaces {
-            for surface in layer {
-                if let Some(cs) = overrides.color_space {
-                    surface.format = surface.format.with_color_space(cs);
-                    surface.color_space = cs;
-                }
-                if let Some(alpha) = overrides.alpha {
-                    surface.alpha = alpha;
-                }
-            }
-        }
+    if let Some(cs) = overrides.color_space {
+        image.desc.format = image.desc.format.with_color_space(cs);
+        image.desc.color_space = cs;
+    }
+    if let Some(alpha) = overrides.alpha {
+        image.desc.alpha = alpha;
     }
 
     Ok(image)

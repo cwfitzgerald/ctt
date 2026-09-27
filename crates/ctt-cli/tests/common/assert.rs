@@ -71,7 +71,6 @@ pub fn decode(bytes: &[u8]) -> Image {
 pub fn assert_surface_data_eq(a: &Surface, b: &Surface, label: &str) {
     assert_eq!(a.width, b.width, "{label}: width mismatch");
     assert_eq!(a.height, b.height, "{label}: height mismatch");
-    assert_eq!(a.format, b.format, "{label}: format mismatch");
     assert_eq!(a.data, b.data, "{label}: pixel data mismatch");
 }
 
@@ -82,6 +81,7 @@ pub fn assert_surface_data_eq(a: &Surface, b: &Surface, label: &str) {
 pub fn assert_payload_eq(a: &[u8], b: &[u8]) {
     let img_a = decode(a);
     let img_b = decode(b);
+    assert_eq!(img_a.desc.format, img_b.desc.format, "format mismatch");
     assert_eq!(
         img_a.surfaces.len(),
         img_b.surfaces.len(),

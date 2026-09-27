@@ -145,7 +145,7 @@ pub fn vk_format_to_dxgi(format: ktx2::Format, color_space: ColorSpace) -> Resul
 /// Encode an [`Image`](crate::surface::Image) as a DDS file.
 pub fn encode_dds_image(image: &crate::surface::Image) -> Result<Vec<u8>> {
     let first = &image.surfaces[0][0];
-    let dxgi_format = vk_format_to_dxgi(first.format, first.color_space)?;
+    let dxgi_format = vk_format_to_dxgi(image.desc.format, image.desc.color_space)?;
 
     // Image::validate has already enforced kind invariants by the time we get
     // here (Cubemap multiple-of-6, Texture3D single surface).
@@ -197,7 +197,7 @@ pub fn encode_dds_image(image: &crate::surface::Image) -> Result<Vec<u8>> {
     let mut data = Vec::new();
     for layer in &image.surfaces {
         for mip in layer {
-            data.extend_from_slice(&mip.tight_data());
+            data.extend_from_slice(&mip.tight_data(image.desc.format));
         }
     }
     dds.data = data;

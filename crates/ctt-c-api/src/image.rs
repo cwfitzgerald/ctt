@@ -1,6 +1,6 @@
 use crate::error::{Status, set_last_error};
 use crate::surface::{Surface, take_surface};
-use crate::types::{AlphaMode, ColorSpace, Format, TextureKind};
+use crate::types::{AlphaMode, ColorSpace, FormatDesc, TextureKind};
 
 /// Opaque handle to a multi-layer / multi-mip image.
 ///
@@ -10,12 +10,24 @@ use crate::types::{AlphaMode, ColorSpace, Format, TextureKind};
 /// (which carries depth on each surface).
 pub struct Image(pub(crate) ctt::Image);
 
-/// Create an empty image of the given kind.
+/// Create an empty image of the given kind whose surfaces are read as `desc`.
+///
+/// `desc.format` must be non-zero and agree with `desc.color_space`.
+///
+/// On failure returns `NULL` and sets the thread-local error message.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn ctt_image_create(kind: TextureKind) -> *mut Image {
+pub unsafe extern "C" fn ctt_image_create(kind: TextureKind, desc: FormatDesc) -> *mut Image {
+    let desc = match desc.into_inner() {
+        Ok(desc) => desc,
+        Err(msg) => {
+            set_last_error(format!("ctt_image_create: {msg}"));
+            return std::ptr::null_mut();
+        }
+    };
     let img = ctt::Image {
         surfaces: Vec::new(),
         kind: kind.into(),
+        desc,
     };
     Box::into_raw(Box::new(Image(img)))
 }
@@ -94,6 +106,21 @@ pub unsafe extern "C" fn ctt_image_mip_count(img: *const Image, layer: usize) ->
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn ctt_image_kind(img: *const Image) -> TextureKind {
     unsafe { img.as_ref() }.map_or(TextureKind::Texture2d, |i| i.0.kind.into())
+}
+
+/// How to read the bytes of every surface in the image. Returns a desc with
+/// format `0` (`VK_FORMAT_UNDEFINED`), `CTT_COLOR_SPACE_LINEAR`, and
+/// `CTT_ALPHA_MODE_STRAIGHT` if `img` is null.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ctt_image_desc(img: *const Image) -> FormatDesc {
+    unsafe { img.as_ref() }.map_or(
+        FormatDesc {
+            format: 0,
+            color_space: ColorSpace::Linear,
+            alpha: AlphaMode::Straight,
+        },
+        |i| i.0.desc.into(),
+    )
 }
 
 fn surface_at(img: &Image, layer: usize, mip: usize) -> Option<&ctt::Surface> {
@@ -220,51 +247,6 @@ pub unsafe extern "C" fn ctt_image_surface_slice_stride(
         return 0;
     };
     surface_at(image, layer, mip).map_or(0, |s| s.slice_stride)
-}
-
-/// VkFormat of the surface at `(layer, mip)`. Returns `0`
-/// (`VK_FORMAT_UNDEFINED`) if `img` is null or `(layer, mip)` is out of
-/// range.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn ctt_image_surface_format(
-    img: *const Image,
-    layer: usize,
-    mip: usize,
-) -> Format {
-    let Some(image) = (unsafe { img.as_ref() }) else {
-        return 0;
-    };
-    surface_at(image, layer, mip).map_or(0, |s| s.format.value())
-}
-
-/// Color space of the surface at `(layer, mip)`. Returns
-/// `CTT_COLOR_SPACE_LINEAR` if `img` is null or `(layer, mip)` is out of
-/// range.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn ctt_image_surface_color_space(
-    img: *const Image,
-    layer: usize,
-    mip: usize,
-) -> ColorSpace {
-    let Some(image) = (unsafe { img.as_ref() }) else {
-        return ColorSpace::Linear;
-    };
-    surface_at(image, layer, mip).map_or(ColorSpace::Linear, |s| s.color_space.into())
-}
-
-/// Alpha mode of the surface at `(layer, mip)`. Returns
-/// `CTT_ALPHA_MODE_STRAIGHT` if `img` is null or `(layer, mip)` is out of
-/// range.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn ctt_image_surface_alpha(
-    img: *const Image,
-    layer: usize,
-    mip: usize,
-) -> AlphaMode {
-    let Some(image) = (unsafe { img.as_ref() }) else {
-        return AlphaMode::Straight;
-    };
-    surface_at(image, layer, mip).map_or(AlphaMode::Straight, |s| s.alpha.into())
 }
 
 pub(crate) unsafe fn take_image(ptr: *mut Image) -> Result<ctt::Image, Status> {

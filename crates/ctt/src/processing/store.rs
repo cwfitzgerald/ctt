@@ -7,24 +7,24 @@
 use crate::alpha::AlphaMode;
 use crate::error::{Error, Result};
 use crate::format_kind::{FormatFamily, FormatKind, classify};
-use crate::surface::{ColorSpace, Surface};
+use crate::surface::{ColorSpace, FormatDesc, Surface};
 use crate::vk_format::FormatExt;
 
 use super::buffer::Buffer;
 use super::kernels::alpha;
 use super::store_kernels as k;
 
-/// Store a f32 buffer to a surface of `target_format`.
+/// Store a f32 buffer to a surface in `desc.format`.
 ///
 /// The buffer is assumed to be in linear + premultiplied form (as loaders
-/// produce it). `target_alpha` drives unpremultiplication before write.
-pub fn store_f32(
-    mut buf: Buffer<f32>,
-    target_format: ktx2::Format,
-    target_color_space: ColorSpace,
-    target_alpha: AlphaMode,
-) -> Result<Surface> {
+/// produce it). `desc.alpha` drives unpremultiplication before write.
+pub fn store_f32(mut buf: Buffer<f32>, desc: FormatDesc) -> Result<Surface> {
     profiling::scope!("store_f32");
+    let FormatDesc {
+        format: target_format,
+        color_space: target_color_space,
+        alpha: target_alpha,
+    } = desc;
     let info = classify(target_format, target_color_space).ok_or_else(|| {
         Error::UnsupportedFormat(format!(
             "float pipeline: unsupported target format {target_format:?}"
@@ -104,20 +104,17 @@ pub fn store_f32(
         depth: 1,
         stride,
         slice_stride: 0,
-        format: target_format,
-        color_space: target_color_space,
-        alpha: target_alpha,
     })
 }
 
-/// Store a f64 buffer to a surface of `target_format` (float family only).
-pub fn store_f64(
-    mut buf: Buffer<f64>,
-    target_format: ktx2::Format,
-    target_color_space: ColorSpace,
-    target_alpha: AlphaMode,
-) -> Result<Surface> {
+/// Store a f64 buffer to a surface in `desc.format` (float family only).
+pub fn store_f64(mut buf: Buffer<f64>, desc: FormatDesc) -> Result<Surface> {
     profiling::scope!("store_f64");
+    let FormatDesc {
+        format: target_format,
+        color_space: target_color_space,
+        alpha: target_alpha,
+    } = desc;
     let info = classify(target_format, target_color_space).ok_or_else(|| {
         Error::UnsupportedFormat(format!(
             "f64 pipeline: unsupported target format {target_format:?}"
@@ -156,18 +153,11 @@ pub fn store_f64(
         depth: 1,
         stride,
         slice_stride: 0,
-        format: target_format,
-        color_space: target_color_space,
-        alpha: target_alpha,
     })
 }
 
 /// Store a u32 buffer to an integer-family target format.
-pub fn store_u32(
-    buf: Buffer<u32>,
-    target_format: ktx2::Format,
-    target_alpha: AlphaMode,
-) -> Result<Surface> {
+pub fn store_u32(buf: Buffer<u32>, target_format: ktx2::Format) -> Result<Surface> {
     profiling::scope!("store_u32");
     // Integer targets never carry sRGB — color_space is irrelevant here.
     let info = classify(target_format, ColorSpace::Linear).ok_or_else(|| {
@@ -212,17 +202,10 @@ pub fn store_u32(
         depth: 1,
         stride,
         slice_stride: 0,
-        format: target_format,
-        color_space: ColorSpace::Linear,
-        alpha: target_alpha,
     })
 }
 
-pub fn store_u64(
-    buf: Buffer<u64>,
-    target_format: ktx2::Format,
-    target_alpha: AlphaMode,
-) -> Result<Surface> {
+pub fn store_u64(buf: Buffer<u64>, target_format: ktx2::Format) -> Result<Surface> {
     profiling::scope!("store_u64");
     let info = classify(target_format, ColorSpace::Linear).ok_or_else(|| {
         Error::UnsupportedFormat(format!(
@@ -258,9 +241,6 @@ pub fn store_u64(
         depth: 1,
         stride,
         slice_stride: 0,
-        format: target_format,
-        color_space: ColorSpace::Linear,
-        alpha: target_alpha,
     })
 }
 
@@ -284,9 +264,11 @@ mod tests {
         };
         let surface = store_f32(
             buf,
-            ktx2::Format::R16G16B16A16_UNORM,
-            ColorSpace::Srgb,
-            AlphaMode::Opaque,
+            FormatDesc {
+                format: ktx2::Format::R16G16B16A16_UNORM,
+                color_space: ColorSpace::Srgb,
+                alpha: AlphaMode::Opaque,
+            },
         )
         .unwrap();
 

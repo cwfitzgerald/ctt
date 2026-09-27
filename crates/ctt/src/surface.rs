@@ -5,7 +5,7 @@ use crate::alpha::AlphaMode;
 use crate::error::{Error, Result};
 use crate::vk_format::FormatExt;
 
-/// Color space metadata for a surface.
+/// Color space metadata for an image.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Default)]
 pub enum ColorSpace {
     #[default]
@@ -22,12 +22,49 @@ impl fmt::Display for ColorSpace {
     }
 }
 
+/// How to read the bytes of every surface in an [`Image`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct FormatDesc {
+    /// Pixel or block format of the surface data.
+    ///
+    /// Must agree with `color_space`:
+    ///
+    /// - [`ColorSpace::Srgb`]: if the format has an sRGB variant, the format
+    ///   must be that variant. `R8G8B8A8_SRGB` is valid and `R8G8B8A8_UNORM`
+    ///   is not. `R16G16B16A16_SFLOAT` has no sRGB variant, so it is valid.
+    /// - [`ColorSpace::Linear`]: the format must not be an sRGB variant.
+    ///   `R8G8B8A8_UNORM` and `R16G16B16A16_SFLOAT` are valid and
+    ///   `R8G8B8A8_SRGB` is not.
+    ///
+    /// See [`FormatExt::with_color_space`].
+    pub format: ktx2::Format,
+    /// Color space the pixel values live in (sRGB or linear).
+    ///
+    /// Limits which formats are valid. See [`FormatDesc::format`].
+    pub color_space: ColorSpace,
+    /// How the alpha channel relates to the color channels.
+    pub alpha: AlphaMode,
+}
+
+impl FormatDesc {
+    /// Verify that `format` agrees with `color_space`.
+    pub fn validate(&self) -> Result<()> {
+        let matching_format = self.format.with_color_space(self.color_space);
+        if matching_format != self.format {
+            return Err(Error::InvalidImage(format!(
+                "color space `{}` requires format `{matching_format:?}`, not `{:?}`",
+                self.color_space, self.format,
+            )));
+        }
+        Ok(())
+    }
+}
+
 /// A single image surface — either raw pixels or compressed blocks.
 ///
 /// 2D surfaces use `depth == 1`; 3D (volume) surfaces use `depth > 1` with all
-/// Z slices packed contiguously in `data`. The format field determines whether
-/// the data is uncompressed pixel data or compressed block data — use
-/// [`FormatExt::is_compressed`] to check.
+/// Z slices packed contiguously in `data`. The [`FormatDesc`] of the owning
+/// [`Image`] tells how to read `data`.
 #[derive(Debug, Clone)]
 pub struct Surface {
     /// Raw bytes: uncompressed pixels or compressed blocks, laid out row by
@@ -50,25 +87,6 @@ pub struct Surface {
     /// for uncompressed). Meaningful only when `depth > 1`; set to `0` for 2D
     /// surfaces.
     pub slice_stride: u32,
-    /// Pixel or block format of `data`.
-    ///
-    /// Must agree with `color_space`:
-    ///
-    /// - [`ColorSpace::Srgb`]: if the format has an sRGB variant, the format
-    ///   must be that variant. `R8G8B8A8_SRGB` is valid and `R8G8B8A8_UNORM`
-    ///   is not. `R16G16B16A16_SFLOAT` has no sRGB variant, so it is valid.
-    /// - [`ColorSpace::Linear`]: the format must not be an sRGB variant.
-    ///   `R8G8B8A8_UNORM` and `R16G16B16A16_SFLOAT` are valid and
-    ///   `R8G8B8A8_SRGB` is not.
-    ///
-    /// See [`FormatExt::with_color_space`].
-    pub format: ktx2::Format,
-    /// Color space the pixel values live in (sRGB or linear).
-    ///
-    /// Limits which formats are valid. See [`Surface::format`].
-    pub color_space: ColorSpace,
-    /// How the alpha channel relates to the color channels.
-    pub alpha: AlphaMode,
 }
 
 /// Texture topology — distinguishes 2D, cubemap, and 3D textures.
@@ -96,14 +114,18 @@ pub enum TextureKind {
 /// of the slice axis depends on `kind`; see [`TextureKind`].
 #[derive(Debug, Clone)]
 pub struct Image {
+    /// Surfaces by slice, then mip level.
     pub surfaces: Vec<Vec<Surface>>,
+    /// Texture topology. Sets the meaning of the slice axis.
     pub kind: TextureKind,
+    /// How to read the bytes of every surface.
+    pub desc: FormatDesc,
 }
 
 impl Image {
-    /// Verify that this `Image` satisfies the invariants implied by its `kind`
-    /// and that all surfaces share the metadata the pipeline assumes is
-    /// uniform (format, color space, alpha mode, mip count).
+    /// Verify that this `Image` satisfies the invariants implied by its `kind`,
+    /// that `desc` is valid, and that all layers have the same mip count and
+    /// sizes.
     pub fn validate(&self) -> Result<()> {
         // 1. Layout shape.
         if self.surfaces.is_empty() {
@@ -117,13 +139,9 @@ impl Image {
             }
         }
 
-        // 2. Cross-surface uniformity (mip count, format, color space, alpha,
-        // size per mip level) and depth >= 1.
+        // 2. Cross-layer uniformity (mip count, size per mip level) and
+        // depth >= 1.
         let expected_mips = self.surfaces[0].len();
-        let head = &self.surfaces[0][0];
-        let expected_format = head.format;
-        let expected_cs = head.color_space;
-        let expected_alpha = head.alpha;
 
         for (layer_idx, layer) in self.surfaces.iter().enumerate() {
             if layer.len() != expected_mips {
@@ -133,24 +151,6 @@ impl Image {
                 )));
             }
             for (mip_idx, s) in layer.iter().enumerate() {
-                if s.format != expected_format {
-                    return Err(Error::InvalidImage(format!(
-                        "layer {layer_idx} mip {mip_idx}: format {:?} differs from layer 0 ({:?})",
-                        s.format, expected_format,
-                    )));
-                }
-                if s.color_space != expected_cs {
-                    return Err(Error::InvalidImage(format!(
-                        "layer {layer_idx} mip {mip_idx}: color space {:?} differs from layer 0 ({:?})",
-                        s.color_space, expected_cs,
-                    )));
-                }
-                if s.alpha != expected_alpha {
-                    return Err(Error::InvalidImage(format!(
-                        "layer {layer_idx} mip {mip_idx}: alpha {:?} differs from layer 0 ({:?})",
-                        s.alpha, expected_alpha,
-                    )));
-                }
                 let reference = &self.surfaces[0][mip_idx];
                 if (s.width, s.height) != (reference.width, reference.height) {
                     return Err(Error::InvalidImage(format!(
@@ -166,15 +166,8 @@ impl Image {
             }
         }
 
-        // 3. The format's sRGB-ness agrees with the color space. Step 2 makes
-        // this check on the head sufficient.
-        let matching_format = expected_format.with_color_space(expected_cs);
-        if matching_format != expected_format {
-            return Err(Error::InvalidImage(format!(
-                "color space `{expected_cs}` requires format `{matching_format:?}`, \
-                 not `{expected_format:?}`",
-            )));
-        }
+        // 3. The format's sRGB-ness agrees with the color space.
+        self.desc.validate()?;
 
         // 4. Kind invariants. Done before stride/length so that "Texture2D
         // with depth>1" errors with the structural message instead of
@@ -219,7 +212,7 @@ impl Image {
         // implies 3D with the per-mip depth chain already verified.
         for (layer_idx, layer) in self.surfaces.iter().enumerate() {
             for (mip_idx, s) in layer.iter().enumerate() {
-                s.validate_layout().map_err(|msg| {
+                s.validate_layout(self.desc.format).map_err(|msg| {
                     Error::InvalidImage(format!("layer {layer_idx} mip {mip_idx}: {msg}"))
                 })?;
             }
@@ -248,28 +241,25 @@ impl Surface {
     /// slices at the declared strides. Returns the error message on failure.
     ///
     /// Treats `depth <= 1` as a single slice.
-    pub(crate) fn validate_layout(&self) -> std::result::Result<(), String> {
+    pub(crate) fn validate_layout(&self, format: ktx2::Format) -> std::result::Result<(), String> {
         if self.width == 0 || self.height == 0 {
             return Err(format!(
                 "width and height must be >= 1, got {}x{}",
                 self.width, self.height,
             ));
         }
-        let Some(tight_row) = self.tight_row_bytes() else {
-            return Err(format!(
-                "format {:?} has no known pixel/block size",
-                self.format,
-            ));
+        let Some(tight_row) = self.tight_row_bytes(format) else {
+            return Err(format!("format {:?} has no known pixel/block size", format,));
         };
         if self.stride < tight_row {
             return Err(format!(
                 "stride {} is below the tight minimum {tight_row} for {:?} at width={}",
-                self.stride, self.format, self.width,
+                self.stride, format, self.width,
             ));
         }
         // Height zero was rejected above, so at least one physical row (or
         // block row) is present.
-        let rows = self.rows_in_image() as usize;
+        let rows = self.rows_in_image(format) as usize;
         let row_span = (rows - 1)
             .checked_mul(self.stride as usize)
             .and_then(|v| v.checked_add(tight_row as usize))
@@ -311,8 +301,8 @@ impl Surface {
 
     /// Number of rows or rows-of-blocks in this surface — `height` for
     /// uncompressed formats, `ceil(height / block_h)` for compressed.
-    fn rows_in_image(&self) -> u32 {
-        if let Some((_, bh)) = self.format.block_size() {
+    fn rows_in_image(&self, format: ktx2::Format) -> u32 {
+        if let Some((_, bh)) = format.block_size() {
             self.height.div_ceil(bh as u32)
         } else {
             self.height
@@ -322,12 +312,12 @@ impl Surface {
     /// Bytes for one tightly-packed row (or row-of-blocks for compressed
     /// formats). Returns `None` if the format's pixel/block size is unknown or
     /// the byte count overflows `u32`.
-    pub fn tight_row_bytes(&self) -> Option<u32> {
-        if let Some((bw, _)) = self.format.block_size() {
-            let bpb = self.format.bytes_per_block()? as u32;
+    pub fn tight_row_bytes(&self, format: ktx2::Format) -> Option<u32> {
+        if let Some((bw, _)) = format.block_size() {
+            let bpb = format.bytes_per_block()? as u32;
             self.width.div_ceil(bw as u32).checked_mul(bpb)
         } else {
-            let bpp = self.format.bytes_per_pixel()? as u32;
+            let bpp = format.bytes_per_pixel()? as u32;
             self.width.checked_mul(bpp)
         }
     }
@@ -335,18 +325,19 @@ impl Surface {
     /// Bytes for one tightly-packed Z slice. For 2D surfaces this is the
     /// whole image; for 3D it's one entry along the depth axis. Returns `None`
     /// if the format size is unknown or the byte count overflows `u32`.
-    pub fn tight_slice_bytes(&self) -> Option<u32> {
-        self.tight_row_bytes()?.checked_mul(self.rows_in_image())
+    pub fn tight_slice_bytes(&self, format: ktx2::Format) -> Option<u32> {
+        self.tight_row_bytes(format)?
+            .checked_mul(self.rows_in_image(format))
     }
 
     /// True when `stride` and (for `depth > 1`) `slice_stride` already match
     /// the tightly-packed minimums and `data` is exactly the right length —
     /// i.e., `data` can be reused without repacking.
-    pub fn is_tightly_packed(&self) -> bool {
-        let Some(tight_row) = self.tight_row_bytes() else {
+    pub fn is_tightly_packed(&self, format: ktx2::Format) -> bool {
+        let Some(tight_row) = self.tight_row_bytes(format) else {
             return false;
         };
-        let Some(tight_slice) = self.tight_slice_bytes() else {
+        let Some(tight_slice) = self.tight_slice_bytes(format) else {
             return false;
         };
         let expected_total = tight_slice as usize * self.depth as usize;
@@ -366,17 +357,17 @@ impl Surface {
     /// the bridge for surfaces that carry padded strides through the
     /// passthrough fast path. Panics if the format's pixel/block size is
     /// unknown — `Image::validate` is the place that should reject those.
-    pub fn tight_data(&self) -> Cow<'_, [u8]> {
-        if self.is_tightly_packed() {
+    pub fn tight_data(&self, format: ktx2::Format) -> Cow<'_, [u8]> {
+        if self.is_tightly_packed(format) {
             return Cow::Borrowed(&self.data);
         }
         let tight_row = self
-            .tight_row_bytes()
+            .tight_row_bytes(format)
             .expect("tight_data requires a known format size");
         let tight_slice = self
-            .tight_slice_bytes()
+            .tight_slice_bytes(format)
             .expect("tight_data requires a known format size");
-        let rows = self.rows_in_image() as usize;
+        let rows = self.rows_in_image(format) as usize;
         let row = tight_row as usize;
         let slice_in = self.slice_stride as usize;
         let row_in = self.stride as usize;
@@ -399,9 +390,8 @@ impl Surface {
     ///
     /// Panics if the format is compressed or has unknown bytes-per-pixel, or
     /// if the surface is empty (width or height of 0).
-    pub fn tile_to_blocks(&self, block_w: u32, block_h: u32) -> Vec<u8> {
-        let bpp = self
-            .format
+    pub fn tile_to_blocks(&self, format: ktx2::Format, block_w: u32, block_h: u32) -> Vec<u8> {
+        let bpp = format
             .bytes_per_pixel()
             .expect("tile_to_blocks requires an uncompressed format with known bpp")
             as u32;
@@ -448,6 +438,12 @@ impl Surface {
 mod tests {
     use super::*;
 
+    const RGBA8: FormatDesc = FormatDesc {
+        format: ktx2::Format::R8G8B8A8_UNORM,
+        color_space: ColorSpace::Linear,
+        alpha: AlphaMode::Straight,
+    };
+
     #[test]
     fn tile_to_blocks_basic() {
         // 2x2 RGBA8 image, tile into 4x4 blocks (padded)
@@ -461,12 +457,9 @@ mod tests {
             depth: 1,
             stride: 8,
             slice_stride: 0,
-            format: ktx2::Format::R8G8B8A8_UNORM,
-            color_space: ColorSpace::Linear,
-            alpha: AlphaMode::Straight,
         };
 
-        let blocks = surface.tile_to_blocks(4, 4);
+        let blocks = surface.tile_to_blocks(RGBA8.format, 4, 4);
         // 1 block of 4x4 pixels, 4 bytes each = 64 bytes
         assert_eq!(blocks.len(), 64);
         // First pixel should be (1,2,3,4)
@@ -501,12 +494,9 @@ mod tests {
             depth: 1,
             stride: 3 * 4,
             slice_stride: 0,
-            format: ktx2::Format::R8G8B8A8_UNORM,
-            color_space: ColorSpace::Linear,
-            alpha: AlphaMode::Straight,
         };
 
-        let blocks = surface.tile_to_blocks(4, 4);
+        let blocks = surface.tile_to_blocks(RGBA8.format, 4, 4);
         assert_eq!(blocks.len(), 64);
 
         // Pixel (3, 0) should replicate pixel (2, 0) = (2, 0, 0, 255).
@@ -537,12 +527,9 @@ mod tests {
             depth: 1,
             stride: 12, // 8 bytes of pixels + 4 bytes of padding
             slice_stride: 0,
-            format: ktx2::Format::R8G8B8A8_UNORM,
-            color_space: ColorSpace::Linear,
-            alpha: AlphaMode::Straight,
         };
 
-        let blocks = surface.tile_to_blocks(4, 4);
+        let blocks = surface.tile_to_blocks(RGBA8.format, 4, 4);
         assert_eq!(blocks.len(), 64);
         // The padding byte 0xCC must never appear in the tiled output —
         // every pixel comes from the real width-2 source data, edge-replicated
@@ -568,9 +555,6 @@ mod tests {
             depth: 1,
             stride: width * 4,
             slice_stride: 0,
-            format: ktx2::Format::R8G8B8A8_UNORM,
-            color_space: ColorSpace::Linear,
-            alpha: AlphaMode::Straight,
         }
     }
 
@@ -579,6 +563,7 @@ mod tests {
         let img = Image {
             surfaces: vec![vec![s2d(4, 4)]],
             kind: TextureKind::Texture2D,
+            desc: RGBA8,
         };
         img.validate().unwrap();
     }
@@ -592,6 +577,7 @@ mod tests {
         let img = Image {
             surfaces: vec![vec![s]],
             kind: TextureKind::Texture2D,
+            desc: RGBA8,
         };
         let err = img.validate().unwrap_err();
         assert!(
@@ -608,6 +594,7 @@ mod tests {
         let img = Image {
             surfaces: vec![vec![s]],
             kind: TextureKind::Texture2D,
+            desc: RGBA8,
         };
         let err = img.validate().unwrap_err();
         assert!(
@@ -621,6 +608,7 @@ mod tests {
         let img = Image {
             surfaces: vec![vec![s2d(4, 4)]; 5],
             kind: TextureKind::Cubemap,
+            desc: RGBA8,
         };
         let err = img.validate().unwrap_err();
         assert!(err.to_string().contains("multiple of 6"), "got: {err}");
@@ -631,6 +619,7 @@ mod tests {
         let img = Image {
             surfaces: vec![vec![s2d(4, 4)]; 12],
             kind: TextureKind::Cubemap,
+            desc: RGBA8,
         };
         img.validate().unwrap();
     }
@@ -640,7 +629,11 @@ mod tests {
         for kind in [TextureKind::Texture2D, TextureKind::Cubemap] {
             let mut surfaces = vec![vec![s2d(4, 4)]; 6];
             surfaces[3] = vec![s2d(2, 2)];
-            let img = Image { surfaces, kind };
+            let img = Image {
+                surfaces,
+                kind,
+                desc: RGBA8,
+            };
             let err = img.validate().unwrap_err();
             assert!(
                 err.to_string().contains("differs from layer 0"),
@@ -654,6 +647,7 @@ mod tests {
         let img = Image {
             surfaces: vec![vec![s2d(4, 4), s2d(2, 2)], vec![s2d(4, 4), s2d(1, 1)]],
             kind: TextureKind::Texture2D,
+            desc: RGBA8,
         };
         let err = img.validate().unwrap_err();
         assert!(err.to_string().contains("layer 1 mip 1"), "got: {err}");
@@ -666,6 +660,7 @@ mod tests {
         let img = Image {
             surfaces: vec![vec![s]],
             kind: TextureKind::Texture2D,
+            desc: RGBA8,
         };
         let err = img.validate().unwrap_err();
         assert!(err.to_string().contains("depth must be 1"), "got: {err}");
@@ -684,11 +679,9 @@ mod tests {
                 depth: 2,
                 stride: 65536 * 4,
                 slice_stride: u32::MAX,
-                format: ktx2::Format::R8G8B8A8_UNORM,
-                color_space: ColorSpace::Linear,
-                alpha: AlphaMode::Straight,
             }]],
             kind: TextureKind::Texture3D,
+            desc: RGBA8,
         };
         let err = img.validate().unwrap_err();
         assert!(err.to_string().contains("overflows"), "got: {err}");
@@ -704,11 +697,13 @@ mod tests {
                 depth: 2,
                 stride: 4,
                 slice_stride: 2,
+            }]],
+            kind: TextureKind::Texture3D,
+            desc: FormatDesc {
                 format: ktx2::Format::R8_UNORM,
                 color_space: ColorSpace::Linear,
                 alpha: AlphaMode::Straight,
-            }]],
-            kind: TextureKind::Texture3D,
+            },
         };
 
         let err = img.validate().unwrap_err();
@@ -725,11 +720,13 @@ mod tests {
                 depth: u32::MAX,
                 stride: u32::MAX,
                 slice_stride: u32::MAX,
+            }]],
+            kind: TextureKind::Texture3D,
+            desc: FormatDesc {
                 format: ktx2::Format::R8_UNORM,
                 color_space: ColorSpace::Linear,
                 alpha: AlphaMode::Straight,
-            }]],
-            kind: TextureKind::Texture3D,
+            },
         };
 
         let result = std::panic::catch_unwind(|| img.validate());
@@ -742,6 +739,7 @@ mod tests {
         let img = Image {
             surfaces: vec![vec![s2d(4, 4)], vec![s2d(4, 4)]],
             kind: TextureKind::Texture3D,
+            desc: RGBA8,
         };
         let err = img.validate().unwrap_err();
         assert!(
@@ -764,6 +762,7 @@ mod tests {
         let img = Image {
             surfaces: vec![vec![base, mip1]],
             kind: TextureKind::Texture3D,
+            desc: RGBA8,
         };
         let err = img.validate().unwrap_err();
         assert!(
@@ -777,6 +776,7 @@ mod tests {
         let img = Image {
             surfaces: vec![(0..33).map(|_| s2d(1, 1)).collect()],
             kind: TextureKind::Texture3D,
+            desc: RGBA8,
         };
 
         let result = std::panic::catch_unwind(|| img.validate());
@@ -785,32 +785,20 @@ mod tests {
     }
 
     #[test]
-    fn validate_format_uniformity() {
-        let mut a = s2d(4, 4);
-        let mut b = s2d(4, 4);
-        b.format = ktx2::Format::R8G8B8A8_SRGB;
-        a.color_space = ColorSpace::Linear;
-        b.color_space = ColorSpace::Srgb;
-        let img = Image {
-            surfaces: vec![vec![a], vec![b]],
-            kind: TextureKind::Texture2D,
-        };
-        let err = img.validate().unwrap_err();
-        assert!(err.to_string().contains("format"), "got: {err}");
-    }
-
-    #[test]
     fn validate_format_color_space_mismatch() {
-        let mut unorm_srgb = s2d(4, 4);
-        unorm_srgb.format = ktx2::Format::R8G8B8A8_UNORM;
-        unorm_srgb.color_space = ColorSpace::Srgb;
-        let mut srgb_linear = s2d(4, 4);
-        srgb_linear.format = ktx2::Format::R8G8B8A8_SRGB;
-        srgb_linear.color_space = ColorSpace::Linear;
-        for s in [unorm_srgb, srgb_linear] {
+        let mismatches = [
+            (ktx2::Format::R8G8B8A8_UNORM, ColorSpace::Srgb),
+            (ktx2::Format::R8G8B8A8_SRGB, ColorSpace::Linear),
+        ];
+        for (format, color_space) in mismatches {
             let img = Image {
-                surfaces: vec![vec![s]],
+                surfaces: vec![vec![s2d(4, 4)]],
                 kind: TextureKind::Texture2D,
+                desc: FormatDesc {
+                    format,
+                    color_space,
+                    alpha: AlphaMode::Straight,
+                },
             };
             let err = img.validate().unwrap_err();
             assert!(matches!(err, Error::InvalidImage(_)), "got: {err:?}");
@@ -820,13 +808,16 @@ mod tests {
     #[test]
     fn validate_no_srgb_variant_accepts_srgb() {
         let mut s = s2d(4, 4);
-        s.format = ktx2::Format::R16G16B16A16_UNORM;
         s.stride = 4 * 8;
         s.data = vec![0; 4 * 4 * 8];
-        s.color_space = ColorSpace::Srgb;
         let img = Image {
             surfaces: vec![vec![s]],
             kind: TextureKind::Texture2D,
+            desc: FormatDesc {
+                format: ktx2::Format::R16G16B16A16_UNORM,
+                color_space: ColorSpace::Srgb,
+                alpha: AlphaMode::Straight,
+            },
         };
         img.validate().unwrap();
     }
@@ -839,6 +830,7 @@ mod tests {
                 vec![s2d(4, 4)], // missing mip 1
             ],
             kind: TextureKind::Texture2D,
+            desc: RGBA8,
         };
         let err = img.validate().unwrap_err();
         assert!(err.to_string().contains("mip"), "got: {err}");

@@ -4,7 +4,7 @@ use crate::encoders::Quality;
 use crate::encoders::backend::Encoder;
 use crate::encoders::edge;
 use crate::error::Result;
-use crate::surface::Surface;
+use crate::surface::{FormatDesc, Surface};
 use crate::vk_format::FormatExt as _;
 
 /// etcpak encoder settings.
@@ -92,6 +92,7 @@ impl Encoder for EtcpakEncoder {
 
     fn compress(
         surface: &Surface,
+        _desc: FormatDesc,
         format: ktx2::Format,
         quality: Quality,
         settings: &EtcpakSettings,
@@ -230,6 +231,12 @@ mod tests {
     use crate::alpha::AlphaMode;
     use crate::surface::ColorSpace;
 
+    const DESC: FormatDesc = FormatDesc {
+        format: ktx2::Format::R8G8B8A8_UNORM,
+        color_space: ColorSpace::Linear,
+        alpha: AlphaMode::Opaque,
+    };
+
     fn solid_surface(width: u32, height: u32, pixel: [u8; 4]) -> Surface {
         let mut data = Vec::with_capacity((width * height * 4) as usize);
         for _ in 0..(width * height) {
@@ -242,9 +249,6 @@ mod tests {
             depth: 1,
             stride: width * 4,
             slice_stride: 0,
-            format: ktx2::Format::R8G8B8A8_UNORM,
-            color_space: ColorSpace::Linear,
-            alpha: AlphaMode::Opaque,
         }
     }
 
@@ -274,9 +278,6 @@ mod tests {
             depth: 1,
             stride,
             slice_stride: 0,
-            format: ktx2::Format::R8G8B8A8_UNORM,
-            color_space: ColorSpace::Linear,
-            alpha: AlphaMode::Opaque,
         }
     }
 
@@ -291,6 +292,7 @@ mod tests {
         crate::encoders::assert_parallel_matches_serial(|| {
             EtcpakEncoder::compress(
                 &surface,
+                DESC,
                 ktx2::Format::BC1_RGBA_UNORM_BLOCK,
                 Quality::Fast,
                 &settings,
@@ -305,6 +307,7 @@ mod tests {
         let surface = solid_surface(7, 5, [255, 0, 0, 255]);
         let out = EtcpakEncoder::compress(
             &surface,
+            DESC,
             ktx2::Format::BC3_UNORM_BLOCK,
             Quality::Fast,
             &EtcpakSettings::default(),
@@ -325,6 +328,7 @@ mod tests {
         let surface = solid_surface(5, 5, [255, 255, 255, 255]);
         let out = EtcpakEncoder::compress(
             &surface,
+            DESC,
             ktx2::Format::ETC2_R8G8B8A8_UNORM_BLOCK,
             Quality::Fast,
             &EtcpakSettings::default(),
@@ -349,6 +353,7 @@ mod tests {
         let surface = solid_surface(8, 8, [128, 128, 128, 255]);
         let out = EtcpakEncoder::compress(
             &surface,
+            DESC,
             ktx2::Format::BC3_UNORM_BLOCK,
             Quality::Fast,
             &EtcpakSettings::default(),

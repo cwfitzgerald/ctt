@@ -122,6 +122,51 @@ fn array_mismatched_mip_counts_rejected() {
     );
 }
 
+/// Array assembly with inputs of different formats must error.
+#[test]
+fn array_mismatched_formats_rejected() {
+    let f = TestFixture::new();
+    let rgba8 = f.output_file("rgba8.ktx2");
+    let rgba16f = f.output_file("rgba16f.ktx2");
+    let output = f.output_file("array.ktx2");
+
+    write_ktx2(
+        synth_uncompressed(
+            Format::R8G8B8A8_UNORM,
+            4,
+            4,
+            ColorSpace::Linear,
+            AlphaMode::Opaque,
+        ),
+        &rgba8,
+    );
+    write_ktx2(
+        synth_uncompressed(
+            Format::R16G16B16A16_SFLOAT,
+            4,
+            4,
+            ColorSpace::Linear,
+            AlphaMode::Opaque,
+        ),
+        &rgba16f,
+    );
+
+    let result = run_cli([
+        "ctt",
+        rgba8.to_str().unwrap(),
+        rgba16f.to_str().unwrap(),
+        "-o",
+        output.to_str().unwrap(),
+    ]);
+    let msg = result
+        .expect_err("array assembly with mismatched formats must be rejected")
+        .to_string();
+    assert!(
+        msg.contains("differs from input 0"),
+        "error should name the mismatched input, got: {msg}"
+    );
+}
+
 /// Integer (UINT) input + compression target — the float pipeline can't accept
 /// integer inputs, so this must error.
 #[test]

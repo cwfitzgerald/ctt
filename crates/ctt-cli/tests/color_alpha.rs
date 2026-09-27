@@ -23,7 +23,12 @@ fn write_solid_rgba8_ktx2(
 fn first_surface(bytes: &[u8]) -> (Vec<u8>, ColorSpace, AlphaMode, Format) {
     let img = assert::decode(bytes);
     let s = &img.surfaces[0][0];
-    (s.data.clone(), s.color_space, s.alpha, s.format)
+    (
+        s.data.clone(),
+        img.desc.color_space,
+        img.desc.alpha,
+        img.desc.format,
+    )
 }
 
 /// sRGB(128) decodes to linear ≈ 0.2158 ≈ u8 55. Convert mid-grey sRGB

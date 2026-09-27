@@ -3,8 +3,8 @@
 use std::path::Path;
 
 use ctt::{
-    AlphaMode, ColorSpace, Container, ConvertSettings, Format, FormatExt, Image, PipelineOutput,
-    Surface, TextureKind,
+    AlphaMode, ColorSpace, Container, ConvertSettings, Format, FormatDesc, FormatExt, Image,
+    PipelineOutput, Surface, TextureKind,
 };
 
 /// Solid color RGBA8 image data.
@@ -60,11 +60,13 @@ pub fn make_image(
             depth: 1,
             stride: width * bpp,
             slice_stride: 0,
+        }]],
+        kind: TextureKind::Texture2D,
+        desc: FormatDesc {
             format,
             color_space,
             alpha,
-        }]],
-        kind: TextureKind::Texture2D,
+        },
     }
 }
 
@@ -86,15 +88,17 @@ pub fn make_cubemap_rgba8(
                 depth: 1,
                 stride: face_w * 4,
                 slice_stride: 0,
-                format: Format::R8G8B8A8_UNORM,
-                color_space,
-                alpha,
             }]
         })
         .collect();
     Image {
         surfaces,
         kind: TextureKind::Cubemap,
+        desc: FormatDesc {
+            format: Format::R8G8B8A8_UNORM,
+            color_space,
+            alpha,
+        },
     }
 }
 
@@ -126,11 +130,13 @@ pub fn make_compressed_image(
             depth: 1,
             stride,
             slice_stride: 0,
+        }]],
+        kind: TextureKind::Texture2D,
+        desc: FormatDesc {
             format,
             color_space,
             alpha,
-        }]],
-        kind: TextureKind::Texture2D,
+        },
     }
 }
 
@@ -284,15 +290,17 @@ pub fn make_array_image(
                 depth: 1,
                 stride: width * 4,
                 slice_stride: 0,
-                format: Format::R8G8B8A8_UNORM,
-                color_space,
-                alpha,
             }]
         })
         .collect();
     Image {
         surfaces,
         kind: ctt::TextureKind::Texture2D,
+        desc: FormatDesc {
+            format: Format::R8G8B8A8_UNORM,
+            color_space,
+            alpha,
+        },
     }
 }
 
@@ -312,15 +320,17 @@ pub fn make_cubemap_array_rgba8(cubes: usize, face: u32) -> Image {
                 depth: 1,
                 stride: face * 4,
                 slice_stride: 0,
-                format: Format::R8G8B8A8_UNORM,
-                color_space: ColorSpace::Linear,
-                alpha: AlphaMode::Opaque,
             }]);
         }
     }
     Image {
         surfaces,
         kind: ctt::TextureKind::Cubemap,
+        desc: FormatDesc {
+            format: Format::R8G8B8A8_UNORM,
+            color_space: ColorSpace::Linear,
+            alpha: AlphaMode::Opaque,
+        },
     }
 }
 
@@ -342,11 +352,13 @@ pub fn make_volume_rgba8(width: u32, height: u32, slice_colors: Vec<[u8; 4]>) ->
             depth,
             stride,
             slice_stride,
+        }]],
+        kind: ctt::TextureKind::Texture3D,
+        desc: FormatDesc {
             format: Format::R8G8B8A8_UNORM,
             color_space: ColorSpace::Linear,
             alpha: AlphaMode::Opaque,
-        }]],
-        kind: ctt::TextureKind::Texture3D,
+        },
     }
 }
 
@@ -373,15 +385,17 @@ pub fn synth_compressed_array(format: Format, width: u32, height: u32, layers: u
                 depth: 1,
                 stride,
                 slice_stride: 0,
-                format,
-                color_space: ColorSpace::Linear,
-                alpha: AlphaMode::Opaque,
             }]
         })
         .collect();
     Image {
         surfaces,
         kind: ctt::TextureKind::Texture2D,
+        desc: FormatDesc {
+            format,
+            color_space: ColorSpace::Linear,
+            alpha: AlphaMode::Opaque,
+        },
     }
 }
 

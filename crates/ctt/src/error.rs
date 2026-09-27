@@ -19,10 +19,6 @@ pub enum Error {
     #[error("cubemap requires exactly 6 faces, got {0}")]
     CubemapFaceCount(usize),
 
-    /// The faces of a cubemap do not all share the same dimensions.
-    #[error("cubemap faces must have uniform dimensions")]
-    CubemapNonUniformFaces,
-
     /// Block or supercompression of image data failed.
     #[error("compression failed: {0}")]
     Compression(String),

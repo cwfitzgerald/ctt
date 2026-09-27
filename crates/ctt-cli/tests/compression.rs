@@ -35,5 +35,5 @@ fn rgba8_to_bc7_ktx2_smoke() {
     assert_eq!(decoded.surfaces[0].len(), 1);
     assert_eq!(decoded.surfaces[0][0].width, 16);
     assert_eq!(decoded.surfaces[0][0].height, 16);
-    assert_eq!(decoded.surfaces[0][0].format, ktx2::Format::BC7_UNORM_BLOCK);
+    assert_eq!(decoded.desc.format, ktx2::Format::BC7_UNORM_BLOCK);
 }

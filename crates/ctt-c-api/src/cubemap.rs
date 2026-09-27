@@ -1,123 +1,82 @@
 use crate::error::{Status, catch_panic, map_error, set_last_error};
-use crate::surface::{Surface, take_surface};
+use crate::image::Image;
+use crate::surface::Surface;
+use crate::types::FormatDesc;
 
-/// Opaque handle to a cubemap input — either six separate face surfaces, a
-/// cross-layout image, or a horizontal strip of six faces.
+/// Split a horizontal (4×3) or vertical (3×4) cross-layout atlas into a
+/// cubemap image with one mip level per face.
 ///
-/// Pass to [`ctt_split_cubemap`] to extract the six face surfaces.
-pub struct CubemapInput(pub(crate) ctt::CubemapInput);
-
-/// Build a cubemap input from six separate face surfaces, ordered
-/// `+X, -X, +Y, -Y, +Z, -Z`.
-///
-/// `faces` must point to an array of exactly six surface handles; **all
-/// six are consumed** on both success and failure.
+/// Does not consume `surface`. On success writes a new image handle into
+/// `*out_image`; the faces are in `+X, -X, +Y, -Y, +Z, -Z` order. On failure
+/// leaves `*out_image` untouched.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn ctt_cubemap_input_separate_faces(
-    faces: *mut *mut Surface,
-) -> *mut CubemapInput {
-    catch_panic(std::ptr::null_mut(), || {
-        if faces.is_null() {
-            set_last_error("ctt_cubemap_input_separate_faces: faces pointer is null");
-            return std::ptr::null_mut();
-        }
-        let face_ptrs: [*mut Surface; 6] =
-            unsafe { std::ptr::read(faces.cast::<[*mut Surface; 6]>()) };
-        // Consume every face handle before returning, per the documented
-        // contract: all six are taken on both success and failure. Taking a
-        // face moves it into `taken`; if any handle is null we still drain the
-        // rest, then drop `taken` (freeing the successfully-taken faces) on the
-        // error path so none leak.
-        let mut taken: Vec<ctt::Surface> = Vec::with_capacity(6);
-        let mut saw_null = false;
-        for ptr in face_ptrs {
-            match unsafe { take_surface(ptr) } {
-                Ok(s) => taken.push(s),
-                Err(_) => saw_null = true,
-            }
-        }
-        if saw_null {
-            set_last_error("ctt_cubemap_input_separate_faces: a face handle is null");
-            return std::ptr::null_mut();
-        }
-        let arr: [ctt::Surface; 6] = taken
-            .try_into()
-            .expect("collected exactly 6 elements above");
-        let input = ctt::CubemapInput::SeparateFaces(Box::new(arr));
-        Box::into_raw(Box::new(CubemapInput(input)))
-    })
-}
-
-/// Build a cubemap input from a 4×3 cross-layout image. Consumes the surface.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn ctt_cubemap_input_cross(surface: *mut Surface) -> *mut CubemapInput {
-    let s = match unsafe { take_surface(surface) } {
-        Ok(s) => s,
-        Err(_) => {
-            set_last_error("ctt_cubemap_input_cross: surface is null");
-            return std::ptr::null_mut();
-        }
-    };
-    Box::into_raw(Box::new(CubemapInput(ctt::CubemapInput::Cross(s))))
-}
-
-/// Build a cubemap input from a horizontal strip of 6 faces. Consumes the
-/// surface.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn ctt_cubemap_input_strip(surface: *mut Surface) -> *mut CubemapInput {
-    let s = match unsafe { take_surface(surface) } {
-        Ok(s) => s,
-        Err(_) => {
-            set_last_error("ctt_cubemap_input_strip: surface is null");
-            return std::ptr::null_mut();
-        }
-    };
-    Box::into_raw(Box::new(CubemapInput(ctt::CubemapInput::Strip(s))))
-}
-
-/// Destroy a cubemap input. `input` may be NULL.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn ctt_cubemap_input_destroy(input: *mut CubemapInput) {
-    if input.is_null() {
-        return;
+pub unsafe extern "C" fn ctt_split_cubemap_cross(
+    surface: *const Surface,
+    desc: FormatDesc,
+    out_image: *mut *mut Image,
+) -> Status {
+    unsafe {
+        split(
+            "ctt_split_cubemap_cross",
+            surface,
+            desc,
+            out_image,
+            |surface, desc| ctt::CubemapInput::Cross { surface, desc },
+        )
     }
-    drop(unsafe { Box::from_raw(input) });
 }
 
-/// Split a cubemap input into six face surfaces.
+/// Split a horizontal strip of six faces into a cubemap image with one mip
+/// level per face.
 ///
-/// **Consumes** `input` on both success and failure. On success writes six
-/// new surface handles into `out_faces[0..6]`, in `+X, -X, +Y, -Y, +Z, -Z`
-/// order. On failure leaves `out_faces` untouched.
-///
-/// `out_faces` must point to space for six `ctt_surface_t` pointers.
+/// Does not consume `surface`. On success writes a new image handle into
+/// `*out_image`; the faces are in `+X, -X, +Y, -Y, +Z, -Z` order. On failure
+/// leaves `*out_image` untouched.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn ctt_split_cubemap(
-    input: *mut CubemapInput,
-    out_faces: *mut *mut Surface,
+pub unsafe extern "C" fn ctt_split_cubemap_strip(
+    surface: *const Surface,
+    desc: FormatDesc,
+    out_image: *mut *mut Image,
+) -> Status {
+    unsafe {
+        split(
+            "ctt_split_cubemap_strip",
+            surface,
+            desc,
+            out_image,
+            |surface, desc| ctt::CubemapInput::Strip { surface, desc },
+        )
+    }
+}
+
+/// Shared body of the `ctt_split_cubemap_*` entry points. `name` prefixes
+/// the error messages.
+unsafe fn split(
+    name: &str,
+    surface: *const Surface,
+    desc: FormatDesc,
+    out_image: *mut *mut Image,
+    input: impl FnOnce(&ctt::Surface, ctt::FormatDesc) -> ctt::CubemapInput<'_>,
 ) -> Status {
     catch_panic(Status::Internal, || {
-        if input.is_null() {
-            set_last_error("ctt_split_cubemap: input is null");
+        let Some(surface) = (unsafe { surface.as_ref() }) else {
+            set_last_error(format!("{name}: surface is null"));
+            return Status::NullPointer;
+        };
+        if out_image.is_null() {
+            set_last_error(format!("{name}: out_image is null"));
             return Status::NullPointer;
         }
-        if out_faces.is_null() {
-            // Still consume the input.
-            drop(unsafe { Box::from_raw(input) });
-            set_last_error("ctt_split_cubemap: out_faces is null");
-            return Status::NullPointer;
-        }
-
-        let boxed = unsafe { Box::from_raw(input) };
-        let result = ctt::split_cubemap(boxed.0);
-
-        match result {
-            Ok(faces) => {
-                let face_ptrs: [*mut Surface; 6] =
-                    faces.map(|s| Box::into_raw(Box::new(Surface(s))));
-                unsafe {
-                    std::ptr::write(out_faces.cast::<[*mut Surface; 6]>(), face_ptrs);
-                }
+        let desc = match desc.into_inner() {
+            Ok(desc) => desc,
+            Err(msg) => {
+                set_last_error(format!("{name}: {msg}"));
+                return Status::InvalidArgument;
+            }
+        };
+        match ctt::split_cubemap(input(&surface.0, desc)) {
+            Ok(image) => {
+                unsafe { *out_image = Box::into_raw(Box::new(Image(image))) };
                 Status::Ok
             }
             Err(e) => map_error(e),

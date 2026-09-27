@@ -3,7 +3,7 @@ use std::borrow::Cow;
 use crate::encoders::Quality;
 use crate::encoders::backend::Encoder;
 use crate::error::{Error, Result};
-use crate::surface::Surface;
+use crate::surface::{FormatDesc, Surface};
 
 /// bc7enc-rdo encoder settings.
 ///
@@ -95,6 +95,7 @@ impl Encoder for Bc7encEncoder {
 
     fn compress(
         surface: &Surface,
+        desc: FormatDesc,
         format: ktx2::Format,
         quality: Quality,
         settings: &Bc7encSettings,
@@ -128,7 +129,7 @@ impl Encoder for Bc7encEncoder {
             params.m_weights = weights;
         }
 
-        let pixels = surface.tile_to_blocks(4, 4);
+        let pixels = surface.tile_to_blocks(desc.format, 4, 4);
         // `tile_to_blocks` returns a fresh `Vec<u8>` with no alignment guarantee
         // for `u32`; fall back to a realigning copy on the (rare) under-aligned
         // allocation instead of panicking in `cast_slice`.
@@ -162,6 +163,12 @@ mod tests {
     use crate::alpha::AlphaMode;
     use crate::surface::ColorSpace;
 
+    const DESC: FormatDesc = FormatDesc {
+        format: ktx2::Format::R8G8B8A8_UNORM,
+        color_space: ColorSpace::Linear,
+        alpha: AlphaMode::Opaque,
+    };
+
     fn solid_red(width: u32, height: u32) -> Surface {
         let mut data = Vec::with_capacity((width * height * 4) as usize);
         for _ in 0..(width * height) {
@@ -174,9 +181,6 @@ mod tests {
             depth: 1,
             stride: width * 4,
             slice_stride: 0,
-            format: ktx2::Format::R8G8B8A8_UNORM,
-            color_space: ColorSpace::Linear,
-            alpha: AlphaMode::Opaque,
         }
     }
 
@@ -206,9 +210,6 @@ mod tests {
             depth: 1,
             stride,
             slice_stride: 0,
-            format: ktx2::Format::R8G8B8A8_UNORM,
-            color_space: ColorSpace::Linear,
-            alpha: AlphaMode::Opaque,
         }
     }
 
@@ -219,6 +220,7 @@ mod tests {
         crate::encoders::assert_parallel_matches_serial(|| {
             Bc7encEncoder::compress(
                 &surface,
+                DESC,
                 ktx2::Format::BC7_UNORM_BLOCK,
                 Quality::Fast,
                 &Bc7encSettings::default(),
@@ -232,6 +234,7 @@ mod tests {
         let surface = solid_red(5, 5);
         let out = Bc7encEncoder::compress(
             &surface,
+            DESC,
             ktx2::Format::BC7_UNORM_BLOCK,
             Quality::UltraFast,
             &Bc7encSettings::default(),
@@ -254,6 +257,7 @@ mod tests {
         let surface = solid_red(4, 4);
         let out = Bc7encEncoder::compress(
             &surface,
+            DESC,
             ktx2::Format::BC7_UNORM_BLOCK,
             Quality::Slow,
             &Bc7encSettings {

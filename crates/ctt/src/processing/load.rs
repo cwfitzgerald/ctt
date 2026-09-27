@@ -9,26 +9,26 @@
 use crate::alpha::AlphaMode;
 use crate::error::{Error, Result};
 use crate::format_kind::{FormatFamily, FormatKind, classify};
-use crate::surface::{ColorSpace, Surface};
+use crate::surface::{ColorSpace, FormatDesc, Surface};
 
 use super::buffer::Buffer;
 use super::kernels::alpha;
 use super::load_kernels as k;
 
 /// Load a surface into the f32 pipeline (linear + premultiplied).
-pub fn load_f32(surface: &Surface) -> Result<Buffer<f32>> {
+pub fn load_f32(surface: &Surface, desc: FormatDesc) -> Result<Buffer<f32>> {
     profiling::scope!("load_f32");
-    let info = classify(surface.format, surface.color_space).ok_or_else(|| {
+    let info = classify(desc.format, desc.color_space).ok_or_else(|| {
         Error::UnsupportedFormat(format!(
             "float pipeline: unsupported input format {:?}",
-            surface.format
+            desc.format
         ))
     })?;
 
     if info.family.is_integer() {
         return Err(Error::UnsupportedConversion(format!(
             "cannot load integer format {:?} into float pipeline",
-            surface.format,
+            desc.format,
         )));
     }
 
@@ -57,15 +57,15 @@ pub fn load_f32(surface: &Surface) -> Result<Buffer<f32>> {
         }
     };
 
-    // Respect Surface::color_space for FormatKinds that don't encode sRGB in
+    // Respect FormatDesc::color_space for FormatKinds that don't encode sRGB in
     // the format itself (e.g. R16G16B16A16_UNORM + ColorSpace::Srgb). 8-bit
     // kinds are promoted to their sRGB variants by `classify` and decoded
     // through the LUT inside the kernel.
-    if !srgb_decoded_by_kernel && surface.color_space == ColorSpace::Srgb {
+    if !srgb_decoded_by_kernel && desc.color_space == ColorSpace::Srgb {
         k::srgb_eotf_in_place_f32(&mut buf.pixels);
     }
 
-    if surface.alpha == AlphaMode::Straight {
+    if desc.alpha == AlphaMode::Straight {
         alpha::premultiply_f32(&mut buf);
     }
 
@@ -73,19 +73,19 @@ pub fn load_f32(surface: &Surface) -> Result<Buffer<f32>> {
 }
 
 /// Load a surface into the f64 pipeline (float only, no sRGB / no integer).
-pub fn load_f64(surface: &Surface) -> Result<Buffer<f64>> {
+pub fn load_f64(surface: &Surface, desc: FormatDesc) -> Result<Buffer<f64>> {
     profiling::scope!("load_f64");
-    let info = classify(surface.format, surface.color_space).ok_or_else(|| {
+    let info = classify(desc.format, desc.color_space).ok_or_else(|| {
         Error::UnsupportedFormat(format!(
             "f64 pipeline: unsupported input format {:?}",
-            surface.format
+            desc.format
         ))
     })?;
 
     if !matches!(info.family, FormatFamily::Float) {
         return Err(Error::UnsupportedConversion(format!(
             "f64 pipeline requires a float-family source, got {:?}",
-            surface.format,
+            desc.format,
         )));
     }
 
@@ -99,7 +99,7 @@ pub fn load_f64(surface: &Surface) -> Result<Buffer<f64>> {
         }
     };
 
-    if surface.alpha == AlphaMode::Straight {
+    if desc.alpha == AlphaMode::Straight {
         alpha::premultiply_f64(&mut buf);
     }
 
@@ -107,19 +107,19 @@ pub fn load_f64(surface: &Surface) -> Result<Buffer<f64>> {
 }
 
 /// Load a surface into the u32 pipeline (UINT/SINT only, sign-extended bit-cast).
-pub fn load_u32(surface: &Surface) -> Result<Buffer<u32>> {
+pub fn load_u32(surface: &Surface, desc: FormatDesc) -> Result<Buffer<u32>> {
     profiling::scope!("load_u32");
-    let info = classify(surface.format, surface.color_space).ok_or_else(|| {
+    let info = classify(desc.format, desc.color_space).ok_or_else(|| {
         Error::UnsupportedFormat(format!(
             "u32 pipeline: unsupported input format {:?}",
-            surface.format
+            desc.format
         ))
     })?;
 
     if !info.family.is_integer() {
         return Err(Error::UnsupportedConversion(format!(
             "u32 pipeline requires an integer-family source, got {:?}",
-            surface.format,
+            desc.format,
         )));
     }
 
@@ -141,19 +141,19 @@ pub fn load_u32(surface: &Surface) -> Result<Buffer<u32>> {
 }
 
 /// Load a surface into the u64 pipeline (R64_UINT / R64_SINT only).
-pub fn load_u64(surface: &Surface) -> Result<Buffer<u64>> {
+pub fn load_u64(surface: &Surface, desc: FormatDesc) -> Result<Buffer<u64>> {
     profiling::scope!("load_u64");
-    let info = classify(surface.format, surface.color_space).ok_or_else(|| {
+    let info = classify(desc.format, desc.color_space).ok_or_else(|| {
         Error::UnsupportedFormat(format!(
             "u64 pipeline: unsupported input format {:?}",
-            surface.format
+            desc.format
         ))
     })?;
 
     if !info.family.is_integer() {
         return Err(Error::UnsupportedConversion(format!(
             "u64 pipeline requires an integer-family source, got {:?}",
-            surface.format,
+            desc.format,
         )));
     }
 

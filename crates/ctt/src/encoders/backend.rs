@@ -2,7 +2,7 @@
 
 use crate::error::Result;
 use crate::quality::Quality;
-use crate::surface::Surface;
+use crate::surface::{FormatDesc, Surface};
 
 #[cfg_attr(
     not(any(
@@ -27,8 +27,10 @@ pub(crate) trait Encoder {
     /// caller's settings to decide. Implementations that don't care can
     /// ignore `settings`.
     fn required_input_format(format: ktx2::Format, settings: &Self::Settings) -> ktx2::Format;
+    /// Compress `surface`, read as `desc`, into `format`.
     fn compress(
         surface: &Surface,
+        desc: FormatDesc,
         format: ktx2::Format,
         quality: Quality,
         settings: &Self::Settings,

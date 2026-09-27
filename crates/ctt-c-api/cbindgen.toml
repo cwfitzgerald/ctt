@@ -20,16 +20,17 @@ header = """\
  *
  *   - Decode: call `ctt_decode_container` (auto-detect from magic bytes) or
  *     `ctt_decode_container_as` (caller specifies KTX2 vs DDS) on a buffer
- *     of file bytes; the returned `ctt_image` exposes per-`(layer, mip)`
- *     surface metadata and data via the `ctt_image_surface_*` accessors.
+ *     of file bytes; the returned `ctt_image` exposes its `ctt_format_desc`
+ *     via `ctt_image_desc` and per-`(layer, mip)` surface layout and data
+ *     via the `ctt_image_surface_*` accessors.
  *
  * A typical encode pipeline:
  *
- *     ctt_surface *s = ctt_surface_create(pixels, len, w, h, 1, w*4, 0,
- *                          CTT_FORMAT_R8G8B8A8_SRGB,
- *                          CTT_COLOR_SPACE_SRGB,
- *                          CTT_ALPHA_MODE_STRAIGHT);
- *     ctt_image *img = ctt_image_create(CTT_TEXTURE_KIND_TEXTURE2D);
+ *     ctt_surface *s = ctt_surface_create(pixels, len, w, h, 1, w*4, 0);
+ *     ctt_format_desc desc = {
+ *         CTT_FORMAT_R8G8B8A8_SRGB, CTT_COLOR_SPACE_SRGB, CTT_ALPHA_MODE_STRAIGHT,
+ *     };
+ *     ctt_image *img = ctt_image_create(CTT_TEXTURE_KIND_TEXTURE2D, desc);
  *     size_t layer; ctt_image_add_layer(img, &layer);
  *     ctt_image_push_mip(img, layer, s);          // consumes `s`
  *
@@ -51,13 +52,13 @@ header = """\
  *
  * All heap allocation happens on the Rust side, so callers must not free
  * pointers returned by ctt with their own allocator. Each opaque type
- * (`ctt_surface`, `ctt_image`, `ctt_cubemap_input`, `ctt_pipeline_output`)
+ * (`ctt_surface`, `ctt_image`, `ctt_pipeline_output`)
  * has a matching `*_destroy` function; passing `NULL` is always safe.
  *
- * APIs that consume an input (e.g. `ctt_convert`, `ctt_split_cubemap`,
- * `ctt_image_push_mip`, `ctt_cubemap_input_*`) take ownership of the passed-in
- * handle on both success and failure: the caller must not call `*_destroy`
- * on a consumed handle. Each consuming function's doc comment calls this out.
+ * APIs that consume an input (e.g. `ctt_convert`, `ctt_image_push_mip`) take
+ * ownership of the passed-in handle on both success and failure: the caller
+ * must not call `*_destroy` on a consumed handle. Each consuming function's
+ * doc comment calls this out.
  *
  * Borrowed pointers returned by accessors (`ctt_surface_data`,
  * `ctt_image_surface_data`, `ctt_pipeline_output_encoded_data`) are valid
@@ -184,7 +185,7 @@ item_types = [
 [export.rename]
 "Surface" = "ctt_surface"
 "Image" = "ctt_image"
-"CubemapInput" = "ctt_cubemap_input"
+"FormatDesc" = "ctt_format_desc"
 "PipelineOutput" = "ctt_pipeline_output"
 "PipelineOutputKind" = "ctt_pipeline_output_kind"
 "Container" = "ctt_container"

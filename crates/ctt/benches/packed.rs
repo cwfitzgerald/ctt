@@ -19,8 +19,8 @@
 use std::hint::black_box;
 
 use criterion::{Criterion, Throughput, criterion_group, criterion_main};
+use ctt::Surface;
 use ctt::bench_internals::{A2B_R_SHIFT, Buffer};
-use ctt::{AlphaMode, ColorSpace, Format, Surface};
 
 mod common;
 
@@ -28,7 +28,7 @@ use common::{PIXEL_COUNT, SIDE};
 
 /// Build a packed 32-bit surface (4 bytes/pixel) with a deterministic word
 /// pattern that spreads bits across all four fields.
-fn make_packed_surface(format: Format) -> Surface {
+fn make_packed_surface() -> Surface {
     let n = (SIDE as usize) * (SIDE as usize);
     let mut data = vec![0u8; n * 4];
     for (i, word) in data.chunks_exact_mut(4).enumerate() {
@@ -44,9 +44,6 @@ fn make_packed_surface(format: Format) -> Surface {
         depth: 1,
         stride: SIDE * 4,
         slice_stride: 0,
-        format,
-        color_space: ColorSpace::Linear,
-        alpha: AlphaMode::Straight,
     }
 }
 
@@ -138,7 +135,7 @@ fn make_sint_buffer() -> Buffer<u32> {
 }
 
 fn bench_a2b10g10r10_load(c: &mut Criterion) {
-    let surface = make_packed_surface(Format::A2B10G10R10_UNORM_PACK32);
+    let surface = make_packed_surface();
 
     let mut g = c.benchmark_group("a2b10g10r10_unorm_load_1024x1024");
     g.throughput(Throughput::Elements(PIXEL_COUNT));
@@ -154,7 +151,7 @@ fn bench_a2b10g10r10_load(c: &mut Criterion) {
 }
 
 fn bench_b10g11r11_load(c: &mut Criterion) {
-    let surface = make_packed_surface(Format::B10G11R11_UFLOAT_PACK32);
+    let surface = make_packed_surface();
 
     let mut g = c.benchmark_group("b10g11r11_load_1024x1024");
     g.throughput(Throughput::Elements(PIXEL_COUNT));
@@ -167,7 +164,7 @@ fn bench_b10g11r11_load(c: &mut Criterion) {
 }
 
 fn bench_e5b9g9r9_load(c: &mut Criterion) {
-    let surface = make_packed_surface(Format::E5B9G9R9_UFLOAT_PACK32);
+    let surface = make_packed_surface();
 
     let mut g = c.benchmark_group("e5b9g9r9_load_1024x1024");
     g.throughput(Throughput::Elements(PIXEL_COUNT));
@@ -221,7 +218,7 @@ fn bench_b10g11r11_store(c: &mut Criterion) {
 }
 
 fn bench_a2b10g10r10_snorm_load(c: &mut Criterion) {
-    let surface = make_packed_surface(Format::A2B10G10R10_SNORM_PACK32);
+    let surface = make_packed_surface();
 
     let mut g = c.benchmark_group("a2b10g10r10_snorm_load_1024x1024");
     g.throughput(Throughput::Elements(PIXEL_COUNT));
@@ -252,7 +249,7 @@ fn bench_a2b10g10r10_snorm_store(c: &mut Criterion) {
 }
 
 fn bench_a2b10g10r10_uint_load(c: &mut Criterion) {
-    let surface = make_packed_surface(Format::A2B10G10R10_UINT_PACK32);
+    let surface = make_packed_surface();
 
     let mut g = c.benchmark_group("a2b10g10r10_uint_load_1024x1024");
     g.throughput(Throughput::Elements(PIXEL_COUNT));
@@ -283,7 +280,7 @@ fn bench_a2b10g10r10_uint_store(c: &mut Criterion) {
 }
 
 fn bench_a2b10g10r10_sint_load(c: &mut Criterion) {
-    let surface = make_packed_surface(Format::A2B10G10R10_SINT_PACK32);
+    let surface = make_packed_surface();
 
     let mut g = c.benchmark_group("a2b10g10r10_sint_load_1024x1024");
     g.throughput(Throughput::Elements(PIXEL_COUNT));

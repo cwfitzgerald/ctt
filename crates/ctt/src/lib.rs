@@ -3,7 +3,7 @@
 //! # Quick start
 //!
 //! ```no_run
-//! use ctt::{convert, ConvertSettings, Container, TargetFormat, Format, Image, Surface, ColorSpace, AlphaMode, TextureKind};
+//! use ctt::{convert, ConvertSettings, Container, TargetFormat, Format, FormatDesc, Image, Surface, ColorSpace, AlphaMode, TextureKind};
 //! use ctt::encoders::Encoder;
 //!
 //! # fn main() -> Result<(), ctt::Error> {
@@ -15,13 +15,15 @@
 //!     depth: 1,
 //!     stride: 512 * 4,
 //!     slice_stride: 0,
-//!     format: Format::R8G8B8A8_SRGB,
-//!     color_space: ColorSpace::Srgb,
-//!     alpha: AlphaMode::Straight,
 //! };
 //! let image = Image {
 //!     surfaces: vec![vec![surface]],
 //!     kind: TextureKind::Texture2D,
+//!     desc: FormatDesc {
+//!         format: Format::R8G8B8A8_SRGB,
+//!         color_space: ColorSpace::Srgb,
+//!         alpha: AlphaMode::Straight,
+//!     },
 //! };
 //!
 //! let _ktx2_bytes = convert(image, ConvertSettings {
@@ -71,7 +73,7 @@ pub use format::{TargetFormat, format_short_name, parse_format};
 pub use processing::equirectangular::{EquirectangularFront, EquirectangularOrientation};
 pub use processing::{MipmapFilter, PipelineOutput, Swizzle, SwizzleChannel};
 pub use quality::Quality;
-pub use surface::{ColorSpace, Image, Surface, TextureKind};
+pub use surface::{ColorSpace, FormatDesc, Image, Surface, TextureKind};
 pub use vk_format::{ChannelKind, FormatExt};
 
 // ---- Public modules for advanced use ----

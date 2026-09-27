@@ -92,6 +92,54 @@ impl From<ctt::AlphaMode> for AlphaMode {
     }
 }
 
+/// How to read the bytes of every surface in an image.
+///
+/// `format` must agree with `color_space`:
+///
+/// - `CTT_COLOR_SPACE_SRGB`: if the format has an sRGB variant, the format
+///   must be that variant. `CTT_FORMAT_R8G8B8A8_SRGB` is valid and
+///   `CTT_FORMAT_R8G8B8A8_UNORM` is not. `CTT_FORMAT_R16G16B16A16_SFLOAT` has
+///   no sRGB variant, so it is valid.
+/// - `CTT_COLOR_SPACE_LINEAR`: the format must not be an sRGB variant.
+///   `CTT_FORMAT_R8G8B8A8_UNORM` and `CTT_FORMAT_R16G16B16A16_SFLOAT` are
+///   valid and `CTT_FORMAT_R8G8B8A8_SRGB` is not.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FormatDesc {
+    /// VkFormat of every surface. Must be non-zero.
+    pub format: Format,
+    /// Color space the pixel values live in.
+    pub color_space: ColorSpace,
+    /// How the alpha channel relates to the color channels.
+    pub alpha: AlphaMode,
+}
+
+impl FormatDesc {
+    /// Convert to the Rust type. Fails if `format` is zero or does not agree
+    /// with `color_space`.
+    pub(crate) fn into_inner(self) -> Result<ctt::FormatDesc, String> {
+        let format =
+            ctt::Format::new(self.format).ok_or("format must be a non-zero VkFormat value")?;
+        let desc = ctt::FormatDesc {
+            format,
+            color_space: self.color_space.into(),
+            alpha: self.alpha.into(),
+        };
+        desc.validate().map_err(|e| e.to_string())?;
+        Ok(desc)
+    }
+}
+
+impl From<ctt::FormatDesc> for FormatDesc {
+    fn from(d: ctt::FormatDesc) -> Self {
+        FormatDesc {
+            format: d.format.value(),
+            color_space: d.color_space.into(),
+            alpha: d.alpha.into(),
+        }
+    }
+}
+
 /// Texture topology.
 ///
 /// Array-ness is implicit in the layer count: `Texture2D` uses one layer per

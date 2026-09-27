@@ -3,25 +3,34 @@ use crate::processing::equirectangular::{
     self, EquirectangularOrientation, EquirectangularPyramid,
 };
 use crate::processing::{load, store};
-use crate::surface::{ColorSpace, Surface};
+use crate::surface::{ColorSpace, FormatDesc, Image, Surface, TextureKind};
 use crate::vk_format::FormatExt;
 
-/// Input for cubemap face extraction.
-pub enum CubemapInput {
-    /// Six separate face images in order: +X, -X, +Y, -Y, +Z, -Z.
-    SeparateFaces(Box<[Surface; 6]>),
+/// Input for cubemap face extraction: one source surface (an atlas or a
+/// panorama) and its format.
+///
+/// To build a cubemap from six separate faces, make an [`Image`] with
+/// [`TextureKind::Cubemap`] directly.
+pub enum CubemapInput<'a> {
     /// A cross layout — horizontal (4:3) or vertical (3:4); the orientation is
     /// detected from the aspect ratio. See [`split_cubemap`].
-    Cross(Surface),
+    Cross {
+        surface: &'a Surface,
+        desc: FormatDesc,
+    },
     /// A horizontal strip of 6 faces side by side.
-    Strip(Surface),
+    Strip {
+        surface: &'a Surface,
+        desc: FormatDesc,
+    },
     /// An equirectangular (lat-long) panorama, projected onto six faces
     /// with anisotropic filtering. Faces follow the Vulkan/KTX2 cube map
     /// orientation; the panorama convention (which axis the image center
     /// faces, longitude direction) is set by `orientation`. Faces come
     /// out as `R32G32B32A32_SFLOAT` in linear space.
     Equirectangular {
-        surface: Surface,
+        surface: &'a Surface,
+        desc: FormatDesc,
         /// Face edge length. Defaults to a quarter of the source width,
         /// which matches sampling rates at the equator.
         face_size: Option<u32>,
@@ -30,25 +39,52 @@ pub enum CubemapInput {
     },
 }
 
-/// Split a cubemap input into its 6 individual faces.
-pub fn split_cubemap(input: CubemapInput) -> Result<[Surface; 6]> {
-    match input {
-        CubemapInput::SeparateFaces(faces) => {
-            log::debug!("Splitting cubemap: separate faces input");
-            validate_uniform_faces(&faces).map(|()| *faces)
+impl CubemapInput<'_> {
+    /// Verify that the source is an uncompressed 2D surface with enough data
+    /// for its declared size and stride. This keeps the slicing in
+    /// `extract_region` from panicking on malformed or short input.
+    fn validate(&self) -> Result<()> {
+        let (surface, desc) = match self {
+            Self::Cross { surface, desc }
+            | Self::Strip { surface, desc }
+            | Self::Equirectangular { surface, desc, .. } => (*surface, *desc),
+        };
+        desc.validate()?;
+        if desc.format.bytes_per_pixel().is_none() {
+            return Err(Error::InvalidImage(format!(
+                "cubemap requires an uncompressed format, got {:?}",
+                desc.format,
+            )));
         }
-        CubemapInput::Cross(surface) => {
+        if surface.depth != 1 {
+            return Err(Error::InvalidImage(format!(
+                "cubemap source must be 2D, got depth {}",
+                surface.depth,
+            )));
+        }
+        surface
+            .validate_layout(desc.format)
+            .map_err(|msg| Error::InvalidImage(format!("cubemap source: {msg}")))
+    }
+}
+
+/// Split a cubemap atlas into a cubemap [`Image`] with one mip level per face.
+pub fn split_cubemap(input: CubemapInput<'_>) -> Result<Image> {
+    input.validate()?;
+    let (faces, desc) = match input {
+        CubemapInput::Cross { surface, desc } => {
             log::debug!("Splitting cubemap: cross input");
             log::debug!("Cross source: {}x{}", surface.width, surface.height);
-            split_cross(&surface)
+            (split_cross(surface, desc.format)?, desc)
         }
-        CubemapInput::Strip(surface) => {
+        CubemapInput::Strip { surface, desc } => {
             log::debug!("Splitting cubemap: strip input");
             log::debug!("Strip source: {}x{}", surface.width, surface.height);
-            split_strip(&surface)
+            (split_strip(surface, desc.format)?, desc)
         }
         CubemapInput::Equirectangular {
             surface,
+            desc,
             face_size,
             orientation,
         } => {
@@ -58,9 +94,14 @@ pub fn split_cubemap(input: CubemapInput) -> Result<[Surface; 6]> {
                 surface.width,
                 surface.height
             );
-            project_equirectangular(surface, face_size, orientation)
+            project_equirectangular(surface, desc, face_size, orientation)?
         }
-    }
+    };
+    Ok(Image {
+        surfaces: faces.into_iter().map(|face| vec![face]).collect(),
+        kind: TextureKind::Cubemap,
+        desc,
+    })
 }
 
 /// Project an equirectangular panorama onto six cube faces.
@@ -68,17 +109,16 @@ pub fn split_cubemap(input: CubemapInput) -> Result<[Surface; 6]> {
 /// The projection runs on the linear f32 pipeline: sRGB sources are
 /// linearized and straight alpha is premultiplied for filtering, then both
 /// are undone on the way out. Faces are stored as `R32G32B32A32_SFLOAT`
-/// tagged linear, so no precision is lost after the filter itself.
+/// tagged linear, so no precision is lost after the filter itself. Returns
+/// the faces and their format.
 fn project_equirectangular(
-    surface: Surface,
+    surface: &Surface,
+    desc: FormatDesc,
     face_size: Option<u32>,
     orientation: EquirectangularOrientation,
-) -> Result<[Surface; 6]> {
+) -> Result<(Vec<Surface>, FormatDesc)> {
     profiling::scope!("project_equirectangular");
-    validate_source(&surface)?;
-    let alpha = surface.alpha;
-    let buf = load::load_f32(&surface)?;
-    drop(surface);
+    let buf = load::load_f32(surface, desc)?;
     let pyramid = EquirectangularPyramid::new(buf)?;
     let n = face_size.unwrap_or_else(|| pyramid.default_face_size());
     log::debug!(
@@ -89,123 +129,28 @@ fn project_equirectangular(
     let faces = equirectangular::project_f32(&pyramid, n, orientation)?;
     drop(pyramid);
 
+    let face_desc = FormatDesc {
+        format: ktx2::Format::R32G32B32A32_SFLOAT,
+        color_space: ColorSpace::Linear,
+        alpha: desc.alpha,
+    };
     let faces: Vec<Surface> = faces
         .into_iter()
-        .map(|face| {
-            store::store_f32(
-                face,
-                ktx2::Format::R32G32B32A32_SFLOAT,
-                ColorSpace::Linear,
-                alpha,
-            )
-        })
+        .map(|face| store::store_f32(face, face_desc))
         .collect::<Result<_>>()?;
-    Ok(faces.try_into().unwrap_or_else(|_| unreachable!()))
-}
-
-fn validate_uniform_faces(faces: &[Surface; 6]) -> Result<()> {
-    for face in faces.iter() {
-        validate_face(face)?;
-    }
-    let (w, h) = (faces[0].width, faces[0].height);
-    for face in &faces[1..] {
-        if face.width != w || face.height != h {
-            return Err(Error::CubemapNonUniformFaces);
-        }
-    }
-    Ok(())
-}
-
-/// Validate a face that will be passed through without pixel extraction.
-/// Unlike cross and strip sources, separate faces may already be block
-/// compressed.
-fn validate_face(s: &Surface) -> Result<()> {
-    if s.width == 0 || s.height == 0 {
-        return Err(Error::InvalidImage(format!(
-            "cubemap face has a zero dimension: {}x{}",
-            s.width, s.height,
-        )));
-    }
-    let tight_row = s.tight_row_bytes().ok_or_else(|| {
-        Error::InvalidImage(format!(
-            "cubemap face has unsupported format {:?}",
-            s.format,
-        ))
-    })?;
-    if s.stride < tight_row {
-        return Err(Error::InvalidImage(format!(
-            "cubemap face stride {} is below the tight minimum {tight_row}",
-            s.stride,
-        )));
-    }
-    let rows = if let Some((_, block_height)) = s.format.block_size() {
-        s.height.div_ceil(block_height as u32)
-    } else {
-        s.height
-    };
-    let required = (rows as usize - 1)
-        .checked_mul(s.stride as usize)
-        .and_then(|prefix| prefix.checked_add(tight_row as usize))
-        .ok_or_else(|| Error::InvalidImage("cubemap face size overflows usize".into()))?;
-    if s.data.len() < required {
-        return Err(Error::InvalidImage(format!(
-            "cubemap face data is {} bytes, need at least {required}",
-            s.data.len(),
-        )));
-    }
-    Ok(())
-}
-
-/// Validate that a source surface is uncompressed and carries enough data for
-/// its declared dimensions and stride. This is what keeps `extract_region`'s
-/// slicing (and its `bytes_per_pixel` unwrap) from panicking on malformed or
-/// short input.
-fn validate_source(s: &Surface) -> Result<()> {
-    let Some(bpp) = s.format.bytes_per_pixel() else {
-        return Err(Error::InvalidImage(format!(
-            "cubemap requires an uncompressed format, got {:?}",
-            s.format,
-        )));
-    };
-    if s.width == 0 || s.height == 0 {
-        return Err(Error::InvalidImage(format!(
-            "cubemap source has a zero dimension: {}x{}",
-            s.width, s.height,
-        )));
-    }
-    // Widen before multiplying — face atlases can be large.
-    let tight_row = s.width as usize * bpp;
-    if (s.stride as usize) < tight_row {
-        return Err(Error::InvalidImage(format!(
-            "cubemap source stride {} is below the tight minimum {tight_row}",
-            s.stride,
-        )));
-    }
-    let required = (s.height as usize - 1) * s.stride as usize + tight_row;
-    if s.data.len() < required {
-        return Err(Error::InvalidImage(format!(
-            "cubemap source data is {} bytes, need at least {required} for \
-             {}x{} at stride {}",
-            s.data.len(),
-            s.width,
-            s.height,
-            s.stride,
-        )));
-    }
-    Ok(())
+    Ok((faces, face_desc))
 }
 
 /// Extract faces from a cross layout, detecting orientation from the aspect
 /// ratio: wider-than-tall is a horizontal (4:3) cross, taller-than-wide is a
 /// vertical (3:4) cross. See [`split_cross_horizontal`] and
 /// [`split_cross_vertical`] for the exact face arrangements.
-fn split_cross(surface: &Surface) -> Result<[Surface; 6]> {
+fn split_cross(surface: &Surface, format: ktx2::Format) -> Result<Vec<Surface>> {
     profiling::scope!("split_cross");
-    validate_source(surface)?;
     if surface.width > surface.height {
-        split_cross_horizontal(surface)
+        split_cross_horizontal(surface, format)
     } else if surface.height > surface.width {
-        split_cross_vertical(surface)
+        split_cross_vertical(surface, format)
     } else {
         Err(Error::InvalidImage(format!(
             "cross layout must be 4:3 (horizontal) or 3:4 (vertical); \
@@ -224,7 +169,7 @@ fn split_cross(surface: &Surface) -> Result<[Surface; 6]> {
 ///     [-Y]
 /// ```
 /// Grid positions: +X=(2,1), -X=(0,1), +Y=(1,0), -Y=(1,2), +Z=(1,1), -Z=(3,1)
-fn split_cross_horizontal(surface: &Surface) -> Result<[Surface; 6]> {
+fn split_cross_horizontal(surface: &Surface, format: ktx2::Format) -> Result<Vec<Surface>> {
     if !surface.width.is_multiple_of(4) || !surface.height.is_multiple_of(3) {
         return Err(Error::InvalidImage(format!(
             "horizontal cross requires width divisible by 4 and height by 3, got {}x{}",
@@ -251,10 +196,12 @@ fn split_cross_horizontal(surface: &Surface) -> Result<[Surface; 6]> {
 
     let faces: Vec<Surface> = positions
         .iter()
-        .map(|&(col, row)| extract_region(surface, col * face_w, row * face_h, face_w, face_h))
+        .map(|&(col, row)| {
+            extract_region(surface, format, col * face_w, row * face_h, face_w, face_h)
+        })
         .collect();
 
-    Ok(std::array::from_fn(|i| faces[i].clone()))
+    Ok(faces)
 }
 
 /// Extract faces from a vertical cross layout.
@@ -271,7 +218,7 @@ fn split_cross_horizontal(surface: &Surface) -> Result<[Surface; 6]> {
 /// This follows the conventional vertical cross: the bottom face (-Z) is
 /// stored rotated 180° so that folding the cross into a cube yields the same
 /// orientation as the horizontal cross. The other five faces are unrotated.
-fn split_cross_vertical(surface: &Surface) -> Result<[Surface; 6]> {
+fn split_cross_vertical(surface: &Surface, format: ktx2::Format) -> Result<Vec<Surface>> {
     if !surface.width.is_multiple_of(3) || !surface.height.is_multiple_of(4) {
         return Err(Error::InvalidImage(format!(
             "vertical cross requires width divisible by 3 and height by 4, got {}x{}",
@@ -298,19 +245,20 @@ fn split_cross_vertical(surface: &Surface) -> Result<[Surface; 6]> {
 
     let mut faces: Vec<Surface> = positions
         .iter()
-        .map(|&(col, row)| extract_region(surface, col * face_w, row * face_h, face_w, face_h))
+        .map(|&(col, row)| {
+            extract_region(surface, format, col * face_w, row * face_h, face_w, face_h)
+        })
         .collect();
 
     // Conventional vertical cross stores -Z upside-down.
-    rotate_180(&mut faces[5]);
+    rotate_180(&mut faces[5], format);
 
-    Ok(std::array::from_fn(|i| faces[i].clone()))
+    Ok(faces)
 }
 
 /// Extract faces from a horizontal strip (6 faces side by side).
-fn split_strip(surface: &Surface) -> Result<[Surface; 6]> {
+fn split_strip(surface: &Surface, format: ktx2::Format) -> Result<Vec<Surface>> {
     profiling::scope!("split_strip");
-    validate_source(surface)?;
     if !surface.width.is_multiple_of(6) {
         return Err(Error::InvalidImage(format!(
             "strip layout requires width divisible by 6, got {}",
@@ -326,19 +274,18 @@ fn split_strip(surface: &Surface) -> Result<[Surface; 6]> {
     }
 
     let faces: Vec<Surface> = (0..6)
-        .map(|i| extract_region(surface, i * face_w, 0, face_w, face_h))
+        .map(|i| extract_region(surface, format, i * face_w, 0, face_w, face_h))
         .collect();
 
-    Ok(std::array::from_fn(|i| faces[i].clone()))
+    Ok(faces)
 }
 
 /// Rotate a tightly-packed face 180° in place (both axes flipped).
 ///
 /// `extract_region` always produces a tight surface (`stride == width * bpp`),
 /// so a 180° rotation is just a reversal of the pixel sequence.
-fn rotate_180(face: &mut Surface) {
-    let bpp = face
-        .format
+fn rotate_180(face: &mut Surface, format: ktx2::Format) {
+    let bpp = format
         .bytes_per_pixel()
         .expect("cubemap requires uncompressed format");
     let w = face.width as usize;
@@ -354,10 +301,16 @@ fn rotate_180(face: &mut Surface) {
     face.data = rotated;
 }
 
-fn extract_region(src: &Surface, src_x: u32, src_y: u32, width: u32, height: u32) -> Surface {
+fn extract_region(
+    src: &Surface,
+    format: ktx2::Format,
+    src_x: u32,
+    src_y: u32,
+    width: u32,
+    height: u32,
+) -> Surface {
     profiling::scope!("extract_region");
-    let bpp = src
-        .format
+    let bpp = format
         .bytes_per_pixel()
         .expect("cubemap requires uncompressed format");
     let new_stride = width * bpp as u32;
@@ -376,9 +329,6 @@ fn extract_region(src: &Surface, src_x: u32, src_y: u32, width: u32, height: u32
         depth: 1,
         stride: new_stride,
         slice_stride: 0,
-        format: src.format,
-        color_space: src.color_space,
-        alpha: src.alpha,
     }
 }
 
@@ -386,61 +336,20 @@ fn extract_region(src: &Surface, src_x: u32, src_y: u32, width: u32, height: u32
 mod tests {
     use super::*;
     use crate::alpha::AlphaMode;
-    use crate::surface::ColorSpace;
 
-    fn make_face(width: u32, height: u32, fill: u8) -> Surface {
-        let stride = width * 4;
-        Surface {
-            data: vec![fill; (stride * height) as usize],
-            width,
-            height,
-            depth: 1,
-            stride,
-            slice_stride: 0,
-            format: ktx2::Format::R8G8B8A8_UNORM,
-            color_space: ColorSpace::Srgb,
-            alpha: AlphaMode::Straight,
-        }
-    }
+    const RGBA8: FormatDesc = FormatDesc {
+        format: ktx2::Format::R8G8B8A8_UNORM,
+        color_space: ColorSpace::Linear,
+        alpha: AlphaMode::Straight,
+    };
 
-    #[test]
-    fn separate_faces_passthrough() {
-        let faces = std::array::from_fn(|i| make_face(64, 64, i as u8));
-        let result = split_cubemap(CubemapInput::SeparateFaces(Box::new(faces))).unwrap();
-        for (i, face) in result.iter().enumerate() {
-            assert_eq!(face.width, 64);
-            assert_eq!(face.height, 64);
-            assert_eq!(face.data[0], i as u8);
-        }
-    }
-
-    #[test]
-    fn compressed_separate_faces_passthrough() {
-        let faces = std::array::from_fn(|i| Surface {
-            data: vec![i as u8; 16 * 4],
-            width: 8,
-            height: 8,
-            depth: 1,
-            stride: 32,
-            slice_stride: 0,
-            format: ktx2::Format::BC7_UNORM_BLOCK,
-            color_space: ColorSpace::Linear,
-            alpha: AlphaMode::Straight,
-        });
-
-        let split = split_cubemap(CubemapInput::SeparateFaces(Box::new(faces))).unwrap();
-        for (i, face) in split.iter().enumerate() {
-            assert_eq!(face.format, ktx2::Format::BC7_UNORM_BLOCK);
-            assert_eq!(face.data, vec![i as u8; 16 * 4]);
-        }
-    }
-
-    #[test]
-    fn non_uniform_faces_error() {
-        let mut faces = std::array::from_fn(|_| make_face(64, 64, 0));
-        faces[3] = make_face(32, 32, 0);
-        let result = split_cubemap(CubemapInput::SeparateFaces(Box::new(faces)));
-        assert!(result.is_err());
+    /// Split `input` and return the six faces in order.
+    fn split_faces(input: CubemapInput<'_>) -> Vec<Surface> {
+        let cube = split_cubemap(input).unwrap();
+        cube.surfaces
+            .into_iter()
+            .map(|mut layer| layer.remove(0))
+            .collect()
     }
 
     /// Build a `(cols*n) x (rows*n)` RGBA8 atlas where the pixel at global
@@ -470,9 +379,6 @@ mod tests {
             depth: 1,
             stride,
             slice_stride: 0,
-            format: ktx2::Format::R8G8B8A8_UNORM,
-            color_space: ColorSpace::Srgb,
-            alpha: AlphaMode::Straight,
         }
     }
 
@@ -507,7 +413,10 @@ mod tests {
     fn horizontal_cross_splits_into_six_faces() {
         let n = 4;
         let atlas = make_atlas(4, 3, n); // 4:3
-        let faces = split_cubemap(CubemapInput::Cross(atlas)).unwrap();
+        let faces = split_faces(CubemapInput::Cross {
+            surface: &atlas,
+            desc: RGBA8,
+        });
         // Emit order +X,-X,+Y,-Y,+Z,-Z; no rotation in the horizontal cross.
         assert_face(&faces[0], n, 2, 1, false); // +X
         assert_face(&faces[1], n, 0, 1, false); // -X
@@ -521,7 +430,10 @@ mod tests {
     fn vertical_cross_splits_into_six_faces() {
         let n = 4;
         let atlas = make_atlas(3, 4, n); // 3:4
-        let faces = split_cubemap(CubemapInput::Cross(atlas)).unwrap();
+        let faces = split_faces(CubemapInput::Cross {
+            surface: &atlas,
+            desc: RGBA8,
+        });
         // Emit order +X,-X,+Y,-Y,+Z,-Z; -Z is rotated 180°.
         assert_face(&faces[0], n, 2, 1, false); // +X
         assert_face(&faces[1], n, 0, 1, false); // -X
@@ -536,7 +448,11 @@ mod tests {
         // Valid 4:3 aspect but truncated data must error, not panic.
         let mut atlas = make_atlas(4, 3, 4);
         atlas.data.truncate(10);
-        let err = split_cubemap(CubemapInput::Cross(atlas)).unwrap_err();
+        let err = split_cubemap(CubemapInput::Cross {
+            surface: &atlas,
+            desc: RGBA8,
+        })
+        .unwrap_err();
         assert!(
             matches!(err, Error::InvalidImage(_)),
             "expected InvalidImage, got {err:?}",
@@ -551,7 +467,11 @@ mod tests {
         atlas.height = 9;
         atlas.stride = 10 * 4;
         atlas.data = vec![0u8; (atlas.stride * atlas.height) as usize];
-        let err = split_cubemap(CubemapInput::Cross(atlas)).unwrap_err();
+        let err = split_cubemap(CubemapInput::Cross {
+            surface: &atlas,
+            desc: RGBA8,
+        })
+        .unwrap_err();
         assert!(
             matches!(err, Error::InvalidImage(_)),
             "expected InvalidImage, got {err:?}",
@@ -561,7 +481,11 @@ mod tests {
     #[test]
     fn cross_square_rejected() {
         let atlas = make_atlas(4, 4, 4); // square → not a cross
-        let err = split_cubemap(CubemapInput::Cross(atlas)).unwrap_err();
+        let err = split_cubemap(CubemapInput::Cross {
+            surface: &atlas,
+            desc: RGBA8,
+        })
+        .unwrap_err();
         assert!(
             matches!(err, Error::InvalidImage(_)),
             "expected InvalidImage, got {err:?}",
@@ -575,7 +499,11 @@ mod tests {
         atlas.width = 20;
         atlas.stride = 20 * 4;
         atlas.data = vec![0u8; (atlas.stride * atlas.height) as usize];
-        let err = split_cubemap(CubemapInput::Strip(atlas)).unwrap_err();
+        let err = split_cubemap(CubemapInput::Strip {
+            surface: &atlas,
+            desc: RGBA8,
+        })
+        .unwrap_err();
         assert!(
             matches!(err, Error::InvalidImage(_)),
             "expected InvalidImage, got {err:?}",
@@ -586,9 +514,53 @@ mod tests {
     fn strip_splits_into_six_square_faces() {
         let n = 4;
         let atlas = make_atlas(6, 1, n);
-        let faces = split_cubemap(CubemapInput::Strip(atlas)).unwrap();
+        let faces = split_faces(CubemapInput::Strip {
+            surface: &atlas,
+            desc: RGBA8,
+        });
         for (i, face) in faces.iter().enumerate() {
             assert_face(face, n, i as u32, 0, false);
         }
+    }
+
+    #[test]
+    fn split_returns_cubemap_image() {
+        let atlas = make_atlas(6, 1, 4);
+        let cube = split_cubemap(CubemapInput::Strip {
+            surface: &atlas,
+            desc: RGBA8,
+        })
+        .unwrap();
+        assert_eq!(cube.kind, TextureKind::Cubemap);
+        assert_eq!(cube.desc, RGBA8);
+        assert_eq!(cube.surfaces.len(), 6);
+        assert!(cube.surfaces.iter().all(|layer| layer.len() == 1));
+        cube.validate().unwrap();
+    }
+
+    #[test]
+    fn compressed_source_rejected() {
+        let atlas = make_atlas(6, 1, 4);
+        let err = split_cubemap(CubemapInput::Strip {
+            surface: &atlas,
+            desc: FormatDesc {
+                format: ktx2::Format::BC7_UNORM_BLOCK,
+                ..RGBA8
+            },
+        })
+        .unwrap_err();
+        assert!(err.to_string().contains("uncompressed"), "got: {err}");
+    }
+
+    #[test]
+    fn volume_source_rejected() {
+        let mut atlas = make_atlas(6, 1, 4);
+        atlas.depth = 2;
+        let err = split_cubemap(CubemapInput::Strip {
+            surface: &atlas,
+            desc: RGBA8,
+        })
+        .unwrap_err();
+        assert!(err.to_string().contains("must be 2D"), "got: {err}");
     }
 }

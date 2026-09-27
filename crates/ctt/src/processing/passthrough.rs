@@ -16,7 +16,7 @@ pub fn run(
     target_format: ktx2::Format,
     container: Container,
 ) -> Result<PipelineOutput> {
-    let first_fmt = image.surfaces[0][0].format;
+    let first_fmt = image.desc.format;
 
     if first_fmt != target_format {
         return Err(Error::UnsupportedConversion(format!(

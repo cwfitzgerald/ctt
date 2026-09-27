@@ -8,7 +8,7 @@ use crate::processing::{
     self, Buffer, PipelineOutput, Swizzle, Variant, encode, load, map_nested, mipmap, par_map,
     passthrough, store, swizzle,
 };
-use crate::surface::{ColorSpace, Image, Surface};
+use crate::surface::{ColorSpace, FormatDesc, Image, Surface};
 use crate::vk_format::FormatExt;
 
 /// Output container format.
@@ -55,7 +55,7 @@ pub struct ConvertSettings {
     /// [`FormatExt::with_color_space`](crate::FormatExt::with_color_space)).
     ///
     /// Must agree with the output color space, by the same rules as
-    /// [`Surface::format`].
+    /// [`FormatDesc::format`].
     ///
     /// Values keep their meaning and are not remapped: UNORM input to a SNORM
     /// target stays in `[0, 1]`. To use the full SNORM range (for example, a
@@ -104,10 +104,9 @@ pub fn convert(image: Image, mut settings: ConvertSettings) -> Result<PipelineOu
     profiling::scope!("convert");
     image.validate()?;
 
-    let input_base = &image.surfaces[0][0];
-    let input_fmt = input_base.format;
-    let input_cs = input_base.color_space;
-    let input_alpha = input_base.alpha;
+    let input_fmt = image.desc.format;
+    let input_cs = image.desc.color_space;
+    let input_alpha = image.desc.alpha;
 
     let target_cs = settings.output_color_space.unwrap_or(input_cs);
     let target_alpha = settings.output_alpha.unwrap_or(input_alpha);
@@ -254,20 +253,20 @@ fn alpha_less_load_store(target_alpha: AlphaMode, src_alpha: AlphaMode) -> (Alph
     }
 }
 
-/// Pick the `(load, store)` alpha modes for one surface. An alpha-bearing
-/// final target converts directly from the surface's mode to the target's.
+/// Pick the `(load, store)` alpha modes for an image. An alpha-bearing final
+/// target converts directly from the source's mode to the target's.
 /// An alpha-less final target must not force the premultiplied round-trip —
 /// it zeros RGB wherever alpha=0 — so it applies only the single direct
 /// conversion from [`alpha_less_load_store`].
 fn load_store_alpha(
     final_has_alpha: bool,
     target_alpha: AlphaMode,
-    surface_alpha: AlphaMode,
+    source_alpha: AlphaMode,
 ) -> (AlphaMode, AlphaMode) {
     if final_has_alpha {
-        (surface_alpha, target_alpha)
+        (source_alpha, target_alpha)
     } else {
-        alpha_less_load_store(target_alpha, surface_alpha)
+        alpha_less_load_store(target_alpha, source_alpha)
     }
 }
 
@@ -304,11 +303,24 @@ fn convert_f32(
     encoder_step: Option<encode::EncoderStep>,
     final_has_alpha: bool,
 ) -> Result<PipelineOutput> {
-    let input_base = &image.surfaces[0][0];
-    let target_color_space = settings
-        .output_color_space
-        .unwrap_or(input_base.color_space);
-    let target_alpha = settings.output_alpha.unwrap_or(input_base.alpha);
+    let input_desc = image.desc;
+    let target_desc = FormatDesc {
+        format: target_fmt,
+        color_space: settings
+            .output_color_space
+            .unwrap_or(input_desc.color_space),
+        alpha: settings.output_alpha.unwrap_or(input_desc.alpha),
+    };
+    let (load_alpha, store_alpha) =
+        load_store_alpha(final_has_alpha, target_desc.alpha, input_desc.alpha);
+    let load_desc = FormatDesc {
+        alpha: load_alpha,
+        ..input_desc
+    };
+    let store_desc = FormatDesc {
+        alpha: store_alpha,
+        ..target_desc
+    };
 
     let out_layers = if settings.mipmap {
         // Layers run in parallel; within a layer, loads and stores of
@@ -319,59 +331,39 @@ fn convert_f32(
             let target_count = settings
                 .mipmap_count
                 .unwrap_or_else(|| mipmap::full_mip_count(layer[0].width, layer[0].height));
-            let loaded = par_map(
+            let bufs = par_map(
                 layer
                     .into_iter()
                     .take(target_count)
                     .collect::<Vec<Surface>>(),
-                |mut surface| {
-                    let (load_alpha, store_alpha) =
-                        load_store_alpha(final_has_alpha, target_alpha, surface.alpha);
-                    surface.alpha = load_alpha;
-                    let mut buf: Buffer<f32> = load::load_f32(&surface)?;
+                |surface| {
+                    let mut buf: Buffer<f32> = load::load_f32(&surface, load_desc)?;
                     if let Some(sw) = &settings.swizzle {
                         swizzle::apply_f32(&mut buf, sw);
                     }
-                    Ok((buf, store_alpha))
+                    Ok(buf)
                 },
             )?;
-            let (bufs, mut store_alphas): (Vec<_>, Vec<_>) = loaded.into_iter().unzip();
-            let generated_store_alpha = *store_alphas
-                .last()
-                .ok_or_else(|| Error::UnsupportedFormat("mipmap count must be >= 1".into()))?;
             let bufs = mipmap::complete(bufs, settings.mipmap_filter, settings.mipmap_count)?;
-            store_alphas.resize(bufs.len(), generated_store_alpha);
-            par_map(
-                bufs.into_iter().zip(store_alphas).collect(),
-                |(b, store_alpha)| {
-                    let mut surface =
-                        store::store_f32(b, target_fmt, target_color_space, store_alpha)?;
-                    surface.alpha = target_alpha;
-                    Ok(surface)
-                },
-            )
+            par_map(bufs, |b| store::store_f32(b, store_desc))
         })?
     } else {
         // Convert every existing mip level (matching the f64/integer
         // paths) so an input mip chain isn't silently dropped.
-        map_nested(image.surfaces, |mut base| {
+        map_nested(image.surfaces, |base| {
             profiling::scope!("convert_f32_surface");
-            let (load_alpha, store_alpha) =
-                load_store_alpha(final_has_alpha, target_alpha, base.alpha);
-            base.alpha = load_alpha;
-            let mut buf: Buffer<f32> = load::load_f32(&base)?;
+            let mut buf: Buffer<f32> = load::load_f32(&base, load_desc)?;
             if let Some(sw) = &settings.swizzle {
                 swizzle::apply_f32(&mut buf, sw);
             }
-            let mut surface = store::store_f32(buf, target_fmt, target_color_space, store_alpha)?;
-            surface.alpha = target_alpha;
-            Ok(surface)
+            store::store_f32(buf, store_desc)
         })?
     };
 
     let processed = Image {
         surfaces: out_layers,
         kind: image.kind,
+        desc: target_desc,
     };
 
     let final_image = match encoder_step {
@@ -395,28 +387,38 @@ fn convert_f64(
         ));
     }
 
-    let input_base = &image.surfaces[0][0];
-    let target_color_space = settings
-        .output_color_space
-        .unwrap_or(input_base.color_space);
-    let target_alpha = settings.output_alpha.unwrap_or(input_base.alpha);
+    let input_desc = image.desc;
+    let target_desc = FormatDesc {
+        format: target_fmt,
+        color_space: settings
+            .output_color_space
+            .unwrap_or(input_desc.color_space),
+        alpha: settings.output_alpha.unwrap_or(input_desc.alpha),
+    };
+    let (load_alpha, store_alpha) =
+        load_store_alpha(final_has_alpha, target_desc.alpha, input_desc.alpha);
+    let load_desc = FormatDesc {
+        alpha: load_alpha,
+        ..input_desc
+    };
+    let store_desc = FormatDesc {
+        alpha: store_alpha,
+        ..target_desc
+    };
 
-    let out_layers = map_nested(image.surfaces, |mut base| {
+    let out_layers = map_nested(image.surfaces, |base| {
         profiling::scope!("convert_f64_surface");
-        let (load_alpha, store_alpha) = load_store_alpha(final_has_alpha, target_alpha, base.alpha);
-        base.alpha = load_alpha;
-        let mut buf = load::load_f64(&base)?;
+        let mut buf = load::load_f64(&base, load_desc)?;
         if let Some(sw) = &settings.swizzle {
             swizzle::apply_f64(&mut buf, sw);
         }
-        let mut surface = store::store_f64(buf, target_fmt, target_color_space, store_alpha)?;
-        surface.alpha = target_alpha;
-        Ok(surface)
+        store::store_f64(buf, store_desc)
     })?;
 
     let processed = Image {
         surfaces: out_layers,
         kind: image.kind,
+        desc: target_desc,
     };
 
     let final_image = match encoder_step {
@@ -433,22 +435,26 @@ fn convert_u32(
     target_fmt: ktx2::Format,
     encoder_step: Option<encode::EncoderStep>,
 ) -> Result<PipelineOutput> {
-    let input_alpha = image.surfaces[0][0].alpha;
-    check_uint_unsupported(&settings, input_alpha)?;
-    let target_alpha = settings.output_alpha.unwrap_or(input_alpha);
+    let input_desc = image.desc;
+    check_uint_unsupported(&settings, input_desc.alpha)?;
 
     let out_layers = map_nested(image.surfaces, |base| {
         profiling::scope!("convert_u32_surface");
-        let mut buf = load::load_u32(&base)?;
+        let mut buf = load::load_u32(&base, input_desc)?;
         if let Some(sw) = &settings.swizzle {
             swizzle::apply_u32(&mut buf, sw);
         }
-        store::store_u32(buf, target_fmt, target_alpha)
+        store::store_u32(buf, target_fmt)
     })?;
 
     let processed = Image {
         surfaces: out_layers,
         kind: image.kind,
+        desc: FormatDesc {
+            format: target_fmt,
+            color_space: ColorSpace::Linear,
+            ..input_desc
+        },
     };
 
     if encoder_step.is_some() {
@@ -466,22 +472,26 @@ fn convert_u64(
     target_fmt: ktx2::Format,
     encoder_step: Option<encode::EncoderStep>,
 ) -> Result<PipelineOutput> {
-    let input_alpha = image.surfaces[0][0].alpha;
-    check_uint_unsupported(&settings, input_alpha)?;
-    let target_alpha = settings.output_alpha.unwrap_or(input_alpha);
+    let input_desc = image.desc;
+    check_uint_unsupported(&settings, input_desc.alpha)?;
 
     let out_layers = map_nested(image.surfaces, |base| {
         profiling::scope!("convert_u64_surface");
-        let mut buf = load::load_u64(&base)?;
+        let mut buf = load::load_u64(&base, input_desc)?;
         if let Some(sw) = &settings.swizzle {
             swizzle::apply_u64(&mut buf, sw);
         }
-        store::store_u64(buf, target_fmt, target_alpha)
+        store::store_u64(buf, target_fmt)
     })?;
 
     let processed = Image {
         surfaces: out_layers,
         kind: image.kind,
+        desc: FormatDesc {
+            format: target_fmt,
+            color_space: ColorSpace::Linear,
+            ..input_desc
+        },
     };
 
     if encoder_step.is_some() {
@@ -536,11 +546,13 @@ mod tests {
                 depth: 1,
                 stride: width * bpp,
                 slice_stride: 0,
+            }]],
+            kind: crate::TextureKind::Texture2D,
+            desc: FormatDesc {
                 format,
                 color_space: cs,
                 alpha,
-            }]],
-            kind: crate::TextureKind::Texture2D,
+            },
         }
     }
 
@@ -599,7 +611,7 @@ mod tests {
         match out {
             PipelineOutput::Raw(img) => {
                 let s = &img.surfaces[0][0];
-                assert_eq!(s.format, ktx2::Format::A2B10G10R10_UNORM_PACK32);
+                assert_eq!(img.desc.format, ktx2::Format::A2B10G10R10_UNORM_PACK32);
                 assert_eq!(s.data.len(), 4);
                 let word = u32::from_le_bytes(s.data[..4].try_into().unwrap());
                 let r = word & 0x3ff;
@@ -636,7 +648,7 @@ mod tests {
         match out {
             PipelineOutput::Raw(img) => {
                 let s = &img.surfaces[0][0];
-                assert_eq!(s.format, ktx2::Format::E5B9G9R9_UFLOAT_PACK32);
+                assert_eq!(img.desc.format, ktx2::Format::E5B9G9R9_UFLOAT_PACK32);
                 assert_eq!(s.data, 0x8001_0300u32.to_le_bytes());
             }
             _ => panic!("expected Raw output"),
@@ -668,7 +680,7 @@ mod tests {
         match out {
             PipelineOutput::Raw(img) => {
                 let s = &img.surfaces[0][0];
-                assert_eq!(s.format, ktx2::Format::A2B10G10R10_UINT_PACK32);
+                assert_eq!(img.desc.format, ktx2::Format::A2B10G10R10_UINT_PACK32);
                 let word = u32::from_le_bytes(s.data[..4].try_into().unwrap());
                 // UINT values pass through unscaled (alpha clamped to 3).
                 assert_eq!(word & 0x3ff, 255);
@@ -701,7 +713,7 @@ mod tests {
         .unwrap();
         match out {
             PipelineOutput::Raw(img) => {
-                assert_eq!(img.surfaces[0][0].format, ktx2::Format::R8_UNORM);
+                assert_eq!(img.desc.format, ktx2::Format::R8_UNORM);
                 assert_eq!(img.surfaces[0][0].data, vec![100]);
             }
             _ => panic!("expected Raw output"),
@@ -746,13 +758,15 @@ mod tests {
             depth: 1,
             stride: w * 4,
             slice_stride: 0,
-            format: ktx2::Format::R8G8B8A8_UNORM,
-            color_space: ColorSpace::Linear,
-            alpha: AlphaMode::Opaque,
         };
         Image {
             surfaces: vec![vec![mip(8, 8, 10), mip(4, 4, 20), mip(2, 2, 30)]],
             kind: crate::TextureKind::Texture2D,
+            desc: FormatDesc {
+                format: ktx2::Format::R8G8B8A8_UNORM,
+                color_space: ColorSpace::Linear,
+                alpha: AlphaMode::Opaque,
+            },
         }
     }
 
@@ -835,6 +849,25 @@ mod tests {
         }
     }
 
+    #[test]
+    fn convert_f32_mipmap_count_zero_errors() {
+        let err = convert(
+            three_mip_rgba8(),
+            ConvertSettings {
+                format: Some(TargetFormat::Uncompressed(ktx2::Format::R8_UNORM)),
+                container: Container::Raw,
+                mipmap: true,
+                mipmap_count: Some(0),
+                ..Default::default()
+            },
+        )
+        .unwrap_err();
+        assert!(
+            err.to_string().contains("mipmap count must be >= 1"),
+            "got: {err}"
+        );
+    }
+
     fn bc7_1block_image() -> Image {
         Image {
             surfaces: vec![vec![Surface {
@@ -844,11 +877,13 @@ mod tests {
                 depth: 1,
                 stride: 16,
                 slice_stride: 0,
+            }]],
+            kind: crate::TextureKind::Texture2D,
+            desc: FormatDesc {
                 format: ktx2::Format::BC7_UNORM_BLOCK,
                 color_space: ColorSpace::Linear,
                 alpha: AlphaMode::Opaque,
-            }]],
-            kind: crate::TextureKind::Texture2D,
+            },
         }
     }
 
@@ -1037,9 +1072,13 @@ mod tests {
                 let PipelineOutput::Raw(out) = out else {
                     panic!("expected Raw output");
                 };
-                let s = &out.surfaces[0][0];
-                assert_eq!(s.format, format, "encoder {}", info.name);
-                assert_eq!(s.color_space, ColorSpace::Srgb, "encoder {}", info.name);
+                assert_eq!(out.desc.format, format, "encoder {}", info.name);
+                assert_eq!(
+                    out.desc.color_space,
+                    ColorSpace::Srgb,
+                    "encoder {}",
+                    info.name
+                );
             }
         }
     }
@@ -1128,9 +1167,8 @@ mod tests {
         let PipelineOutput::Raw(out) = out else {
             panic!("expected Raw output");
         };
-        let s = &out.surfaces[0][0];
-        assert_eq!(s.format, ktx2::Format::R8G8B8A8_UNORM);
-        assert_eq!(s.color_space, ColorSpace::Linear);
+        assert_eq!(out.desc.format, ktx2::Format::R8G8B8A8_UNORM);
+        assert_eq!(out.desc.color_space, ColorSpace::Linear);
     }
 
     #[test]
@@ -1145,11 +1183,13 @@ mod tests {
                 depth: 1,
                 stride: 16,
                 slice_stride: 0,
+            }]],
+            kind: crate::TextureKind::Texture2D,
+            desc: FormatDesc {
                 format: ktx2::Format::BC7_UNORM_BLOCK,
                 color_space: ColorSpace::Linear,
                 alpha: AlphaMode::Opaque,
-            }]],
-            kind: crate::TextureKind::Texture2D,
+            },
         };
         let out = convert(
             image,
@@ -1192,11 +1232,13 @@ mod tests {
                 depth: 1,
                 stride: 4 * 4 + 8,
                 slice_stride: 0,
+            }]],
+            kind: crate::TextureKind::Texture2D,
+            desc: FormatDesc {
                 format: ktx2::Format::R8G8B8A8_UNORM,
                 color_space: ColorSpace::Linear,
                 alpha: AlphaMode::Straight,
-            }]],
-            kind: crate::TextureKind::Texture2D,
+            },
         }
     }
 
@@ -1329,11 +1371,13 @@ mod tests {
                 depth: 1,
                 stride: 2 * 16 + 16, // 2 blocks of payload + 1 block of padding
                 slice_stride: 0,
+            }]],
+            kind: crate::TextureKind::Texture2D,
+            desc: FormatDesc {
                 format: ktx2::Format::BC7_UNORM_BLOCK,
                 color_space: ColorSpace::Linear,
                 alpha: AlphaMode::Opaque,
-            }]],
-            kind: crate::TextureKind::Texture2D,
+            },
         };
 
         let out = convert(
@@ -1367,7 +1411,7 @@ mod tests {
 
         let decoded = crate::input::ktx2::decode_ktx2_image(&bytes).unwrap();
         let s = &decoded.surfaces[0][0];
-        assert_eq!(s.format, ktx2::Format::BC7_UNORM_BLOCK);
+        assert_eq!(decoded.desc.format, ktx2::Format::BC7_UNORM_BLOCK);
         let mut expected = Vec::new();
         expected.extend_from_slice(&block0);
         expected.extend_from_slice(&block1);
@@ -1406,11 +1450,13 @@ mod tests {
                 depth,
                 stride,
                 slice_stride,
+            }]],
+            kind: crate::TextureKind::Texture3D,
+            desc: FormatDesc {
                 format: ktx2::Format::R8G8B8A8_UNORM,
                 color_space: ColorSpace::Linear,
                 alpha: AlphaMode::Opaque,
-            }]],
-            kind: crate::TextureKind::Texture3D,
+            },
         };
 
         let out = convert(
@@ -1536,7 +1582,7 @@ mod tests {
             let PipelineOutput::Raw(image) = output else {
                 panic!("expected raw output");
             };
-            assert_eq!(image.surfaces[0][0].alpha, target_alpha);
+            assert_eq!(image.desc.alpha, target_alpha);
         }
     }
 }
@@ -1565,11 +1611,13 @@ mod bc6h_alpha_tests {
                 depth: 1,
                 stride: 4 * 16,
                 slice_stride: 0,
+            }]],
+            kind: crate::TextureKind::Texture2D,
+            desc: FormatDesc {
                 format: ktx2::Format::R32G32B32A32_SFLOAT,
                 color_space: ColorSpace::Linear,
                 alpha,
-            }]],
-            kind: crate::TextureKind::Texture2D,
+            },
         }
     }
 

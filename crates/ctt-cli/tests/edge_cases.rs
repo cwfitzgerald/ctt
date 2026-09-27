@@ -73,7 +73,7 @@ fn one_by_one_to_bc7_produces_single_block() {
 
     let decoded = assert::decode(&bytes);
     let surface = &decoded.surfaces[0][0];
-    assert_eq!(surface.format, Format::BC7_UNORM_BLOCK);
+    assert_eq!(decoded.desc.format, Format::BC7_UNORM_BLOCK);
     assert_eq!(surface.width, 1);
     assert_eq!(surface.height, 1);
     assert_eq!(surface.data.len(), 16, "one BC7 block = 16 bytes");

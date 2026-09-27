@@ -208,9 +208,7 @@ fn clamp_channel_simd<S: Simd>(simd: S, c: S::f32s) -> S::f32s {
 #[cfg(test)]
 mod load_tests {
     use super::*;
-    use crate::alpha::AlphaMode;
     use crate::processing::kernels::constructible_levels;
-    use crate::surface::ColorSpace;
 
     /// Per-pixel oracle: the shared exponent has no implicit leading one and no
     /// denormal special case, so each channel is simply `mantissa · 2^(exp−24)`.
@@ -288,9 +286,6 @@ mod load_tests {
             depth: 1,
             stride,
             slice_stride: 0,
-            format: ktx2::Format::E5B9G9R9_UFLOAT_PACK32,
-            color_space: ColorSpace::Linear,
-            alpha: AlphaMode::Opaque,
         }
     }
 
@@ -398,9 +393,6 @@ mod load_tests {
             depth: 1,
             stride,
             slice_stride: 0,
-            format: ktx2::Format::E5B9G9R9_UFLOAT_PACK32,
-            color_space: ColorSpace::Linear,
-            alpha: AlphaMode::Opaque,
         };
         for (label, level) in constructible_levels() {
             let got = load_e5b9g9r9_f32_at(level, &s).unwrap();

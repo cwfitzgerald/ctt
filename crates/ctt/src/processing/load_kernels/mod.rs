@@ -379,8 +379,6 @@ pub(crate) fn read_pixels<T: Copy + Pod>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::alpha::AlphaMode;
-    use crate::surface::ColorSpace;
 
     /// R16G16B16A16_SFLOAT with an *odd* row stride must load without panicking
     /// — rows land at odd byte offsets that a plain `cast_slice::<u8, f16>`
@@ -415,9 +413,6 @@ mod tests {
             depth: 1,
             stride: stride as u32,
             slice_stride: 0,
-            format: ktx2::Format::R16G16B16A16_SFLOAT,
-            color_space: ColorSpace::Linear,
-            alpha: AlphaMode::Opaque,
         };
 
         let buf = load_f16_f32(&surface, 4).unwrap();

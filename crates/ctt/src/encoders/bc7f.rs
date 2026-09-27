@@ -3,7 +3,7 @@ use ctt_bc7f::bindings::*;
 use crate::encoders::backend::Encoder;
 use crate::error::{Error, Result};
 use crate::quality::Quality;
-use crate::surface::Surface;
+use crate::surface::{FormatDesc, Surface};
 use crate::vk_format::FormatExt;
 
 /// BC7F options applied to the quality preset.
@@ -36,6 +36,7 @@ impl Encoder for Bc7fEncoder {
 
     fn compress(
         surface: &Surface,
+        desc: FormatDesc,
         format: ktx2::Format,
         quality: Quality,
         settings: &Bc7fSettings,
@@ -57,7 +58,7 @@ impl Encoder for Bc7fEncoder {
         if settings.disable_rgb_dual_plane {
             flags |= cPackBC7FlagDisableRGBDualPlane;
         }
-        let pixels = surface.tile_to_blocks(4, 4);
+        let pixels = surface.tile_to_blocks(desc.format, 4, 4);
         let blocks_x = surface.width.div_ceil(4) as usize;
         let mut output = vec![0; pixels.len() / 64 * 16];
         crate::encoders::parallel::for_each_row_chunk(
@@ -79,6 +80,12 @@ mod tests {
     use crate::alpha::AlphaMode;
     use crate::surface::ColorSpace;
 
+    const DESC: FormatDesc = FormatDesc {
+        format: ktx2::Format::R8G8B8A8_UNORM,
+        color_space: ColorSpace::Linear,
+        alpha: AlphaMode::Straight,
+    };
+
     fn solid_surface(alpha: u8) -> Surface {
         let mut data = vec![0xAB; 40 * 5];
         for y in 0..5 {
@@ -93,9 +100,6 @@ mod tests {
             depth: 1,
             stride: 40,
             slice_stride: 0,
-            format: ktx2::Format::R8G8B8A8_UNORM,
-            color_space: ColorSpace::Linear,
-            alpha: AlphaMode::Straight,
         }
     }
 
@@ -114,6 +118,7 @@ mod tests {
             ] {
                 let encoded = Bc7fEncoder::compress(
                     &surface,
+                    DESC,
                     ktx2::Format::BC7_UNORM_BLOCK,
                     quality,
                     &Bc7fSettings::default(),
@@ -138,6 +143,7 @@ mod tests {
         assert!(
             Bc7fEncoder::compress(
                 &solid_surface(255),
+                DESC,
                 ktx2::Format::BC1_RGB_UNORM_BLOCK,
                 Quality::Basic,
                 &Bc7fSettings::default()
@@ -156,6 +162,7 @@ mod tests {
         crate::encoders::assert_parallel_matches_serial(|| {
             Bc7fEncoder::compress(
                 &surface,
+                DESC,
                 ktx2::Format::BC7_SRGB_BLOCK,
                 Quality::Slow,
                 &Bc7fSettings::default(),

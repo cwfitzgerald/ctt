@@ -17,7 +17,7 @@ use crate::encoders::Encoder;
 use crate::encoders::backend::Encoder as _;
 use crate::error::{Error, Result};
 use crate::quality::Quality;
-use crate::surface::{Image, Surface};
+use crate::surface::{FormatDesc, Image, Surface};
 use crate::vk_format::FormatExt;
 
 /// A resolved encoder step: what format to encode to, the chosen encoder
@@ -58,6 +58,7 @@ pub fn encode_all(image: Image, step: &EncoderStep) -> Result<Image> {
         })
         .collect();
 
+    let desc = image.desc;
     let new_surfaces = super::map_nested(indexed, |(layer_idx, mip_idx, surface)| {
         profiling::scope!("encode_mip", encoder_name(&step.encoder));
         log::debug!(
@@ -68,7 +69,13 @@ pub fn encode_all(image: Image, step: &EncoderStep) -> Result<Image> {
             encoder_name(&step.encoder),
         );
 
-        let data = compress_with(&step.encoder, &surface, step.target_format, step.quality)?;
+        let data = compress_with(
+            &step.encoder,
+            &surface,
+            desc,
+            step.target_format,
+            step.quality,
+        )?;
 
         let bpp_block = step.target_format.bytes_per_block().unwrap_or(16) as u32;
         let (bw, _bh) = step.target_format.block_size().unwrap_or((4, 4));
@@ -81,15 +88,16 @@ pub fn encode_all(image: Image, step: &EncoderStep) -> Result<Image> {
             depth: surface.depth,
             stride: blocks_x * bpp_block,
             slice_stride: surface.slice_stride,
-            format: step.target_format,
-            color_space: surface.color_space,
-            alpha: surface.alpha,
         })
     })?;
 
     Ok(Image {
         surfaces: new_surfaces,
         kind: image.kind,
+        desc: FormatDesc {
+            format: step.target_format,
+            ..desc
+        },
     })
 }
 
@@ -180,41 +188,55 @@ fn required_input_for(encoder: &Encoder, target: ktx2::Format) -> Result<ktx2::F
 fn compress_with(
     encoder: &Encoder,
     surface: &Surface,
+    desc: FormatDesc,
     output_format: ktx2::Format,
     quality: Quality,
 ) -> Result<Vec<u8>> {
     match encoder {
         Encoder::Auto => {
             let resolved = pick_auto(output_format)?;
-            compress_with(&resolved, surface, output_format, quality)
+            compress_with(&resolved, surface, desc, output_format, quality)
         }
         #[cfg(feature = "encoder-bc7f")]
         Encoder::Bc7f(s) => {
-            crate::encoders::bc7f::Bc7fEncoder::compress(surface, output_format, quality, s)
+            crate::encoders::bc7f::Bc7fEncoder::compress(surface, desc, output_format, quality, s)
         }
         #[cfg(feature = "encoder-bc7enc")]
-        Encoder::Bc7enc(s) => {
-            crate::encoders::bc7enc::Bc7encEncoder::compress(surface, output_format, quality, s)
-        }
+        Encoder::Bc7enc(s) => crate::encoders::bc7enc::Bc7encEncoder::compress(
+            surface,
+            desc,
+            output_format,
+            quality,
+            s,
+        ),
         #[cfg(feature = "encoder-intel")]
         Encoder::Intel(s) => {
-            crate::encoders::ispc::IspcEncoder::compress(surface, output_format, quality, s)
+            crate::encoders::ispc::IspcEncoder::compress(surface, desc, output_format, quality, s)
         }
         #[cfg(feature = "encoder-etcpak")]
-        Encoder::Etcpak(s) => {
-            crate::encoders::etcpak::EtcpakEncoder::compress(surface, output_format, quality, s)
-        }
+        Encoder::Etcpak(s) => crate::encoders::etcpak::EtcpakEncoder::compress(
+            surface,
+            desc,
+            output_format,
+            quality,
+            s,
+        ),
         #[cfg(feature = "encoder-amd")]
         Encoder::Amd(s) => crate::encoders::compressonator::CompressonatorEncoder::compress(
             surface,
+            desc,
             output_format,
             quality,
             s,
         ),
         #[cfg(feature = "encoder-astcenc")]
-        Encoder::Astcenc(s) => {
-            crate::encoders::astcenc::AstcencEncoder::compress(surface, output_format, quality, s)
-        }
+        Encoder::Astcenc(s) => crate::encoders::astcenc::AstcencEncoder::compress(
+            surface,
+            desc,
+            output_format,
+            quality,
+            s,
+        ),
     }
 }
 

@@ -82,11 +82,11 @@ cargo add ctt --no-default-features --features encoder-bc7enc,encoder-intel,ispc
 
 ## Library usage
 
-The library API mirrors the CLI. Build a `Surface`, wrap it in an `Image`, and call `convert`:
+The library API mirrors the CLI. Build a `Surface`, wrap it in an `Image` with a `FormatDesc` that tells how to read the bytes, and call `convert`:
 
 ```rust,no_run
 use ctt::{convert, ConvertSettings, Container, TargetFormat, Format};
-use ctt::{Image, Surface, ColorSpace, AlphaMode, TextureKind};
+use ctt::{FormatDesc, Image, Surface, ColorSpace, AlphaMode, TextureKind};
 use ctt::encoders::Encoder;
 
 fn main() -> Result<(), ctt::Error> {
@@ -98,14 +98,16 @@ fn main() -> Result<(), ctt::Error> {
         depth: 1,
         stride: 512 * 4,
         slice_stride: 0,
-        format: Format::R8G8B8A8_SRGB,
-        color_space: ColorSpace::Srgb,
-        alpha: AlphaMode::Straight,
     };
 
     let image = Image {
         surfaces: vec![vec![surface]],
         kind: TextureKind::Texture2D,
+        desc: FormatDesc {
+            format: Format::R8G8B8A8_SRGB,
+            color_space: ColorSpace::Srgb,
+            alpha: AlphaMode::Straight,
+        },
     };
 
     let _ktx2_bytes = convert(image, ConvertSettings {

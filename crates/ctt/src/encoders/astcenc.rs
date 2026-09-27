@@ -3,7 +3,7 @@ pub use ctt_astcenc as astc;
 use crate::encoders::Quality;
 use crate::encoders::backend::Encoder;
 use crate::error::Result;
-use crate::surface::{ColorSpace, Surface};
+use crate::surface::{ColorSpace, FormatDesc, Surface};
 use crate::vk_format::FormatExt as _;
 
 /// How a normal map's X/Y components are laid out across the four astcenc
@@ -33,7 +33,7 @@ pub enum NormalSwizzle {
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub enum AstcencUsage {
     /// Generic color texture. Uses LDR or LDR sRGB profile based on the
-    /// surface's color space; passes RGBA through unchanged.
+    /// image's color space; passes RGBA through unchanged.
     #[default]
     Color,
     /// 2-channel tangent-space normal map. Sets `MAP_NORMAL`, optimizes for
@@ -173,6 +173,7 @@ impl Encoder for AstcencEncoder {
 
     fn compress(
         surface: &Surface,
+        desc: FormatDesc,
         format: ktx2::Format,
         quality: Quality,
         settings: &AstcencSettings,
@@ -223,7 +224,7 @@ impl Encoder for AstcencEncoder {
         // packed input. Repack when the surface carries padded rows; this costs
         // one full-image copy but only on the padded path (tight surfaces
         // borrow their data unchanged).
-        let tight = surface.tight_data();
+        let tight = surface.tight_data(desc.format);
         let mut data_ptr = tight.as_ptr() as *mut std::ffi::c_void;
         let mut img = astc::bindings::astcenc_image {
             dim_x: surface.width,
@@ -366,6 +367,12 @@ mod tests {
     use crate::alpha::AlphaMode;
     use crate::surface::ColorSpace;
 
+    const DESC: FormatDesc = FormatDesc {
+        format: ktx2::Format::R8G8B8A8_UNORM,
+        color_space: ColorSpace::Linear,
+        alpha: AlphaMode::Opaque,
+    };
+
     /// Build an RGBA8 surface with a non-uniform pattern and the given row
     /// stride. Bytes between the packed row payload and `stride` are filled
     /// with a sentinel so a stride-ignoring read would corrupt the result.
@@ -391,9 +398,6 @@ mod tests {
             depth: 1,
             stride,
             slice_stride: 0,
-            format: ktx2::Format::R8G8B8A8_UNORM,
-            color_space: ColorSpace::Linear,
-            alpha: AlphaMode::Opaque,
         }
     }
 
@@ -443,6 +447,7 @@ mod tests {
         let padded = patterned(8, 8, 8 * 4 + 16);
         let a = AstcencEncoder::compress(
             &tight,
+            DESC,
             ktx2::Format::ASTC_4x4_UNORM_BLOCK,
             Quality::Fast,
             &AstcencSettings::default(),
@@ -450,6 +455,7 @@ mod tests {
         .unwrap();
         let b = AstcencEncoder::compress(
             &padded,
+            DESC,
             ktx2::Format::ASTC_4x4_UNORM_BLOCK,
             Quality::Fast,
             &AstcencSettings::default(),
@@ -465,6 +471,7 @@ mod tests {
         crate::encoders::assert_parallel_matches_serial(|| {
             AstcencEncoder::compress(
                 &surface,
+                DESC,
                 ktx2::Format::ASTC_4x4_UNORM_BLOCK,
                 Quality::Fast,
                 &AstcencSettings::default(),

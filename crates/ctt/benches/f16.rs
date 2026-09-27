@@ -17,24 +17,17 @@
 use std::hint::black_box;
 
 use criterion::{Criterion, Throughput, criterion_group, criterion_main};
+use ctt::Surface;
 use ctt::bench_internals::{Buffer, load_f16_f32, store_f16_f32};
-use ctt::{AlphaMode, ColorSpace, Format, Surface};
 use half::f16;
 
 mod common;
 
 use common::{PIXEL_COUNT, SIDE};
 
-/// Build an f16 surface with `channels` channels and the matching
-/// `Format::*_SFLOAT`. Pattern covers a range of values so neither the
+/// Build an f16 surface with `channels` channels. Pattern covers a range of values so neither the
 /// scalar nor the bulk path can short-circuit on a constant.
 fn make_f16_surface(channels: usize) -> Surface {
-    let format = match channels {
-        1 => Format::R16_SFLOAT,
-        2 => Format::R16G16_SFLOAT,
-        4 => Format::R16G16B16A16_SFLOAT,
-        _ => unreachable!(),
-    };
     let n = (SIDE as usize) * (SIDE as usize);
     let mut data = vec![0u8; n * channels * 2];
     for i in 0..n {
@@ -53,9 +46,6 @@ fn make_f16_surface(channels: usize) -> Surface {
         depth: 1,
         stride: SIDE * channels as u32 * 2,
         slice_stride: 0,
-        format,
-        color_space: ColorSpace::Linear,
-        alpha: AlphaMode::Opaque,
     }
 }
 

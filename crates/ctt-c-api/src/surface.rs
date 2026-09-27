@@ -1,6 +1,4 @@
 use crate::error::{Status, set_last_error};
-use crate::formats::to_ctt_format;
-use crate::types::{AlphaMode, ColorSpace, Format};
 
 /// Opaque handle to a single image surface (raw pixels or compressed blocks).
 ///
@@ -13,21 +11,9 @@ pub struct Surface(pub(crate) ctt::Surface);
 /// Create a new surface, copying `data_len` bytes from `data` into Rust's
 /// allocator.
 ///
-/// `format` must be a valid VkFormat value (non-zero). `slice_stride` is
-/// only meaningful when `depth > 1`; pass `0` for 2D surfaces.
-///
-/// `format` must agree with `color_space`:
-///
-/// - `CTT_COLOR_SPACE_SRGB`: if the format has an sRGB variant, the format
-///   must be that variant. `CTT_FORMAT_R8G8B8A8_SRGB` is valid and
-///   `CTT_FORMAT_R8G8B8A8_UNORM` is not. `CTT_FORMAT_R16G16B16A16_SFLOAT` has
-///   no sRGB variant, so it is valid.
-/// - `CTT_COLOR_SPACE_LINEAR`: the format must not be an sRGB variant.
-///   `CTT_FORMAT_R8G8B8A8_UNORM` and `CTT_FORMAT_R16G16B16A16_SFLOAT` are
-///   valid and `CTT_FORMAT_R8G8B8A8_SRGB` is not.
-///
-/// This function does not check the rule; `ctt_convert` fails with an error
-/// for a surface that breaks it.
+/// `slice_stride` is only meaningful when `depth > 1`; pass `0` for 2D
+/// surfaces. The [`FormatDesc`](crate::FormatDesc) of the image that holds
+/// the surface tells how to read the bytes.
 ///
 /// On failure returns `NULL` and sets the thread-local error message.
 #[unsafe(no_mangle)]
@@ -39,19 +25,11 @@ pub unsafe extern "C" fn ctt_surface_create(
     depth: u32,
     stride: u32,
     slice_stride: u32,
-    format: Format,
-    color_space: ColorSpace,
-    alpha: AlphaMode,
 ) -> *mut Surface {
     if data.is_null() && data_len != 0 {
         set_last_error("ctt_surface_create: data is null but data_len != 0");
         return std::ptr::null_mut();
     }
-    let Some(fmt) = to_ctt_format(format) else {
-        set_last_error("ctt_surface_create: format must be a non-zero VkFormat value");
-        return std::ptr::null_mut();
-    };
-
     // Safety: caller asserts data points to data_len bytes.
     let bytes = if data_len == 0 {
         Vec::new()
@@ -66,9 +44,6 @@ pub unsafe extern "C" fn ctt_surface_create(
         depth,
         stride,
         slice_stride,
-        format: fmt,
-        color_space: color_space.into(),
-        alpha: alpha.into(),
     };
     Box::into_raw(Box::new(Surface(surface)))
 }
@@ -133,28 +108,7 @@ pub unsafe extern "C" fn ctt_surface_slice_stride(s: *const Surface) -> u32 {
     unsafe { s.as_ref() }.map_or(0, |s| s.0.slice_stride)
 }
 
-/// VkFormat of the surface. Returns `0` (`VK_FORMAT_UNDEFINED`) if `s` is
-/// null.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn ctt_surface_format(s: *const Surface) -> Format {
-    unsafe { s.as_ref() }.map_or(0, |s| s.0.format.value())
-}
-
-/// Color space of the surface. Returns `CTT_COLOR_SPACE_LINEAR` if `s` is
-/// null.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn ctt_surface_color_space(s: *const Surface) -> ColorSpace {
-    unsafe { s.as_ref() }.map_or(ColorSpace::Linear, |s| s.0.color_space.into())
-}
-
-/// Alpha mode of the surface. Returns `CTT_ALPHA_MODE_STRAIGHT` if `s` is
-/// null.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn ctt_surface_alpha(s: *const Surface) -> AlphaMode {
-    unsafe { s.as_ref() }.map_or(AlphaMode::Straight, |s| s.0.alpha.into())
-}
-
-/// Deep-copy a surface (data and metadata).
+/// Deep-copy a surface (data and layout).
 ///
 /// On failure returns `NULL` and sets the thread-local error message.
 #[unsafe(no_mangle)]

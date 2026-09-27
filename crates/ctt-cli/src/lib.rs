@@ -13,7 +13,7 @@ use ctt::encoders::{Encoder, EncoderInfo, compiled_in_encoders};
 use ctt::input::{InputOverrides, decode_container};
 use ctt::{
     AlphaMode, ColorSpace, Container, ConvertSettings, CubemapInput, EquirectangularFront,
-    EquirectangularOrientation, Error, Format, FormatExt, Image, Ktx2Supercompression,
+    EquirectangularOrientation, Error, Format, FormatDesc, FormatExt, Image, Ktx2Supercompression,
     MipmapFilter, PipelineOutput, Quality, Surface, Swizzle, SwizzleChannel, TargetFormat,
     TextureKind, format_short_name, parse_format, split_cubemap,
 };
@@ -110,14 +110,14 @@ pub fn run(args: Args) -> Result<(), Box<dyn std::error::Error>> {
 
     let image = if args.cubemap {
         log::info!("Cubemap mode, layout: {cubemap_layout:?}");
-        build_cubemap_image(images, cubemap_layout)?
+        build_cubemap_image(images, &args.input, cubemap_layout)?
     } else if args.volume {
         log::info!("Volume mode: stacking {} slices", images.len());
         build_volume_image(images, &args.input)?
     } else if images.len() == 1 {
         images.into_iter().next().unwrap()
     } else {
-        assemble_array(images)?
+        assemble_array(images, &args.input)?
     };
 
     let supercompression = match (args.zstd, args.zlib) {
@@ -146,7 +146,7 @@ pub fn run(args: Args) -> Result<(), Box<dyn std::error::Error>> {
     let output_color_space = args
         .output_color_space
         .map(map_color_space)
-        .unwrap_or(image.surfaces[0][0].color_space);
+        .unwrap_or(image.desc.color_space);
     let target_format = args
         .format
         .as_deref()
@@ -418,11 +418,7 @@ fn load_images(
             let image = if let Some(img) = decode_container(&data, overrides)? {
                 img
             } else {
-                let surface = load_standard_image(&data, color_space_override, alpha)?;
-                Image {
-                    surfaces: vec![vec![surface]],
-                    kind: TextureKind::Texture2D,
-                }
+                load_standard_image(&data, color_space_override, alpha)?
             };
 
             let first = &image.surfaces[0][0];
@@ -431,7 +427,7 @@ fn load_images(
                 path.display(),
                 first.width,
                 first.height,
-                first.format,
+                image.desc.format,
                 image.surfaces.len(),
                 image.surfaces[0].len(),
             );
@@ -444,7 +440,7 @@ fn load_standard_image(
     data: &[u8],
     color_space_override: Option<ColorSpace>,
     alpha: AlphaMode,
-) -> Result<Surface, Error> {
+) -> Result<Image, Error> {
     let img = image::load_from_memory(data).map_err(|e| Error::InputDecoding(e.to_string()))?;
 
     // Without an explicit override, integer images default to sRGB while
@@ -457,167 +453,174 @@ fn load_standard_image(
         _ => ColorSpace::Srgb,
     });
 
-    let mut surface = match img {
+    let (surface, format) = match img {
         image::DynamicImage::ImageLuma8(buf) => {
             let (width, height) = buf.dimensions();
-            Surface {
-                data: buf.into_raw(),
-                width,
-                height,
-                depth: 1,
-                stride: width,
-                slice_stride: 0,
-                format: Format::R8_UNORM,
-                color_space,
-                alpha,
-            }
+            (
+                Surface {
+                    data: buf.into_raw(),
+                    width,
+                    height,
+                    depth: 1,
+                    stride: width,
+                    slice_stride: 0,
+                },
+                Format::R8_UNORM,
+            )
         }
         image::DynamicImage::ImageLumaA8(buf) => {
             let (width, height) = buf.dimensions();
-            Surface {
-                data: buf.into_raw(),
-                width,
-                height,
-                depth: 1,
-                stride: width * 2,
-                slice_stride: 0,
-                format: Format::R8G8_UNORM,
-                color_space,
-                alpha,
-            }
+            (
+                Surface {
+                    data: buf.into_raw(),
+                    width,
+                    height,
+                    depth: 1,
+                    stride: width * 2,
+                    slice_stride: 0,
+                },
+                Format::R8G8_UNORM,
+            )
         }
         image::DynamicImage::ImageRgb8(buf) => {
             let (width, height) = buf.dimensions();
-            Surface {
-                data: buf.into_raw(),
-                width,
-                height,
-                depth: 1,
-                stride: width * 3,
-                slice_stride: 0,
-                format: Format::R8G8B8_UNORM,
-                color_space,
-                alpha,
-            }
+            (
+                Surface {
+                    data: buf.into_raw(),
+                    width,
+                    height,
+                    depth: 1,
+                    stride: width * 3,
+                    slice_stride: 0,
+                },
+                Format::R8G8B8_UNORM,
+            )
         }
         image::DynamicImage::ImageRgba8(buf) => {
             let (width, height) = buf.dimensions();
-            Surface {
-                data: buf.into_raw(),
-                width,
-                height,
-                depth: 1,
-                stride: width * 4,
-                slice_stride: 0,
-                format: Format::R8G8B8A8_UNORM,
-                color_space,
-                alpha,
-            }
+            (
+                Surface {
+                    data: buf.into_raw(),
+                    width,
+                    height,
+                    depth: 1,
+                    stride: width * 4,
+                    slice_stride: 0,
+                },
+                Format::R8G8B8A8_UNORM,
+            )
         }
         image::DynamicImage::ImageLuma16(buf) => {
             let (width, height) = buf.dimensions();
-            Surface {
-                data: bytemuck::cast_slice(buf.as_raw()).to_vec(),
-                width,
-                height,
-                depth: 1,
-                stride: width * 2,
-                slice_stride: 0,
-                format: Format::R16_UNORM,
-                color_space,
-                alpha,
-            }
+            (
+                Surface {
+                    data: bytemuck::cast_slice(buf.as_raw()).to_vec(),
+                    width,
+                    height,
+                    depth: 1,
+                    stride: width * 2,
+                    slice_stride: 0,
+                },
+                Format::R16_UNORM,
+            )
         }
         image::DynamicImage::ImageLumaA16(buf) => {
             let (width, height) = buf.dimensions();
-            Surface {
-                data: bytemuck::cast_slice(buf.as_raw()).to_vec(),
-                width,
-                height,
-                depth: 1,
-                stride: width * 4,
-                slice_stride: 0,
-                format: Format::R16G16_UNORM,
-                color_space,
-                alpha,
-            }
+            (
+                Surface {
+                    data: bytemuck::cast_slice(buf.as_raw()).to_vec(),
+                    width,
+                    height,
+                    depth: 1,
+                    stride: width * 4,
+                    slice_stride: 0,
+                },
+                Format::R16G16_UNORM,
+            )
         }
         image::DynamicImage::ImageRgb16(buf) => {
             let (width, height) = buf.dimensions();
-            Surface {
-                data: bytemuck::cast_slice(buf.as_raw()).to_vec(),
-                width,
-                height,
-                depth: 1,
-                stride: width * 6,
-                slice_stride: 0,
-                format: Format::R16G16B16_UNORM,
-                color_space,
-                alpha,
-            }
+            (
+                Surface {
+                    data: bytemuck::cast_slice(buf.as_raw()).to_vec(),
+                    width,
+                    height,
+                    depth: 1,
+                    stride: width * 6,
+                    slice_stride: 0,
+                },
+                Format::R16G16B16_UNORM,
+            )
         }
         image::DynamicImage::ImageRgba16(buf) => {
             let (width, height) = buf.dimensions();
-            Surface {
-                data: bytemuck::cast_slice(buf.as_raw()).to_vec(),
-                width,
-                height,
-                depth: 1,
-                stride: width * 8,
-                slice_stride: 0,
-                format: Format::R16G16B16A16_UNORM,
-                color_space,
-                alpha,
-            }
+            (
+                Surface {
+                    data: bytemuck::cast_slice(buf.as_raw()).to_vec(),
+                    width,
+                    height,
+                    depth: 1,
+                    stride: width * 8,
+                    slice_stride: 0,
+                },
+                Format::R16G16B16A16_UNORM,
+            )
         }
         image::DynamicImage::ImageRgb32F(buf) => {
             let (width, height) = buf.dimensions();
-            Surface {
-                data: bytemuck::cast_slice(buf.as_raw()).to_vec(),
-                width,
-                height,
-                depth: 1,
-                stride: width * 12,
-                slice_stride: 0,
-                format: Format::R32G32B32_SFLOAT,
-                color_space,
-                alpha,
-            }
+            (
+                Surface {
+                    data: bytemuck::cast_slice(buf.as_raw()).to_vec(),
+                    width,
+                    height,
+                    depth: 1,
+                    stride: width * 12,
+                    slice_stride: 0,
+                },
+                Format::R32G32B32_SFLOAT,
+            )
         }
         image::DynamicImage::ImageRgba32F(buf) => {
             let (width, height) = buf.dimensions();
-            Surface {
-                data: bytemuck::cast_slice(buf.as_raw()).to_vec(),
-                width,
-                height,
-                depth: 1,
-                stride: width * 16,
-                slice_stride: 0,
-                format: Format::R32G32B32A32_SFLOAT,
-                color_space,
-                alpha,
-            }
+            (
+                Surface {
+                    data: bytemuck::cast_slice(buf.as_raw()).to_vec(),
+                    width,
+                    height,
+                    depth: 1,
+                    stride: width * 16,
+                    slice_stride: 0,
+                },
+                Format::R32G32B32A32_SFLOAT,
+            )
         }
         _ => {
             let rgba = img.to_rgba8();
             let (width, height) = rgba.dimensions();
-            Surface {
-                data: rgba.into_raw(),
-                width,
-                height,
-                depth: 1,
-                stride: width * 4,
-                slice_stride: 0,
-                format: Format::R8G8B8A8_UNORM,
-                color_space,
-                alpha,
-            }
+            (
+                Surface {
+                    data: rgba.into_raw(),
+                    width,
+                    height,
+                    depth: 1,
+                    stride: width * 4,
+                    slice_stride: 0,
+                },
+                Format::R8G8B8A8_UNORM,
+            )
         }
     };
-    // The arms above name UNORM formats; pick the variant for the color space.
-    surface.format = surface.format.with_color_space(color_space);
-
-    Ok(surface)
+    Ok(Image {
+        surfaces: vec![vec![surface]],
+        kind: TextureKind::Texture2D,
+        desc: FormatDesc {
+            // The arms above name UNORM formats; pick the variant for the
+            // color space.
+            format: format.with_color_space(color_space),
+            color_space,
+            alpha,
+        },
+    })
 }
 
 /// Cubemap layout selection with the equirectangular-only flags resolved into
@@ -671,6 +674,7 @@ fn resolve_cubemap_layout(args: &Args) -> Result<CubemapLayout, Error> {
 
 fn build_cubemap_image(
     images: Vec<Image>,
+    paths: &[std::path::PathBuf],
     layout: CubemapLayout,
 ) -> Result<Image, Box<dyn std::error::Error>> {
     // Single already-cubemap input (single cube or cube array): passthrough.
@@ -685,6 +689,7 @@ fn build_cubemap_image(
             .all(|i| matches!(i.kind, TextureKind::Cubemap))
     {
         validate_mip_counts(&images)?;
+        let desc = shared_desc(&images, paths)?;
         let mut surfaces = Vec::new();
         for img in images {
             surfaces.extend(img.surfaces);
@@ -692,6 +697,7 @@ fn build_cubemap_image(
         return Ok(Image {
             surfaces,
             kind: TextureKind::Cubemap,
+            desc,
         });
     }
 
@@ -723,6 +729,7 @@ fn build_cubemap_image(
             }
         }
 
+        let desc = shared_desc(&images, paths)?;
         let surfaces: Vec<Vec<Surface>> = images
             .into_iter()
             .map(|img| img.surfaces.into_iter().next().unwrap())
@@ -731,46 +738,43 @@ fn build_cubemap_image(
         return Ok(Image {
             surfaces,
             kind: TextureKind::Cubemap,
+            desc,
         });
     }
 
     if images.len() == 1 {
-        let image = images.into_iter().next().unwrap();
-        if image.surfaces.len() != 1 || image.surfaces[0].len() != 1 {
-            return Err(Error::UnsupportedFormat(
-                "cubemap layout splitting requires a single-layer, single-mip input".into(),
-            )
-            .into());
-        }
-        let surface = image
-            .surfaces
-            .into_iter()
-            .next()
-            .unwrap()
-            .into_iter()
-            .next()
-            .unwrap();
+        let image = &images[0];
+        let [layer] = image.surfaces.as_slice() else {
+            return Err(split_shape_error().into());
+        };
+        let [surface] = layer.as_slice() else {
+            return Err(split_shape_error().into());
+        };
+        let desc = image.desc;
         let cubemap_input = match layout {
-            CubemapLayout::Cross => CubemapInput::Cross(surface),
-            CubemapLayout::Strip => CubemapInput::Strip(surface),
+            CubemapLayout::Cross => CubemapInput::Cross { surface, desc },
+            CubemapLayout::Strip => CubemapInput::Strip { surface, desc },
             CubemapLayout::Equirectangular {
                 face_size,
                 orientation,
             } => CubemapInput::Equirectangular {
                 surface,
+                desc,
                 face_size,
                 orientation,
             },
         };
-        let faces = split_cubemap(cubemap_input)?;
-        let surfaces = faces.into_iter().map(|face| vec![face]).collect();
-        return Ok(Image {
-            surfaces,
-            kind: TextureKind::Cubemap,
-        });
+        return Ok(split_cubemap(cubemap_input)?);
     }
 
     Err(Error::CubemapFaceCount(images.len()).into())
+}
+
+/// Error for a cubemap layout input that is not one layer with one mip.
+fn split_shape_error() -> Error {
+    Error::UnsupportedFormat(
+        "cubemap layout splitting requires a single-layer, single-mip input".into(),
+    )
 }
 
 /// Stack N single-layer single-mip inputs into one 3D Surface. Each input
@@ -822,9 +826,7 @@ fn build_volume_image(
     let width = first.width;
     let height = first.height;
     let stride = first.stride;
-    let format = first.format;
-    let color_space = first.color_space;
-    let alpha = first.alpha;
+    let desc = shared_desc(&images, paths)?;
     let slice_stride = first.data.len() as u32;
     let p0 = paths[0].display();
 
@@ -836,27 +838,6 @@ fn build_volume_image(
             return Err(Error::UnsupportedFormat(format!(
                 "--volume slice {i} ({p}): dimensions {}x{} differ from slice 0 ({p0}, {}x{})",
                 s.width, s.height, width, height,
-            ))
-            .into());
-        }
-        if s.format != format {
-            return Err(Error::UnsupportedFormat(format!(
-                "--volume slice {i} ({p}): format {:?} differs from slice 0 ({p0}, {:?})",
-                s.format, format,
-            ))
-            .into());
-        }
-        if s.color_space != color_space {
-            return Err(Error::UnsupportedFormat(format!(
-                "--volume slice {i} ({p}): color space {:?} differs from slice 0 ({p0}, {:?})",
-                s.color_space, color_space,
-            ))
-            .into());
-        }
-        if s.alpha != alpha {
-            return Err(Error::UnsupportedFormat(format!(
-                "--volume slice {i} ({p}): alpha mode {:?} differs from slice 0 ({p0}, {:?})",
-                s.alpha, alpha,
             ))
             .into());
         }
@@ -879,15 +860,16 @@ fn build_volume_image(
             depth,
             stride,
             slice_stride,
-            format,
-            color_space,
-            alpha,
         }]],
         kind: TextureKind::Texture3D,
+        desc,
     })
 }
 
-fn assemble_array(images: Vec<Image>) -> Result<Image, Box<dyn std::error::Error>> {
+fn assemble_array(
+    images: Vec<Image>,
+    paths: &[std::path::PathBuf],
+) -> Result<Image, Box<dyn std::error::Error>> {
     validate_mip_counts(&images)?;
 
     for (i, img) in images.iter().enumerate() {
@@ -905,6 +887,7 @@ fn assemble_array(images: Vec<Image>) -> Result<Image, Box<dyn std::error::Error
         }
     }
 
+    let desc = shared_desc(&images, paths)?;
     let mut surfaces = Vec::new();
     for img in images {
         surfaces.extend(img.surfaces);
@@ -913,7 +896,42 @@ fn assemble_array(images: Vec<Image>) -> Result<Image, Box<dyn std::error::Error
     Ok(Image {
         surfaces,
         kind: TextureKind::Texture2D,
+        desc,
     })
+}
+
+/// Return the format description that all `images` share. Errors on the
+/// first input whose description differs from input 0. `paths` is parallel
+/// to `images`.
+fn shared_desc(images: &[Image], paths: &[std::path::PathBuf]) -> Result<FormatDesc, Error> {
+    let desc = images[0].desc;
+    let p0 = paths[0].display();
+    for (i, (img, path)) in images.iter().zip(paths).enumerate().skip(1) {
+        let d = img.desc;
+        let mismatch = if d.format != desc.format {
+            format!(
+                "format {:?} differs from input 0 ({p0}, {:?})",
+                d.format, desc.format
+            )
+        } else if d.color_space != desc.color_space {
+            format!(
+                "color space {} differs from input 0 ({p0}, {})",
+                d.color_space, desc.color_space,
+            )
+        } else if d.alpha != desc.alpha {
+            format!(
+                "alpha mode {:?} differs from input 0 ({p0}, {:?})",
+                d.alpha, desc.alpha,
+            )
+        } else {
+            continue;
+        };
+        return Err(Error::UnsupportedFormat(format!(
+            "input {i} ({}): {mismatch}",
+            path.display(),
+        )));
+    }
+    Ok(desc)
 }
 
 fn validate_mip_counts(images: &[Image]) -> Result<(), Box<dyn std::error::Error>> {

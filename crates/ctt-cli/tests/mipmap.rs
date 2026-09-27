@@ -140,12 +140,12 @@ fn mipmap_plus_bc7_compresses_every_level() {
     assert_eq!(info.format, Some(ktx2::Format::BC7_UNORM_BLOCK));
 
     let decoded = assert::decode(&bytes);
+    assert_eq!(decoded.desc.format, Format::BC7_UNORM_BLOCK);
     let expected_dims = [(16u32, 16u32), (8, 8), (4, 4), (2, 2), (1, 1)];
     for (i, (w, h)) in expected_dims.iter().enumerate() {
         let s = &decoded.surfaces[0][i];
         assert_eq!(s.width, *w, "mip {i} width");
         assert_eq!(s.height, *h, "mip {i} height");
-        assert_eq!(s.format, Format::BC7_UNORM_BLOCK, "mip {i} format");
     }
 }
 

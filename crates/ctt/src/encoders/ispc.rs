@@ -5,7 +5,7 @@ use crate::encoders::Quality;
 use crate::encoders::backend::Encoder;
 use crate::encoders::edge;
 use crate::error::{Error, Result};
-use crate::surface::Surface;
+use crate::surface::{FormatDesc, Surface};
 use crate::vk_format::FormatExt as _;
 
 /// How the BC7 encoder should treat the alpha channel.
@@ -17,7 +17,7 @@ use crate::vk_format::FormatExt as _;
 /// dropping alpha precision the asset actually needed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum IspcBc7Alpha {
-    /// Derive from the surface's [`AlphaMode`]: `Opaque` → opaque
+    /// Derive from the image's [`AlphaMode`]: `Opaque` → opaque
     /// presets, anything else → alpha-aware presets.
     #[default]
     Auto,
@@ -84,6 +84,7 @@ impl Encoder for IspcEncoder {
 
     fn compress(
         surface: &Surface,
+        desc: FormatDesc,
         format: ktx2::Format,
         quality: Quality,
         settings: &IspcSettings,
@@ -166,10 +167,8 @@ impl Encoder for IspcEncoder {
                 ))
             }
             F::BC7_UNORM_BLOCK => {
-                let bc7_settings = bc7_settings(
-                    quality,
-                    resolve_bc7_alpha(settings.bc7_alpha, surface.alpha),
-                );
+                let bc7_settings =
+                    bc7_settings(quality, resolve_bc7_alpha(settings.bc7_alpha, desc.alpha));
                 Ok(encode_unaligned(
                     data,
                     width,
@@ -371,6 +370,12 @@ mod tests {
     use crate::alpha::AlphaMode;
     use crate::surface::ColorSpace;
 
+    const DESC: FormatDesc = FormatDesc {
+        format: ktx2::Format::R8G8B8A8_UNORM,
+        color_space: ColorSpace::Linear,
+        alpha: AlphaMode::Opaque,
+    };
+
     fn solid_red_surface(width: u32, height: u32) -> Surface {
         let mut data = Vec::with_capacity((width * height * 4) as usize);
         for _ in 0..(width * height) {
@@ -383,9 +388,6 @@ mod tests {
             depth: 1,
             stride: width * 4,
             slice_stride: 0,
-            format: ktx2::Format::R8G8B8A8_UNORM,
-            color_space: ColorSpace::Linear,
-            alpha: AlphaMode::Opaque,
         }
     }
 
@@ -415,9 +417,6 @@ mod tests {
             depth: 1,
             stride,
             slice_stride: 0,
-            format: ktx2::Format::R8G8B8A8_UNORM,
-            color_space: ColorSpace::Linear,
-            alpha: AlphaMode::Opaque,
         }
     }
 
@@ -428,6 +427,7 @@ mod tests {
         crate::encoders::assert_parallel_matches_serial(|| {
             IspcEncoder::compress(
                 &surface,
+                DESC,
                 ktx2::Format::BC7_UNORM_BLOCK,
                 Quality::Fast,
                 &IspcSettings::default(),
@@ -442,6 +442,7 @@ mod tests {
         let surface = solid_red_surface(5, 5);
         let out = IspcEncoder::compress(
             &surface,
+            DESC,
             ktx2::Format::BC7_UNORM_BLOCK,
             Quality::UltraFast,
             &IspcSettings::default(),
@@ -470,6 +471,7 @@ mod tests {
         let surface = solid_red_surface(7, 3);
         let out = IspcEncoder::compress(
             &surface,
+            DESC,
             ktx2::Format::BC1_RGBA_UNORM_BLOCK,
             Quality::UltraFast,
             &IspcSettings::default(),
@@ -513,6 +515,7 @@ mod tests {
         let surface = solid_red_surface(4, 4);
         let out = IspcEncoder::compress(
             &surface,
+            DESC,
             ktx2::Format::BC7_UNORM_BLOCK,
             Quality::UltraFast,
             &IspcSettings::default(),

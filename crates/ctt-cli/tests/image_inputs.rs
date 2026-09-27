@@ -151,8 +151,8 @@ fn exr_defaults_to_linear_and_preserves_hdr_values() {
 
     let decoded = assert::decode(&read(&output));
     let s = &decoded.surfaces[0][0];
-    assert_eq!(s.format, F::R32G32B32A32_SFLOAT);
-    assert_eq!(s.color_space, ctt::ColorSpace::Linear);
+    assert_eq!(decoded.desc.format, F::R32G32B32A32_SFLOAT);
+    assert_eq!(decoded.desc.color_space, ctt::ColorSpace::Linear);
     let got: &[f32] = bytemuck::cast_slice(&s.data);
     assert_eq!(got, values.as_slice(), "HDR values must pass through");
 }

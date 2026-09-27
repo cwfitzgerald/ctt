@@ -3,7 +3,7 @@ use std::io::Read;
 
 use crate::alpha::AlphaMode;
 use crate::error::{Error, Result};
-use crate::surface::{Image, Surface, TextureKind};
+use crate::surface::{FormatDesc, Image, Surface, TextureKind};
 use crate::vk_format::FormatExt as _;
 
 // A texture with this many independently addressable layer/face surfaces is
@@ -183,9 +183,6 @@ pub fn decode_ktx2_image(data: &[u8]) -> Result<Image> {
                 depth: mip_d,
                 stride,
                 slice_stride: surface_slice_stride,
-                format,
-                color_space,
-                alpha,
             });
         }
     }
@@ -201,7 +198,15 @@ pub fn decode_ktx2_image(data: &[u8]) -> Result<Image> {
         kind,
     );
 
-    Ok(Image { surfaces, kind })
+    Ok(Image {
+        surfaces,
+        kind,
+        desc: FormatDesc {
+            format,
+            color_space,
+            alpha,
+        },
+    })
 }
 
 /// Decompress a single mip level's data according to the supercompression scheme.
@@ -419,11 +424,13 @@ mod tests {
                 depth: 1,
                 stride: 16,
                 slice_stride: 0,
+            }]],
+            kind: TextureKind::Texture2D,
+            desc: FormatDesc {
                 format: ktx2::Format::R8G8B8A8_SRGB,
                 color_space: ColorSpace::Srgb,
                 alpha: AlphaMode::Straight,
-            }]],
-            kind: TextureKind::Texture2D,
+            },
         };
 
         let encoded = encode_ktx2_image(&original, None).unwrap();
@@ -434,8 +441,8 @@ mod tests {
         let s = &decoded.surfaces[0][0];
         assert_eq!(s.width, 4);
         assert_eq!(s.height, 4);
-        assert_eq!(s.format, ktx2::Format::R8G8B8A8_SRGB);
-        assert_eq!(s.color_space, ColorSpace::Srgb);
+        assert_eq!(decoded.desc.format, ktx2::Format::R8G8B8A8_SRGB);
+        assert_eq!(decoded.desc.color_space, ColorSpace::Srgb);
         assert_eq!(s.data, vec![42u8; 64]);
     }
 
@@ -451,9 +458,6 @@ mod tests {
                     depth: 1,
                     stride: 16,
                     slice_stride: 0,
-                    format: ktx2::Format::R8G8B8A8_UNORM,
-                    color_space: ColorSpace::Linear,
-                    alpha: AlphaMode::Straight,
                 },
                 Surface {
                     data: vec![0xBB; 2 * 2 * 4],
@@ -462,9 +466,6 @@ mod tests {
                     depth: 1,
                     stride: 8,
                     slice_stride: 0,
-                    format: ktx2::Format::R8G8B8A8_UNORM,
-                    color_space: ColorSpace::Linear,
-                    alpha: AlphaMode::Straight,
                 },
                 Surface {
                     data: vec![0xCC; 4],
@@ -473,12 +474,14 @@ mod tests {
                     depth: 1,
                     stride: 4,
                     slice_stride: 0,
-                    format: ktx2::Format::R8G8B8A8_UNORM,
-                    color_space: ColorSpace::Linear,
-                    alpha: AlphaMode::Straight,
                 },
             ]],
             kind: TextureKind::Texture2D,
+            desc: FormatDesc {
+                format: ktx2::Format::R8G8B8A8_UNORM,
+                color_space: ColorSpace::Linear,
+                alpha: AlphaMode::Straight,
+            },
         };
 
         let encoded = encode_ktx2_image(&original, None).unwrap();
@@ -502,18 +505,20 @@ mod tests {
                 depth: 1,
                 stride: 16,
                 slice_stride: 0,
+            }]],
+            kind: TextureKind::Texture2D,
+            desc: FormatDesc {
                 format: ktx2::Format::BC7_SRGB_BLOCK,
                 color_space: ColorSpace::Srgb,
                 alpha: AlphaMode::Straight,
-            }]],
-            kind: TextureKind::Texture2D,
+            },
         };
 
         let encoded = encode_ktx2_image(&original, None).unwrap();
         let decoded = decode_ktx2_image(&encoded).unwrap();
 
-        assert_eq!(decoded.surfaces[0][0].format, ktx2::Format::BC7_SRGB_BLOCK);
-        assert_eq!(decoded.surfaces[0][0].color_space, ColorSpace::Srgb);
+        assert_eq!(decoded.desc.format, ktx2::Format::BC7_SRGB_BLOCK);
+        assert_eq!(decoded.desc.color_space, ColorSpace::Srgb);
         assert_eq!(decoded.surfaces[0][0].data, vec![0xFF; 16]);
     }
 
@@ -529,9 +534,6 @@ mod tests {
                     depth: 1,
                     stride: 16,
                     slice_stride: 0,
-                    format: ktx2::Format::R8G8B8A8_UNORM,
-                    color_space: ColorSpace::Linear,
-                    alpha: AlphaMode::Straight,
                 }]
             })
             .collect();
@@ -539,6 +541,11 @@ mod tests {
         let original = Image {
             surfaces: faces,
             kind: TextureKind::Cubemap,
+            desc: FormatDesc {
+                format: ktx2::Format::R8G8B8A8_UNORM,
+                color_space: ColorSpace::Linear,
+                alpha: AlphaMode::Straight,
+            },
         };
 
         let encoded = encode_ktx2_image(&original, None).unwrap();
@@ -565,11 +572,13 @@ mod tests {
                 depth: 1,
                 stride: 16,
                 slice_stride: 0,
+            }]],
+            kind: TextureKind::Texture2D,
+            desc: FormatDesc {
                 format: ktx2::Format::R8G8B8A8_UNORM,
                 color_space: ColorSpace::Linear,
                 alpha: AlphaMode::Straight,
-            }]],
-            kind: TextureKind::Texture2D,
+            },
         };
 
         let mut bytes =
@@ -602,16 +611,18 @@ mod tests {
                 depth: 1,
                 stride: 16,
                 slice_stride: 0,
+            }]],
+            kind: TextureKind::Texture2D,
+            desc: FormatDesc {
                 format: ktx2::Format::R8G8B8A8_UNORM,
                 color_space: ColorSpace::Linear,
                 alpha: AlphaMode::Premultiplied,
-            }]],
-            kind: TextureKind::Texture2D,
+            },
         };
 
         let encoded = encode_ktx2_image(&original, None).unwrap();
         let decoded = decode_ktx2_image(&encoded).unwrap();
-        assert_eq!(decoded.surfaces[0][0].alpha, AlphaMode::Premultiplied);
+        assert_eq!(decoded.desc.alpha, AlphaMode::Premultiplied);
     }
 
     #[test]
@@ -624,11 +635,13 @@ mod tests {
                 depth: 1,
                 stride: 4,
                 slice_stride: 0,
+            }]],
+            kind: TextureKind::Texture2D,
+            desc: FormatDesc {
                 format: ktx2::Format::R8G8B8A8_UNORM,
                 color_space: ColorSpace::Linear,
                 alpha: AlphaMode::Straight,
-            }]],
-            kind: TextureKind::Texture2D,
+            },
         };
         let mut bytes = encode_ktx2_image(&image, None).unwrap();
         bytes[36..40].copy_from_slice(&2u32.to_le_bytes());
@@ -647,11 +660,13 @@ mod tests {
                 depth: 1,
                 stride: 4,
                 slice_stride: 0,
+            }]],
+            kind: TextureKind::Texture2D,
+            desc: FormatDesc {
                 format: ktx2::Format::R8G8B8A8_UNORM,
                 color_space: ColorSpace::Linear,
                 alpha: AlphaMode::Straight,
-            }]],
-            kind: TextureKind::Texture2D,
+            },
         };
         let mut bytes = encode_ktx2_image(&image, None).unwrap();
         bytes[32..36].copy_from_slice(&u32::MAX.to_le_bytes());
@@ -670,11 +685,13 @@ mod tests {
                 depth: 1,
                 stride: 4,
                 slice_stride: 0,
+            }]],
+            kind: TextureKind::Texture2D,
+            desc: FormatDesc {
                 format: ktx2::Format::R8_UNORM,
                 color_space: ColorSpace::Linear,
                 alpha: AlphaMode::Straight,
-            }]],
-            kind: TextureKind::Texture2D,
+            },
         };
         let mut bytes = encode_ktx2_image(&image, None).unwrap();
         bytes[24..28].copy_from_slice(&0u32.to_le_bytes());
@@ -695,15 +712,17 @@ mod tests {
                     depth: 1,
                     stride: 2,
                     slice_stride: 0,
-                    format: ktx2::Format::R8_UNORM,
-                    color_space: ColorSpace::Linear,
-                    alpha: AlphaMode::Straight,
                 }]
             })
             .collect();
         let image = Image {
             surfaces: faces,
             kind: TextureKind::Cubemap,
+            desc: FormatDesc {
+                format: ktx2::Format::R8_UNORM,
+                color_space: ColorSpace::Linear,
+                alpha: AlphaMode::Straight,
+            },
         };
         let encoded = encode_ktx2_image(&image, None).unwrap();
 
