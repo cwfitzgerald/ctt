@@ -104,6 +104,8 @@ fn patch_compressonator(dst_dir: &Path) -> Result<()> {
     patch_cpu_extensions(&dst_dir.join("cmp_math/cpu_extensions.cpp"))?;
     patch_core_simd_h(&dst_dir.join("source/core_simd.h"))?;
     patch_bc1_cmp_h(&dst_dir.join("shaders/bc1_cmp.h"))?;
+    patch_bc6_encode_kernel_cpp(&dst_dir.join("shaders/bc6_encode_kernel.cpp"))?;
+    patch_bcn_common_api_h(&dst_dir.join("shaders/bcn_common_api.h"))?;
     Ok(())
 }
 
@@ -275,6 +277,93 @@ fn patch_bc1_cmp_h(path: &Path) -> Result<()> {
             "#endif // x86",
         ),
         "bc1_cmp.h: SIMD dispatch guard closing",
+    )?;
+
+    write_text(path, &text)
+}
+
+/// The signed BC6H encoder expects a negative half as its negated magnitude
+/// (as upstream CMP_Framework `MapToF16` makes it). `CompressBlockBC6` copies
+/// the raw half bits, so negative input saturates to the f16 maximum.
+fn patch_bc6_encode_kernel_cpp(path: &Path) -> Result<()> {
+    let mut text = read_text(path)?;
+
+    replace_required(
+        &mut text,
+        concat!(
+            "    CGU_UINT8 blkindex = 0;\n",
+            "    for (CGU_INT32 j = 0; j < 16; j++)\n",
+            "    {\n",
+            "        BC6HEncode_local.din[j][0] = inBlock[blkindex++];  // R\n",
+            "        BC6HEncode_local.din[j][1] = inBlock[blkindex++];  // G\n",
+            "        BC6HEncode_local.din[j][2] = inBlock[blkindex++];  // B\n",
+        ),
+        concat!(
+            "    // Signed input: a negative half is its negated magnitude.\n",
+            "    auto toDin = [&](CGU_UINT16 h) -> CGU_FLOAT {\n",
+            "        if (BC6HEncode->m_isSigned && (h & 0x8000))\n",
+            "            return -(CGU_FLOAT)(h & 0x7FFF);\n",
+            "        return (CGU_FLOAT)h;\n",
+            "    };\n",
+            "    CGU_UINT8 blkindex = 0;\n",
+            "    for (CGU_INT32 j = 0; j < 16; j++)\n",
+            "    {\n",
+            "        BC6HEncode_local.din[j][0] = toDin(inBlock[blkindex++]);  // R\n",
+            "        BC6HEncode_local.din[j][1] = toDin(inBlock[blkindex++]);  // G\n",
+            "        BC6HEncode_local.din[j][2] = toDin(inBlock[blkindex++]);  // B\n",
+        ),
+        "bc6_encode_kernel.cpp: signed input as negated magnitude",
+    )?;
+
+    write_text(path, &text)
+}
+
+/// `cmp_QuantizeToBitSize` reads `ivalue` before it takes the magnitude of a
+/// signed value, so the final negation flips negative endpoints to positive.
+/// Read it after, as upstream CMP_Framework `QuantizeToInt` does.
+fn patch_bcn_common_api_h(path: &Path) -> Result<()> {
+    let mut text = read_text(path)?;
+
+    replace_required(
+        &mut text,
+        concat!(
+            "    CGU_BOOL negvalue = false;\n",
+            "\n",
+            "    // move data to use extra bits for processing\n",
+            "    CGU_INT ivalue = value;\n",
+            "\n",
+            "    if (signedfloat16)\n",
+        ),
+        concat!(
+            "    CGU_BOOL negvalue = false;\n",
+            "\n",
+            "    if (signedfloat16)\n",
+        ),
+        "bcn_common_api.h: quantize ivalue read (remove)",
+    )?;
+
+    replace_required(
+        &mut text,
+        concat!(
+            "        // clamp -ve\n",
+            "        if (value < 0)\n",
+            "            value = 0;\n",
+            "    }\n",
+            "\n",
+            "    CGU_INT iQuantized;\n",
+        ),
+        concat!(
+            "        // clamp -ve\n",
+            "        if (value < 0)\n",
+            "            value = 0;\n",
+            "    }\n",
+            "\n",
+            "    // move data to use extra bits for processing\n",
+            "    CGU_INT ivalue = value;\n",
+            "\n",
+            "    CGU_INT iQuantized;\n",
+        ),
+        "bcn_common_api.h: quantize ivalue read (insert)",
     )?;
 
     write_text(path, &text)

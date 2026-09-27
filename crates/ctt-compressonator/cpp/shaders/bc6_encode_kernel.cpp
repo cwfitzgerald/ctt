@@ -4396,12 +4396,18 @@ extern "C" int CMP_CDECL CompressBlockBC6(const CGU_UINT16*      srcBlock,
 
     BC6H_Encode_local BC6HEncode_local;
     memset((CGU_UINT8*)&BC6HEncode_local, 0, sizeof(BC6H_Encode_local));
+    // Signed input: a negative half is its negated magnitude.
+    auto toDin = [&](CGU_UINT16 h) -> CGU_FLOAT {
+        if (BC6HEncode->m_isSigned && (h & 0x8000))
+            return -(CGU_FLOAT)(h & 0x7FFF);
+        return (CGU_FLOAT)h;
+    };
     CGU_UINT8 blkindex = 0;
     for (CGU_INT32 j = 0; j < 16; j++)
     {
-        BC6HEncode_local.din[j][0] = inBlock[blkindex++];  // R
-        BC6HEncode_local.din[j][1] = inBlock[blkindex++];  // G
-        BC6HEncode_local.din[j][2] = inBlock[blkindex++];  // B
+        BC6HEncode_local.din[j][0] = toDin(inBlock[blkindex++]);  // R
+        BC6HEncode_local.din[j][1] = toDin(inBlock[blkindex++]);  // G
+        BC6HEncode_local.din[j][2] = toDin(inBlock[blkindex++]);  // B
         BC6HEncode_local.din[j][3] = 0;                    // A
     }
 

@@ -1294,9 +1294,6 @@ CMP_STATIC CGU_INT cmp_QuantizeToBitSize(CMP_IN CGU_INT value, CMP_IN CGU_INT pr
         return 0;
     CGU_BOOL negvalue = false;
 
-    // move data to use extra bits for processing
-    CGU_INT ivalue = value;
-
     if (signedfloat16)
     {
         if (value < 0)
@@ -1312,6 +1309,9 @@ CMP_STATIC CGU_INT cmp_QuantizeToBitSize(CMP_IN CGU_INT value, CMP_IN CGU_INT pr
         if (value < 0)
             value = 0;
     }
+
+    // move data to use extra bits for processing
+    CGU_INT ivalue = value;
 
     CGU_INT iQuantized;
     CGU_INT bias = (prec > 10 && prec != 16) ? ((1 << (prec - 11)) - 1) : 0;
