@@ -79,6 +79,7 @@ Cubemaps:
 -let faces: [Surface; 6] = split_cubemap(CubemapInput::Cross(atlas))?;
 -let cube = Image { surfaces: faces.map(|f| vec![f]).into(), kind: TextureKind::Cubemap };
 +let cube: Image = split_cubemap(CubemapInput::Cross { surface: atlas.as_ref(), desc })?;
++// `CubemapInput::Strip { surface, desc }` changes the same way.
 
 -let faces = split_cubemap(CubemapInput::SeparateFaces(Box::new(faces)))?;
 +// Faces in +X, -X, +Y, -Y, +Z, -Z order.
@@ -90,6 +91,8 @@ Cubemaps:
 ```
 
 #### C
+
+`ctt_convert`, `ctt_split_cubemap_cross` and `ctt_split_cubemap_strip` now borrow their input. The caller keeps ownership and must destroy the input with `ctt_image_destroy` or `ctt_surface_destroy`. One image can go to more than one `ctt_convert` call. `ctt_image_push_mip` still consumes its surface.
 
 ```diff
 -ctt_surface *s = ctt_surface_create(px, len, w, h, 1, w * 4, 0,
@@ -123,16 +126,46 @@ The `ctt_cubemap_input` handle is removed. The split functions borrow the atlas 
 
 To replace `ctt_cubemap_input_separate_faces`, create a `CTT_TEXTURE_KIND_CUBEMAP` image, add six layers with `ctt_image_add_layer`, and push one face into each with `ctt_image_push_mip`.
 
+### Migrating to matching formats and color spaces
+
+A format must agree with its color space. With `ColorSpace::Srgb`, a format that has an sRGB variant must be that variant. With `ColorSpace::Linear`, a format must not be an sRGB variant. Formats without an sRGB variant, such as `R16G16B16A16_SFLOAT`, are valid with both.
+
+The rule applies to the `FormatDesc` of the input image and to the target format of `convert`. Before, `R8G8B8A8_UNORM` tagged `ColorSpace::Srgb` was accepted. Now `convert` returns an error. `FormatExt::with_color_space` gives the matching variant.
+
+```diff
+ desc: FormatDesc {
+-    format: Format::R8G8B8A8_UNORM,
++    format: Format::R8G8B8A8_SRGB,
+     color_space: ColorSpace::Srgb,
+     alpha,
+ },
+
+ // sRGB output
+-format: Some(TargetFormat::Compressed { format: Format::BC7_UNORM_BLOCK, encoder }),
++format: Some(TargetFormat::Compressed { format: Format::BC7_SRGB_BLOCK, encoder }),
+```
+
+In C, the same rule applies to `ctt_format_desc` and to the target format in `ctt_convert_settings`. The CLI is not affected: short format names (`-f bc7`) resolve to the variant that agrees with the output color space.
+
+### BC7F encoder
+
+BC7F, the analytical BC7 encoder from Basis Universal, is supported.
+
 ### Added
 
-- BC7F bindings and Rust/CLI support for BC7 compression, with six quality presets. Automatic selection prefers BC7F after bc7enc. @cwfitzgerald
+- BC7F bindings and Rust/CLI support for BC7 compression, with six quality presets. Automatic selection prefers BC7F after bc7enc. Rust: `Encoder::Bc7f` behind the default `encoder-bc7f` feature. CLI: `--bc7f-opts`. See [BC7F encoder](#bc7f-encoder). @cwfitzgerald
+- Equirectangular panorama to cubemap projection with anisotropic filtering. Rust: `CubemapInput::Equirectangular` with `EquirectangularOrientation` and `EquirectangularFront`. CLI: `--cubemap-layout equirectangular`, `--cubemap-face-size`, `--equirectangular-front` and `--equirectangular-mirror`. Faces are `R32G32B32A32_SFLOAT` in linear space.
+- `FormatExt::with_color_space` returns the variant of a format that agrees with a color space.
+- C API: `ctt_format_desc`, `ctt_image_desc`, `ctt_split_cubemap_cross` and `ctt_split_cubemap_strip`.
 
 ### Changed
 
-- **BREAKING:** Formats must agree with their color space: `ColorSpace::Srgb` requires the sRGB variant when the format has one (`R8G8B8A8_SRGB`, not `R8G8B8A8_UNORM`), and `ColorSpace::Linear` rejects sRGB variants. `ImageRef::validate` checks input surfaces, and `convert` checks the target format against the output color space. The KTX2 and DDS readers with input color-space overrides produce the matching variant. When the CLI is used with short format names (eg. `-f bc7`, `-f rgba8`) it derives the full format from the input/output color space.
+- **BREAKING:** Formats must agree with their color space: `ColorSpace::Srgb` requires the sRGB variant when the format has one (`R8G8B8A8_SRGB`, not `R8G8B8A8_UNORM`), and `ColorSpace::Linear` rejects sRGB variants. `ImageRef::validate` checks input surfaces, and `convert` checks the target format against the output color space. The KTX2 and DDS readers with input color-space overrides produce the matching variant. When the CLI is used with short format names (eg. `-f bc7`, `-f rgba8`) it derives the full format from the input/output color space. See [Migrating to matching formats and color spaces](#migrating-to-matching-formats-and-color-spaces).
 - With the `rayon` feature, all mips and layers of an image now encode concurrently instead of one surface at a time, improving worker utilization on images with many small surfaces.
 - With the `rayon` feature, the pre-compression pipeline (load, swizzle, mipmap, store) also runs concurrently across mips and layers; only the per-layer mip resize chain remains serial.
 - CLI: input images are read and decoded in parallel. `--threads` now governs input decoding as well as compression.
+- CLI: EXR and HDR input without color-space metadata defaults to linear. Integer images (PNG, JPEG, ...) still default to sRGB. Pass `--input-color-space srgb` for the previous behavior.
+- SIMD load, store and sRGB kernels use `fearless_simd` for runtime dispatch.
 - **BREAKING:** Format metadata moved from `Surface` to `Image`, `convert` takes a borrowed `ImageRef`, and `split_cubemap` returns a cubemap `Image`. In the C API, `ctt_convert` no longer consumes the image. See [Migrating to `FormatDesc` and `ImageRef`](#migrating-to-formatdesc-and-imageref). @cwfitzgerald
 
 ### Removed
