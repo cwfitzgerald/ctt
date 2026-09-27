@@ -510,7 +510,7 @@ checksum = "460fbee9c2c2f33933d720630a6a0bac33ba7053db5344fac858d4b8952d77d5"
 
 [[package]]
 name = "ctt"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "bytemuck",
  "criterion",
@@ -536,7 +536,7 @@ dependencies = [
 
 [[package]]
 name = "ctt-astcenc"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "bitflags",
  "cc",
@@ -546,7 +546,7 @@ dependencies = [
 
 [[package]]
 name = "ctt-bc7enc-rdo"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "ctt-bc7enc-rdo-prebuilt",
  "ispc-build-utils",
@@ -554,21 +554,21 @@ dependencies = [
 
 [[package]]
 name = "ctt-bc7enc-rdo-prebuilt"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "ispc-build-utils",
 ]
 
 [[package]]
 name = "ctt-bc7f"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "cc",
 ]
 
 [[package]]
 name = "ctt-c-api"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "cc",
  "ctt",
@@ -578,7 +578,7 @@ dependencies = [
 
 [[package]]
 name = "ctt-cli"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "bytemuck",
  "clap",
@@ -599,7 +599,7 @@ dependencies = [
 
 [[package]]
 name = "ctt-compressonator"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "cc",
  "thiserror",
@@ -607,7 +607,7 @@ dependencies = [
 
 [[package]]
 name = "ctt-etcpak"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "cc",
  "paste",
@@ -615,7 +615,7 @@ dependencies = [
 
 [[package]]
 name = "ctt-intel-texture-compressor"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "cc",
  "ctt-intel-texture-compressor-prebuilt",
@@ -624,7 +624,7 @@ dependencies = [
 
 [[package]]
 name = "ctt-intel-texture-compressor-prebuilt"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "ispc-build-utils",
 ]
@@ -1060,7 +1060,7 @@ checksum = "a6cb138bb79a146c1bd460005623e142ef0181e3d0219cb493e02f7d08a35695"
 
 [[package]]
 name = "ispc-build-utils"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "find-msvc-tools",
 ]
@@ -1663,7 +1663,7 @@ checksum = "03251193000f4bd3b042892be858ee50e8b3719f2b08e5833ac4353724632430"
 
 [[package]]
 name = "regen-test-data"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "anyhow",
  "ctt",

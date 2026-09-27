@@ -16,12 +16,17 @@ Per Keep a Changelog there are 6 main categories of changes:
 #### Table of Contents
 
 - [Unreleased](#unreleased)
+- [v0.6.0](#v060)
 - [v0.5.0](#v050)
 - [v0.4.0](#v040)
 - [v0.3.0](#v030)
 - [v0.2.0](#v020)
 
 ## Unreleased
+
+## v0.6.0
+
+Released 2026-09-27
 
 ### Migrating to `FormatDesc` and `ImageRef`
 
@@ -318,7 +323,8 @@ Released 2026-03-31
 
 ## Diffs
 
-- [Unreleased](https://github.com/cwfitzgerald/ctt/compare/v0.5.0...HEAD)
+- [Unreleased](https://github.com/cwfitzgerald/ctt/compare/v0.6.0...HEAD)
+- [v0.6.0](https://github.com/cwfitzgerald/ctt/compare/v0.5.0...v0.6.0)
 - [v0.5.0](https://github.com/cwfitzgerald/ctt/compare/v0.4.0...v0.5.0)
 - [v0.4.0](https://github.com/cwfitzgerald/ctt/compare/v0.3.0...v0.4.0)
 - [v0.3.0](https://github.com/cwfitzgerald/ctt/compare/v0.2.0...v0.3.0)
