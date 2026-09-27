@@ -24,6 +24,7 @@ skip = [
   { crate = "shlex@1", reason = "bindgen uses 1, cc uses 2" },
   { crate = "smallvec@1", reason = "exr uses 1, facet-reflect uses 2" },
   { crate = "syn@2", reason = "transitive proc-macro dependencies use both 2 and 3" },
+  { crate = "allocator-api@0.2.21", reason = "hashbrown depends on an old version" },
 ]
 multiple-versions = "deny"
 
