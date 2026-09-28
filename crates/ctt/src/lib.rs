@@ -100,7 +100,7 @@ pub(crate) mod vk_format;
 #[doc(hidden)]
 pub mod bench_internals {
     pub use crate::processing::Buffer;
-    pub use crate::processing::kernels::{Fallback, Level, constructible_levels};
+    pub use crate::processing::kernels::{Level, constructible_levels};
 
     // ---- sRGB ----
 
