@@ -7,7 +7,7 @@ publish = false
 
 [dependencies]
 anyhow = { workspace = true }
-bindgen = "0.72"
+bindgen = "0.73"
 cbindgen = "0.29"
 clap = { workspace = true }
 ispc-build-utils = { workspace = true }
