@@ -134,18 +134,18 @@ fn bench_store(c: &mut Criterion) {
 }
 
 /// sRGB store per-level sweep for both channel orders. Emits `_rgba` and
-/// `_bgra` variants of `fallback`, `sse4_2`, `avx2` (x86/x86_64) and `neon`
-/// (aarch64). The AVX-512 tier is deliberately split into the generic-rsqrt
-/// kernel (`avx512_generic_*`) and the `rsqrt14` intrinsic escape
+/// `_bgra` variants of `fallback`, `sse2`, `sse4_2`, `avx2` (x86/x86_64) and
+/// `neon` (aarch64). The AVX-512 tier is deliberately split into the
+/// generic-rsqrt kernel (`avx512_generic_*`) and the `rsqrt14` intrinsic escape
 /// (`avx512_escape_*`, x86_64 only) rather than a single `avx512_*` row, since
 /// comparing those two is the point of keeping the escape.
 fn bench_srgb_store<M: criterion::measurement::Measurement>(
     g: &mut criterion::BenchmarkGroup<'_, M>,
     buf: &Buffer<f32>,
 ) {
-    use ctt::bench_internals::{constructible_levels, store_srgb8_f32_at};
+    use ctt::bench_internals::store_srgb8_f32_at;
 
-    for (name, level) in constructible_levels() {
+    for (name, level) in common::levels() {
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         if name == "avx512" {
             use ctt::bench_internals::store_srgb8_f32_generic_at;

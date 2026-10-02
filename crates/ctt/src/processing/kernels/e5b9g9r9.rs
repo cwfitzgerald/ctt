@@ -9,7 +9,7 @@
 //! # Load side
 //!
 //! The SIMD kernel is width-generic at the backend's native vector width
-//! (128-bit on Fallback/SSE4.2, 256-bit on AVX2, 512-bit on AVX-512) and is
+//! (128-bit on Fallback/SSE2/SSE4.2, 256-bit on AVX2, 512-bit on AVX-512) and is
 //! exact at every width: `2^(exp - 24)` is the power of two it represents
 //! exactly, so scaling each mantissa by it rounds the same real value the
 //! closed-form `mantissa * 2^(exp - 24)` does, even into subnormal results.
@@ -58,7 +58,7 @@ pub fn load_e5b9g9r9_f32_at(level: Level, surface: SurfaceRef<'_>) -> Result<Buf
 #[inline(always)]
 fn load_row<S: Simd>(simd: S, codes: &[u32], dst: &mut [f32]) {
     driver::for_each_block::<_, _, 1, 4>(
-        S::u32s::N,
+        S::u32s::LEN,
         codes.len(),
         codes,
         dst,
@@ -125,7 +125,7 @@ pub fn store_e5b9g9r9_f32_at(level: Level, buf: &Buffer<f32>) -> Vec<u8> {
 #[inline(always)]
 fn store_rows<S: Simd>(simd: S, src: &[f32], words: &mut [u32]) {
     driver::for_each_block::<_, _, 4, 1>(
-        S::f32s::N,
+        S::f32s::LEN,
         words.len(),
         src,
         words,
