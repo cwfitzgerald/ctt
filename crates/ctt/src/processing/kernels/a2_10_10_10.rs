@@ -78,7 +78,7 @@ fn load_row_f32<S: Simd, const R_SHIFT: u32, const SNORM: bool>(
     dst: &mut [f32],
 ) {
     driver::for_each_block::<_, _, 1, 4>(
-        S::f32s::N,
+        S::f32s::LEN,
         codes.len(),
         codes,
         dst,
@@ -169,7 +169,7 @@ fn load_row_u32<S: Simd, const R_SHIFT: u32, const SINT: bool>(
     dst: &mut [u32],
 ) {
     driver::for_each_block::<_, _, 1, 4>(
-        S::u32s::N,
+        S::u32s::LEN,
         codes.len(),
         codes,
         dst,
@@ -309,7 +309,7 @@ fn store_rows_f32<S: Simd, const R_SHIFT: u32, const SNORM: bool>(
     words: &mut [u32],
 ) {
     driver::for_each_block::<_, _, 4, 1>(
-        S::f32s::N,
+        S::f32s::LEN,
         words.len(),
         src,
         words,
@@ -398,7 +398,7 @@ fn store_rows_u32<S: Simd, const R_SHIFT: u32, const SINT: bool>(
     words: &mut [u32],
 ) {
     driver::for_each_block::<_, _, 4, 1>(
-        S::u32s::N,
+        S::u32s::LEN,
         words.len(),
         src,
         words,
