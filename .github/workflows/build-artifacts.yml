@@ -57,7 +57,7 @@ jobs:
             ispc_asset_suffix: windows
             ispc_ext: zip
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Install Rust
         uses: cwfitzgerald/repo-common/.github/actions/install-rust@trunk
@@ -125,13 +125,13 @@ jobs:
 
       - name: Attest build provenance — CLI
         if: ${{ inputs.attest }}
-        uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # v4
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4
         with:
           subject-path: target/${{ matrix.target }}/release/ctt${{ contains(matrix.target, 'windows') && '.exe' || '' }}
 
       - name: Attest build provenance — C API (Windows)
         if: ${{ inputs.attest && contains(matrix.target, 'windows') }}
-        uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # v4
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4
         with:
           subject-path: |
             target/${{ matrix.target }}/release/ctt_capi.dll
@@ -139,7 +139,7 @@ jobs:
 
       - name: Attest build provenance — C API (macOS)
         if: ${{ inputs.attest && contains(matrix.target, 'darwin') }}
-        uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # v4
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4
         with:
           subject-path: |
             target/${{ matrix.target }}/release/libctt_capi.dylib
@@ -147,7 +147,7 @@ jobs:
 
       - name: Attest build provenance — C API (Linux)
         if: ${{ inputs.attest && contains(matrix.target, 'linux') }}
-        uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # v4
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4
         with:
           subject-path: |
             target/${{ matrix.target }}/release/libctt_capi.so

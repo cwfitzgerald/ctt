@@ -58,7 +58,7 @@ jobs:
             ispc_ext: zip
             test: false
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Install Rust
         uses: cwfitzgerald/repo-common/.github/actions/install-rust@trunk
@@ -68,7 +68,7 @@ jobs:
           components: clippy
 
       - name: Install cargo-nextest
-        uses: taiki-e/install-action@eea29cff9a2b68892c0845ae3e4f45fc47ee9354 # v2
+        uses: taiki-e/install-action@83ac0ad63c0167e6f06796fab0fce28db1bf3db0 # v2
         with:
           tool: cargo-nextest
 
@@ -126,7 +126,7 @@ jobs:
     name: No prebuilt in build-from-source
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Install Rust
         uses: cwfitzgerald/repo-common/.github/actions/install-rust@trunk
@@ -147,7 +147,7 @@ jobs:
     name: Feature combinations
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Install Rust
         uses: cwfitzgerald/repo-common/.github/actions/install-rust@trunk
@@ -155,7 +155,7 @@ jobs:
           version: ${{ env.CI_RUST_VERSION }}
 
       - name: Install cargo-nextest
-        uses: taiki-e/install-action@eea29cff9a2b68892c0845ae3e4f45fc47ee9354 # v2
+        uses: taiki-e/install-action@83ac0ad63c0167e6f06796fab0fce28db1bf3db0 # v2
         with:
           tool: cargo-nextest
 
@@ -183,7 +183,7 @@ jobs:
     name: Format
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Install Rust
         uses: cwfitzgerald/repo-common/.github/actions/install-rust@trunk
@@ -198,7 +198,7 @@ jobs:
     name: Deny
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Install Rust
         uses: cwfitzgerald/repo-common/.github/actions/install-rust@trunk
@@ -206,7 +206,7 @@ jobs:
           version: ${{ env.CI_RUST_VERSION }}
 
       - name: Install cargo-deny
-        uses: taiki-e/install-action@eea29cff9a2b68892c0845ae3e4f45fc47ee9354 # v2
+        uses: taiki-e/install-action@83ac0ad63c0167e6f06796fab0fce28db1bf3db0 # v2
         with:
           tool: cargo-deny
 
@@ -217,7 +217,7 @@ jobs:
     name: Verify attestations
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Install Rust
         uses: cwfitzgerald/repo-common/.github/actions/install-rust@trunk
@@ -233,7 +233,7 @@ jobs:
     name: C header up-to-date
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Install Rust
         uses: cwfitzgerald/repo-common/.github/actions/install-rust@trunk
@@ -274,7 +274,7 @@ jobs:
       RUSTFLAGS: ""
       RUSTDOCFLAGS: ""
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Install Rust
         uses: cwfitzgerald/repo-common/.github/actions/install-rust@trunk

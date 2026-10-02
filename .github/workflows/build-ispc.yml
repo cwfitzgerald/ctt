@@ -50,7 +50,7 @@ jobs:
             ispc_asset_suffix: macOS.arm64
             ispc_ext: tar.gz
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Install Rust
         uses: cwfitzgerald/repo-common/.github/actions/install-rust@trunk
@@ -111,7 +111,7 @@ jobs:
       contents: write
       attestations: write
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           ref: ${{ github.head_ref || github.ref }}
 
@@ -152,7 +152,7 @@ jobs:
           done
 
       - name: Attest build provenance
-        uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # v4
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4
         with:
           subject-path: "crates/*/prebuilt/bins/**/*.a,crates/*/prebuilt/bins/**/*.lib"
 
