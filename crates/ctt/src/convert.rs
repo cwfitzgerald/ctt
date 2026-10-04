@@ -5,8 +5,8 @@ use crate::encoders::Quality;
 use crate::error::{Error, Result};
 use crate::format::TargetFormat;
 use crate::processing::{
-    self, Buffer, PipelineOutput, Swizzle, Variant, encode, load, map_nested, mipmap, par_map,
-    passthrough, store, swizzle,
+    self, Buffer, PipelineOutput, Swizzle, Variant, alpha_coverage, encode, load, map_nested,
+    mipmap, par_map, passthrough, store, swizzle,
 };
 use crate::surface::{ColorSpace, FormatDesc, Image, ImageRef, SurfaceRef};
 use crate::vk_format::FormatExt;
@@ -88,6 +88,20 @@ pub struct ConvertSettings {
     pub mipmap_count: Option<usize>,
     /// Downsampling filter used for mipmap generation.
     pub mipmap_filter: mipmap::MipmapFilter,
+    /// The alpha test cutoff of the material sampling this texture, to keep its
+    /// coverage in generated mips. Ignored when `mipmap` is `false`.
+    ///
+    /// Filtered mips average thin opaque features into partial alpha under the
+    /// cutoff, so alpha-tested foliage thins out and vanishes with distance.
+    /// When set, each generated level's alpha is scaled so the share of it
+    /// passing the cutoff, sampled bilinearly, is as near the base level's as
+    /// its alpha values allow (Castaño, "Computing Alpha Mipmaps"). Supplied
+    /// levels are kept as they are.
+    ///
+    /// Must be in `(0, 1]`. Ignored when there is no alpha to scale: the input
+    /// or output alpha mode is [`AlphaMode::Opaque`] or the target format has
+    /// no alpha channel.
+    pub mipmap_alpha_cutoff: Option<f32>,
 }
 
 impl Default for Container {
@@ -141,6 +155,9 @@ pub fn convert(image: ImageRef<'_>, mut settings: ConvertSettings) -> Result<Pip
              to mark the texture opaque, or allow_discarding_alpha to silence."
         );
     }
+
+    settings.mipmap_alpha_cutoff =
+        alpha_cutoff(&settings, final_has_alpha, input_alpha, target_alpha)?;
 
     log::debug!(
         "convert: {input_fmt:?} ({input_cs:?}, {input_alpha:?}) → \
@@ -218,6 +235,33 @@ pub fn convert(image: ImageRef<'_>, mut settings: ConvertSettings) -> Result<Pip
         Variant::U32 => convert_u32(image, settings, target_fmt, encoder_step),
         Variant::U64 => convert_u64(image, settings, target_fmt, encoder_step),
     }
+}
+
+/// The [`ConvertSettings::mipmap_alpha_cutoff`] to apply: like the other
+/// mipmap settings it is ignored without mipmap generation, and it is ignored
+/// without alpha to scale.
+fn alpha_cutoff(
+    settings: &ConvertSettings,
+    final_has_alpha: bool,
+    input_alpha: AlphaMode,
+    target_alpha: AlphaMode,
+) -> Result<Option<f32>> {
+    let Some(cutoff) = settings.mipmap_alpha_cutoff else {
+        return Ok(None);
+    };
+    if !settings.mipmap
+        || !final_has_alpha
+        || input_alpha == AlphaMode::Opaque
+        || target_alpha == AlphaMode::Opaque
+    {
+        return Ok(None);
+    }
+    if !(cutoff > 0.0 && cutoff <= 1.0) {
+        return Err(Error::UnsupportedFormat(format!(
+            "mipmap alpha cutoff must be in (0, 1], got {cutoff}"
+        )));
+    }
+    Ok(Some(cutoff))
 }
 
 /// Whether to warn that a meaningful straight alpha is being dropped.
@@ -344,7 +388,13 @@ fn convert_f32(
                     Ok(buf)
                 },
             )?;
-            let bufs = mipmap::complete(bufs, settings.mipmap_filter, settings.mipmap_count)?;
+            let supplied = bufs.len();
+            let mut bufs = mipmap::complete(bufs, settings.mipmap_filter, settings.mipmap_count)?;
+            if let Some(cutoff) = settings.mipmap_alpha_cutoff {
+                // Coverage scaling needs premultiplied pixels.
+                debug_assert_ne!(load_desc.alpha, AlphaMode::Opaque);
+                alpha_coverage::preserve(&mut bufs, supplied, cutoff);
+            }
             par_map(bufs, |b| store::store_f32(b, store_desc))
         })?
     } else {
@@ -866,6 +916,137 @@ mod tests {
             err.to_string().contains("mipmap count must be >= 1"),
             "got: {err}"
         );
+    }
+
+    /// A 64×64 sRGB RGBA8 image of sparse leaves on transparent magenta.
+    fn sparse_leaves_rgba8() -> Image {
+        use crate::processing::alpha_coverage::test_support::is_leaf;
+        let data = (0u32..64 * 64)
+            .flat_map(|i| {
+                if is_leaf(i) {
+                    [40, 120, 30, 255]
+                } else {
+                    [255, 0, 255, 0]
+                }
+            })
+            .collect();
+        make_image(
+            data,
+            64,
+            64,
+            ktx2::Format::R8G8B8A8_SRGB,
+            ColorSpace::Srgb,
+            AlphaMode::Straight,
+        )
+    }
+
+    /// Settings that mip `sparse_leaves_rgba8` to a raw chain.
+    fn leaf_mips(cutoff: Option<f32>) -> ConvertSettings {
+        ConvertSettings {
+            container: Container::Raw,
+            mipmap: true,
+            mipmap_alpha_cutoff: cutoff,
+            ..Default::default()
+        }
+    }
+
+    fn mip_chain(image: &Image, settings: ConvertSettings) -> Vec<Surface> {
+        let PipelineOutput::Raw(mut img) = convert(image.to_ref(), settings).unwrap() else {
+            panic!("expected Raw output");
+        };
+        img.surfaces.remove(0)
+    }
+
+    /// Share of a level's texels with alpha at or above 0.5.
+    fn texel_coverage(level: &Surface) -> f32 {
+        let passing = level.data.chunks_exact(4).filter(|t| t[3] >= 128).count();
+        passing as f32 / (level.width * level.height) as f32
+    }
+
+    #[test]
+    fn convert_mipmap_alpha_cutoff_keeps_coverage() {
+        let image = sparse_leaves_rgba8();
+        let plain = mip_chain(&image, leaf_mips(None));
+        let kept = mip_chain(&image, leaf_mips(Some(0.5)));
+        assert_eq!(kept.len(), 7);
+        let alpha = |level: &Surface| {
+            level
+                .data
+                .iter()
+                .skip(3)
+                .step_by(4)
+                .copied()
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(alpha(&kept[0]), alpha(&image.surfaces[0][0]));
+        let base = texel_coverage(&kept[0]);
+        // 8x8: plain mips have faded under the cutoff, kept ones have not.
+        assert!(texel_coverage(&plain[3]) < base / 2.0);
+        let got = texel_coverage(&kept[3]);
+        assert!((got - base).abs() < 0.1, "{got} vs {base}");
+    }
+
+    #[test]
+    fn convert_mipmap_weights_straight_color_by_alpha() {
+        // Transparent magenta must not bleed into the leaves' color, with or
+        // without coverage scaling.
+        for cutoff in [None, Some(0.5)] {
+            let chain = mip_chain(&sparse_leaves_rgba8(), leaf_mips(cutoff));
+            for level in &chain[1..] {
+                for texel in level.data.chunks_exact(4).filter(|t| t[3] > 0) {
+                    for (got, want) in texel[..3].iter().zip([40u8, 120, 30]) {
+                        assert!(got.abs_diff(want) <= 1, "{cutoff:?}: {texel:?}");
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn convert_mipmap_alpha_cutoff_rejects_out_of_range() {
+        for cutoff in [0.0, -0.5, 1.5, f32::NAN] {
+            let err = convert(sparse_leaves_rgba8().to_ref(), leaf_mips(Some(cutoff))).unwrap_err();
+            assert!(
+                matches!(err, Error::UnsupportedFormat(_)),
+                "{cutoff}: expected UnsupportedFormat, got {err:?}",
+            );
+        }
+    }
+
+    #[test]
+    fn convert_mipmap_alpha_cutoff_ignored_when_inapplicable() {
+        let straight = sparse_leaves_rgba8();
+        let opaque = Image {
+            desc: FormatDesc {
+                alpha: AlphaMode::Opaque,
+                ..straight.desc
+            },
+            ..straight.clone()
+        };
+        type With = fn(ConvertSettings) -> ConvertSettings;
+        let cases: [(&str, &Image, With); 4] = [
+            ("no mipmap", &straight, |s| ConvertSettings {
+                mipmap: false,
+                ..s
+            }),
+            ("opaque input", &opaque, |s| s),
+            ("opaque output", &straight, |s| ConvertSettings {
+                output_alpha: Some(AlphaMode::Opaque),
+                ..s
+            }),
+            ("alpha-less target", &straight, |s| ConvertSettings {
+                format: Some(TargetFormat::Uncompressed(ktx2::Format::R8G8B8_SRGB)),
+                allow_discarding_alpha: true,
+                ..s
+            }),
+        ];
+        for (name, image, with) in cases {
+            // Out of range: an applied cutoff would fail.
+            let ignored = mip_chain(image, with(leaf_mips(Some(2.0))));
+            let plain = mip_chain(image, with(leaf_mips(None)));
+            let data = |chain: &[Surface]| chain.iter().map(|s| s.data.clone()).collect::<Vec<_>>();
+            assert_eq!(data(&ignored), data(&plain), "{name}");
+        }
     }
 
     fn bc7_1block_image() -> Image {

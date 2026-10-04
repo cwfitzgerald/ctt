@@ -163,6 +163,14 @@ pub struct Args {
     #[arg(long, default_value = "triangle", requires = "mipmap")]
     pub mipmap_filter: MipmapFilterArg,
 
+    /// Alpha test cutoff to keep coverage of in generated mips, in (0, 1].
+    /// Requires --mipmap.
+    ///
+    /// Scales each generated level's alpha so alpha-tested foliage keeps the
+    /// base level's coverage instead of thinning out with distance.
+    #[arg(long, value_name = "CUTOFF", requires = "mipmap")]
+    pub mipmap_alpha_cutoff: Option<f32>,
+
     /// Enable zstd supercompression for KTX2 output.
     ///
     /// Optionally takes a compression level attached with `=`: negative (fast
