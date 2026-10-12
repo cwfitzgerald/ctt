@@ -8,7 +8,6 @@ const CPP_SOURCES: &[&str] = &[
     "cpp/Decode.cpp",
     "cpp/Tables.cpp",
     "cpp/Dither.cpp",
-    "cpp/ColorSpace.cpp",
     "cpp/bc7enc.cpp",
 ];
 
