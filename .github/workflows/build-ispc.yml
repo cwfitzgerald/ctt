@@ -87,7 +87,7 @@ jobs:
             --output-dir output/
 
       - name: Upload intel artifacts
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: intel-${{ matrix.artifact_dir }}
           path: |
@@ -95,7 +95,7 @@ jobs:
             output/kernel.lib
 
       - name: Upload bc7enc artifacts
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: bc7enc-${{ matrix.artifact_dir }}
           path: |
