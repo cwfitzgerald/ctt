@@ -25,7 +25,7 @@ pub(crate) trait CurveKernel {
 #[inline(always)]
 pub(crate) fn curve_in_place_with_token<S: Simd, C: CurveKernel>(simd: S, pixels: &mut [[f32; 4]]) {
     let buf: &mut [f32] = bytemuck::cast_slice_mut(pixels);
-    let n = S::f32s::N;
+    let n = S::f32s::LEN;
     debug_assert!(n <= driver::MAX_LANES);
     let total = buf.len();
 

@@ -64,6 +64,8 @@ zstd = { workspace = true }
 
 [dev-dependencies]
 criterion = { workspace = true }
+# Gives unit tests a scalar `Fallback` level on every target.
+fearless_simd = { workspace = true, features = ["force_support_fallback"] }
 
 [[bench]]
 name = "srgb"

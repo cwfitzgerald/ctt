@@ -158,7 +158,7 @@ pub fn load_srgb8_f32_at<const BGRA: bool>(
 #[inline(always)]
 fn load_row<S: Simd, const BGRA: bool>(simd: S, codes: &[u32], dst: &mut [f32]) {
     driver::for_each_block::<_, _, 1, 4>(
-        S::u32s::N,
+        S::u32s::LEN,
         codes.len(),
         codes,
         dst,
@@ -356,7 +356,7 @@ fn store_rows<S: Simd, const BGRA: bool, R: RsqrtKernel<S>>(
     words: &mut [u32],
 ) {
     driver::for_each_block::<_, _, 4, 1>(
-        S::f32s::N,
+        S::f32s::LEN,
         words.len(),
         src,
         words,
@@ -393,7 +393,7 @@ fn encode_block<S: Simd, const BGRA: bool, R: RsqrtKernel<S>>(simd: S, src: &[f3
 /// monomorphization constant, so only one arm survives per backend.
 #[inline(always)]
 fn recip<S: Simd>(simd: S, x: S::f32s) -> S::f32s {
-    if S::f32s::N >= 16 {
+    if S::f32s::LEN >= 16 {
         // NR step `y' = y·(2 − x·y)` over the `rcp14` estimate, squaring its
         // ~2⁻¹⁴ error below f32 ε.
         let y = x.approximate_recip();
@@ -923,7 +923,7 @@ mod store_tests {
     #[test]
     fn srgb_oetf_minimax_within_half_lsb() {
         let simd = fearless_simd::Fallback::new();
-        let n = <fearless_simd::Fallback as Simd>::f32s::N;
+        let n = <fearless_simd::Fallback as Simd>::f32s::LEN;
         let steps = 1_000_000u32;
         let mut max_err = 0.0f64;
         let mut worst = 0.0f32;
