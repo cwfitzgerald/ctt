@@ -8,6 +8,7 @@
 //! crate's only SIMD-library boundary; see that module for the contract, which
 //! a `grep` over this tree enforces.
 
+pub(crate) mod alpha_coverage;
 pub(crate) mod buffer;
 pub(crate) mod encode;
 pub(crate) mod equirectangular;
@@ -51,6 +52,20 @@ pub(crate) fn par_map<T: Send, U: Send>(
     #[cfg(not(feature = "rayon"))]
     let mapped = items.into_iter().map(f).collect();
     mapped
+}
+
+/// [`par_map`] for a transform that cannot fail.
+pub(crate) fn par_map_infallible<T: Send, U: Send>(
+    items: Vec<T>,
+    f: impl Fn(T) -> U + Sync + Send,
+) -> Vec<U> {
+    #[cfg(feature = "rayon")]
+    {
+        use rayon::prelude::*;
+        items.into_par_iter().map(f).collect()
+    }
+    #[cfg(not(feature = "rayon"))]
+    items.into_iter().map(f).collect()
 }
 
 /// Map a fallible transform over every item of a nested list, in parallel

@@ -227,6 +227,14 @@ Generate mipmaps:
 ctt diffuse.png -o diffuse.ktx2 -f bc7 --mipmap
 ```
 
+For alpha-tested textures such as foliage, pass the material's alpha cutoff
+so generated mips keep the base level's coverage instead of thinning out with
+distance:
+
+```sh
+ctt leaves.png -o leaves.ktx2 -f bc7 --mipmap --mipmap-alpha-cutoff 0.5
+```
+
 With supercompression (KTX2 only). Use `--zstd` or `--zlib`; each optionally
 takes a compression level (`--zstd` accepts negative through 22, default 0;
 `--zlib` accepts 1 through 10, default 6):
