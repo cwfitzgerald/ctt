@@ -32,6 +32,10 @@ Per Keep a Changelog there are 6 main categories of changes:
 
 - **BREAKING:** `ConvertSettings` has a new `mipmap_alpha_cutoff` field. Struct literals that list every field need `mipmap_alpha_cutoff: None` or `..Default::default()`. @stuartparmenter
 
+### Fixed
+
+- etcpak encoder: programs that link `ctt` no longer crash with an illegal instruction at startup on x86-64 CPUs without AVX2. The AVX2 and SSE4.1 builds of etcpak ran SIMD instructions in static initializers before CPU feature detection.
+
 ## v0.6.0
 
 Released 2026-09-27
