@@ -15,7 +15,6 @@ pub(crate) mod kernels;
 pub(crate) mod load;
 pub(crate) mod load_kernels;
 pub(crate) mod mipmap;
-pub(crate) mod passthrough;
 pub(crate) mod store;
 pub(crate) mod store_kernels;
 pub(crate) mod swizzle;
