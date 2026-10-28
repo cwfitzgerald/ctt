@@ -58,36 +58,30 @@ int main(void) {
         .tag = CTT_TARGET_FORMAT_COMPRESSED,
         .compressed = {CTT_FORMAT_BC7_UNORM_BLOCK, ctt_encoder_auto()},
     };
-    /* container stays at its default (KTX2). */
+    ctt_container container = {.tag = CTT_CONTAINER_KTX2};
 
-    ctt_pipeline_output *out = NULL;
-    ctt_status st = ctt_convert(img, &cfg, &out);
+    ctt_bytes *out = NULL;
+    ctt_status st = ctt_convert(img, &cfg, container, &out);
     ctt_image_destroy(img); /* not consumed */
     if (st != CTT_STATUS_OK) {
         fprintf(stderr, "ctt_convert failed (%d): %s\n", st, ctt_last_error_message());
         return 5;
     }
 
-    if (ctt_pipeline_output_get_kind(out) != CTT_PIPELINE_OUTPUT_KIND_ENCODED) {
-        fprintf(stderr, "expected encoded output\n");
-        ctt_pipeline_output_destroy(out);
-        return 6;
-    }
-
-    const uint8_t *bytes = ctt_pipeline_output_encoded_data(out);
-    size_t len = ctt_pipeline_output_encoded_len(out);
+    const uint8_t *bytes = ctt_bytes_data(out);
+    size_t len = ctt_bytes_len(out);
     if (!bytes || len == 0) {
         fprintf(stderr, "encoded output is empty\n");
-        ctt_pipeline_output_destroy(out);
+        ctt_bytes_destroy(out);
         return 7;
     }
     if (len < sizeof KTX2_MAGIC || memcmp(bytes, KTX2_MAGIC, sizeof KTX2_MAGIC) != 0) {
         fprintf(stderr, "output does not start with KTX2 magic\n");
-        ctt_pipeline_output_destroy(out);
+        ctt_bytes_destroy(out);
         return 8;
     }
 
-    ctt_pipeline_output_destroy(out);
+    ctt_bytes_destroy(out);
     printf("ok\n");
     return 0;
 }

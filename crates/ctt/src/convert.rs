@@ -5,8 +5,7 @@ use crate::encoders::Quality;
 use crate::error::{Error, Result};
 use crate::format::TargetFormat;
 use crate::processing::{
-    self, Buffer, PipelineOutput, Swizzle, Variant, encode, load, map_nested, mipmap, par_map,
-    passthrough, store, swizzle,
+    self, Buffer, Swizzle, Variant, encode, load, map_nested, mipmap, par_map, store, swizzle,
 };
 use crate::surface::{ColorSpace, FormatDesc, Image, ImageRef, SurfaceRef};
 use crate::vk_format::FormatExt;
@@ -19,8 +18,6 @@ pub enum Container {
     /// KTX2 (`.ktx2`) file, optionally supercompressed. `None` means no
     /// supercompression.
     Ktx2(Option<Ktx2Supercompression>),
-    /// Return the processed [`Image`] directly, without encoding into a file format.
-    Raw,
 }
 
 /// Supercompression to apply when writing KTX2 files.
@@ -47,7 +44,7 @@ impl Container {
     }
 }
 
-/// Settings for the high-level [`convert`] function.
+/// Settings for the high-level [`convert`] and [`convert_raw`] functions.
 #[derive(Default)]
 pub struct ConvertSettings {
     /// Target format. If `None`, the input format is kept without compression,
@@ -61,9 +58,6 @@ pub struct ConvertSettings {
     /// target stays in `[0, 1]`. To use the full SNORM range (for example, a
     /// normal map for `BC5_SNORM_BLOCK`), supply SNORM input.
     pub format: Option<TargetFormat>,
-    /// Output container format. Defaults to KTX2 with no supercompression
-    /// ([`Container::Ktx2(None)`](Container::Ktx2)).
-    pub container: Container,
     /// Encoder quality preset for compressed targets. Ignored for
     /// uncompressed output.
     pub quality: Quality,
@@ -90,18 +84,65 @@ pub struct ConvertSettings {
     pub mipmap_filter: mipmap::MipmapFilter,
 }
 
-impl Default for Container {
-    fn default() -> Self {
-        Container::Ktx2(None)
-    }
-}
-
-/// Convert an image.
+/// Convert an image and encode the result into `container`.
+///
+/// Equal to [`convert_raw`] followed by [`encode_container`], but does not
+/// copy the input when no conversion is necessary.
 ///
 /// The input image should already be fully assembled. Use
 /// [`split_cubemap`](crate::split_cubemap) to prepare cubemap inputs beforehand.
-pub fn convert(image: ImageRef<'_>, mut settings: ConvertSettings) -> Result<PipelineOutput> {
+pub fn convert(
+    image: ImageRef<'_>,
+    settings: ConvertSettings,
+    container: Container,
+) -> Result<Vec<u8>> {
     profiling::scope!("convert");
+    match convert_inner(image, settings)? {
+        Converted::Borrowed(image) => encode_container(image, container),
+        Converted::Owned(image) => encode_container(image.to_ref(), container),
+    }
+}
+
+/// Convert an image and return the processed [`Image`].
+///
+/// Returns a copy of the input when no conversion is necessary.
+///
+/// The input image should already be fully assembled. Use
+/// [`split_cubemap`](crate::split_cubemap) to prepare cubemap inputs beforehand.
+pub fn convert_raw(image: ImageRef<'_>, settings: ConvertSettings) -> Result<Image> {
+    profiling::scope!("convert_raw");
+    Ok(match convert_inner(image, settings)? {
+        Converted::Borrowed(image) => image.to_owned(),
+        Converted::Owned(image) => image,
+    })
+}
+
+/// Encode an image into a container file.
+pub fn encode_container(image: ImageRef<'_>, container: Container) -> Result<Vec<u8>> {
+    image.validate()?;
+    match container {
+        Container::Dds => {
+            profiling::scope!("encode_dds");
+            crate::output::dds::encode_dds_image(&image)
+        }
+        Container::Ktx2(sc) => {
+            profiling::scope!("encode_ktx2");
+            crate::output::ktx2::encode_ktx2_image(&image, sc)
+        }
+    }
+}
+
+/// Result of [`convert_inner`].
+enum Converted<'a> {
+    /// The input image, unchanged.
+    Borrowed(ImageRef<'a>),
+    /// A new image made by the pipeline.
+    Owned(Image),
+}
+
+/// Shared body of [`convert`] and [`convert_raw`]. Borrows the input when no
+/// conversion is necessary.
+fn convert_inner(image: ImageRef<'_>, mut settings: ConvertSettings) -> Result<Converted<'_>> {
     image.validate()?;
 
     let input_fmt = image.desc.format;
@@ -145,8 +186,7 @@ pub fn convert(image: ImageRef<'_>, mut settings: ConvertSettings) -> Result<Pip
     log::debug!(
         "convert: {input_fmt:?} ({input_cs:?}, {input_alpha:?}) → \
          {final_target_fmt:?} ({target_cs:?}, {target_alpha:?}) \
-         container={:?} swizzle={} mipmap={}",
-        settings.container,
+         swizzle={} mipmap={}",
         settings.swizzle.is_some(),
         settings.mipmap,
     );
@@ -160,7 +200,7 @@ pub fn convert(image: ImageRef<'_>, mut settings: ConvertSettings) -> Result<Pip
 
     if formats_match && input_cs == target_cs && input_alpha == target_alpha && no_pixel_work {
         log::debug!("convert: taking passthrough path (format and processing match)");
-        return passthrough::run(image, final_target_fmt, settings.container);
+        return Ok(Converted::Borrowed(image));
     }
 
     // Compressed inputs that didn't qualify for passthrough have nowhere to
@@ -182,11 +222,10 @@ pub fn convert(image: ImageRef<'_>, mut settings: ConvertSettings) -> Result<Pip
                     .into(),
             ));
         }
-        log::debug!(
-            "convert: compressed input did not qualify for passthrough; \
-             falling back to passthrough format check"
-        );
-        return passthrough::run(image, final_target_fmt, settings.container);
+        return Err(Error::UnsupportedConversion(format!(
+            "cannot convert compressed {input_fmt:?} to {final_target_fmt:?}; decode it to an \
+             uncompressed format first"
+        )));
     }
 
     // 3D textures only flow through the passthrough fast path. The f32/u32
@@ -212,12 +251,13 @@ pub fn convert(image: ImageRef<'_>, mut settings: ConvertSettings) -> Result<Pip
 
     log::debug!("convert: routing through {variant:?} pipeline");
 
-    match variant {
+    let converted = match variant {
         Variant::F32 => convert_f32(image, settings, target_fmt, encoder_step, final_has_alpha),
         Variant::F64 => convert_f64(image, settings, target_fmt, encoder_step, final_has_alpha),
         Variant::U32 => convert_u32(image, settings, target_fmt, encoder_step),
         Variant::U64 => convert_u64(image, settings, target_fmt, encoder_step),
-    }
+    }?;
+    Ok(Converted::Owned(converted))
 }
 
 /// Whether to warn that a meaningful straight alpha is being dropped.
@@ -302,7 +342,7 @@ fn convert_f32(
     target_fmt: ktx2::Format,
     encoder_step: Option<encode::EncoderStep>,
     final_has_alpha: bool,
-) -> Result<PipelineOutput> {
+) -> Result<Image> {
     let input_desc = image.desc;
     let target_desc = FormatDesc {
         format: target_fmt,
@@ -366,12 +406,10 @@ fn convert_f32(
         desc: target_desc,
     };
 
-    let final_image = match encoder_step {
-        Some(step) => encode::encode_all(processed.to_ref(), &step)?,
-        None => processed,
-    };
-
-    passthrough::emit(final_image, settings.container)
+    match encoder_step {
+        Some(step) => encode::encode_all(processed.to_ref(), &step),
+        None => Ok(processed),
+    }
 }
 
 fn convert_f64(
@@ -380,7 +418,7 @@ fn convert_f64(
     target_fmt: ktx2::Format,
     encoder_step: Option<encode::EncoderStep>,
     final_has_alpha: bool,
-) -> Result<PipelineOutput> {
+) -> Result<Image> {
     if settings.mipmap {
         return Err(Error::UnsupportedFormat(
             "f64 pipeline does not yet support mipmap generation".into(),
@@ -421,12 +459,10 @@ fn convert_f64(
         desc: target_desc,
     };
 
-    let final_image = match encoder_step {
-        Some(step) => encode::encode_all(processed.to_ref(), &step)?,
-        None => processed,
-    };
-
-    passthrough::emit(final_image, settings.container)
+    match encoder_step {
+        Some(step) => encode::encode_all(processed.to_ref(), &step),
+        None => Ok(processed),
+    }
 }
 
 fn convert_u32(
@@ -434,7 +470,7 @@ fn convert_u32(
     settings: ConvertSettings,
     target_fmt: ktx2::Format,
     encoder_step: Option<encode::EncoderStep>,
-) -> Result<PipelineOutput> {
+) -> Result<Image> {
     let input_desc = image.desc;
     check_uint_unsupported(&settings, input_desc.alpha)?;
 
@@ -463,7 +499,7 @@ fn convert_u32(
         ));
     }
 
-    passthrough::emit(processed, settings.container)
+    Ok(processed)
 }
 
 fn convert_u64(
@@ -471,7 +507,7 @@ fn convert_u64(
     settings: ConvertSettings,
     target_fmt: ktx2::Format,
     encoder_step: Option<encode::EncoderStep>,
-) -> Result<PipelineOutput> {
+) -> Result<Image> {
     let input_desc = image.desc;
     check_uint_unsupported(&settings, input_desc.alpha)?;
 
@@ -500,7 +536,7 @@ fn convert_u64(
         ));
     }
 
-    passthrough::emit(processed, settings.container)
+    Ok(processed)
 }
 
 fn check_uint_unsupported(settings: &ConvertSettings, input_alpha: AlphaMode) -> Result<()> {
@@ -566,23 +602,11 @@ mod tests {
             ColorSpace::Linear,
             AlphaMode::Opaque,
         );
-        let out = convert(
-            image.to_ref(),
-            ConvertSettings {
-                container: Container::Raw,
-                ..Default::default()
-            },
-        )
-        .unwrap();
-        match out {
-            PipelineOutput::Raw(img) => {
-                assert_eq!(
-                    img.surfaces[0][0].data,
-                    vec![10, 20, 30, 40, 50, 60, 70, 80]
-                );
-            }
-            _ => panic!("expected Raw output"),
-        }
+        let img = convert_raw(image.to_ref(), ConvertSettings::default()).unwrap();
+        assert_eq!(
+            img.surfaces[0][0].data,
+            vec![10, 20, 30, 40, 50, 60, 70, 80]
+        );
     }
 
     #[test]
@@ -597,31 +621,25 @@ mod tests {
             ColorSpace::Linear,
             AlphaMode::Opaque,
         );
-        let out = convert(
+        let img = convert_raw(
             image.to_ref(),
             ConvertSettings {
                 format: Some(TargetFormat::Uncompressed(
                     ktx2::Format::A2B10G10R10_UNORM_PACK32,
                 )),
-                container: Container::Raw,
                 ..Default::default()
             },
         )
         .unwrap();
-        match out {
-            PipelineOutput::Raw(img) => {
-                let s = &img.surfaces[0][0];
-                assert_eq!(img.desc.format, ktx2::Format::A2B10G10R10_UNORM_PACK32);
-                assert_eq!(s.data.len(), 4);
-                let word = u32::from_le_bytes(s.data[..4].try_into().unwrap());
-                let r = word & 0x3ff;
-                let g = (word >> 10) & 0x3ff;
-                let b = (word >> 20) & 0x3ff;
-                let a = word >> 30;
-                assert_eq!((r, g, b, a), (1023, 0, 514, 3));
-            }
-            _ => panic!("expected Raw output"),
-        }
+        let s = &img.surfaces[0][0];
+        assert_eq!(img.desc.format, ktx2::Format::A2B10G10R10_UNORM_PACK32);
+        assert_eq!(s.data.len(), 4);
+        let word = u32::from_le_bytes(s.data[..4].try_into().unwrap());
+        let r = word & 0x3ff;
+        let g = (word >> 10) & 0x3ff;
+        let b = (word >> 20) & 0x3ff;
+        let a = word >> 30;
+        assert_eq!((r, g, b, a), (1023, 0, 514, 3));
     }
 
     #[test]
@@ -634,25 +652,19 @@ mod tests {
             ColorSpace::Linear,
             AlphaMode::Opaque,
         );
-        let out = convert(
+        let img = convert_raw(
             image.to_ref(),
             ConvertSettings {
                 format: Some(TargetFormat::Uncompressed(
                     ktx2::Format::E5B9G9R9_UFLOAT_PACK32,
                 )),
-                container: Container::Raw,
                 ..Default::default()
             },
         )
         .unwrap();
-        match out {
-            PipelineOutput::Raw(img) => {
-                let s = &img.surfaces[0][0];
-                assert_eq!(img.desc.format, ktx2::Format::E5B9G9R9_UFLOAT_PACK32);
-                assert_eq!(s.data, 0x8001_0300u32.to_le_bytes());
-            }
-            _ => panic!("expected Raw output"),
-        }
+        let s = &img.surfaces[0][0];
+        assert_eq!(img.desc.format, ktx2::Format::E5B9G9R9_UFLOAT_PACK32);
+        assert_eq!(s.data, 0x8001_0300u32.to_le_bytes());
     }
 
     #[test]
@@ -666,30 +678,24 @@ mod tests {
             ColorSpace::Linear,
             AlphaMode::Opaque,
         );
-        let out = convert(
+        let img = convert_raw(
             image.to_ref(),
             ConvertSettings {
                 format: Some(TargetFormat::Uncompressed(
                     ktx2::Format::A2B10G10R10_UINT_PACK32,
                 )),
-                container: Container::Raw,
                 ..Default::default()
             },
         )
         .unwrap();
-        match out {
-            PipelineOutput::Raw(img) => {
-                let s = &img.surfaces[0][0];
-                assert_eq!(img.desc.format, ktx2::Format::A2B10G10R10_UINT_PACK32);
-                let word = u32::from_le_bytes(s.data[..4].try_into().unwrap());
-                // UINT values pass through unscaled (alpha clamped to 3).
-                assert_eq!(word & 0x3ff, 255);
-                assert_eq!((word >> 10) & 0x3ff, 12);
-                assert_eq!((word >> 20) & 0x3ff, 200);
-                assert_eq!(word >> 30, 2);
-            }
-            _ => panic!("expected Raw output"),
-        }
+        let s = &img.surfaces[0][0];
+        assert_eq!(img.desc.format, ktx2::Format::A2B10G10R10_UINT_PACK32);
+        let word = u32::from_le_bytes(s.data[..4].try_into().unwrap());
+        // UINT values pass through unscaled (alpha clamped to 3).
+        assert_eq!(word & 0x3ff, 255);
+        assert_eq!((word >> 10) & 0x3ff, 12);
+        assert_eq!((word >> 20) & 0x3ff, 200);
+        assert_eq!(word >> 30, 2);
     }
 
     #[test]
@@ -702,22 +708,16 @@ mod tests {
             ColorSpace::Linear,
             AlphaMode::Opaque,
         );
-        let out = convert(
+        let img = convert_raw(
             image.to_ref(),
             ConvertSettings {
                 format: Some(TargetFormat::Uncompressed(ktx2::Format::R8_UNORM)),
-                container: Container::Raw,
                 ..Default::default()
             },
         )
         .unwrap();
-        match out {
-            PipelineOutput::Raw(img) => {
-                assert_eq!(img.desc.format, ktx2::Format::R8_UNORM);
-                assert_eq!(img.surfaces[0][0].data, vec![100]);
-            }
-            _ => panic!("expected Raw output"),
-        }
+        assert_eq!(img.desc.format, ktx2::Format::R8_UNORM);
+        assert_eq!(img.surfaces[0][0].data, vec![100]);
     }
 
     #[test]
@@ -731,22 +731,16 @@ mod tests {
             ColorSpace::Linear,
             AlphaMode::Opaque,
         );
-        let out = convert(
+        let img = convert_raw(
             image.to_ref(),
             ConvertSettings {
                 format: Some(TargetFormat::Uncompressed(ktx2::Format::R8G8B8A8_UNORM)),
-                container: Container::Raw,
                 mipmap: true,
                 ..Default::default()
             },
         )
         .unwrap();
-        match out {
-            PipelineOutput::Raw(img) => {
-                assert_eq!(img.surfaces[0].len(), 4); // 8,4,2,1
-            }
-            _ => panic!("expected Raw output"),
-        }
+        assert_eq!(img.surfaces[0].len(), 4); // 8,4,2,1
     }
 
     /// Build an RGBA8 image with three explicit mip levels (8×8, 4×4, 2×2).
@@ -775,87 +769,68 @@ mod tests {
         // mipmap = false must convert (not drop) every input mip level. Target
         // R8_UNORM (channel drop) so this routes through the f32 pipeline
         // rather than the format-identity passthrough fast path.
-        let out = convert(
+        let img = convert_raw(
             three_mip_rgba8().to_ref(),
             ConvertSettings {
                 format: Some(TargetFormat::Uncompressed(ktx2::Format::R8_UNORM)),
-                container: Container::Raw,
                 ..Default::default()
             },
         )
         .unwrap();
-        match out {
-            PipelineOutput::Raw(img) => {
-                assert_eq!(img.surfaces[0].len(), 3, "existing 3-mip chain preserved");
-                assert_eq!(
-                    (img.surfaces[0][2].width, img.surfaces[0][2].height),
-                    (2, 2),
-                );
-            }
-            _ => panic!("expected Raw output"),
-        }
+        assert_eq!(img.surfaces[0].len(), 3, "existing 3-mip chain preserved");
+        assert_eq!(
+            (img.surfaces[0][2].width, img.surfaces[0][2].height),
+            (2, 2),
+        );
     }
 
     #[test]
     fn convert_f32_completes_existing_chain_with_mipmap() {
         // The supplied 8×8, 4×4, and 2×2 levels are retained; only the
         // missing 1×1 tail is generated from the final existing level.
-        let out = convert(
+        let img = convert_raw(
             three_mip_rgba8().to_ref(),
             ConvertSettings {
                 format: Some(TargetFormat::Uncompressed(ktx2::Format::R8_UNORM)),
-                container: Container::Raw,
                 mipmap: true,
                 ..Default::default()
             },
         )
         .unwrap();
-        match out {
-            PipelineOutput::Raw(img) => {
-                assert_eq!(img.surfaces[0].len(), 4, "full chain completed");
-                assert_eq!(img.surfaces[0][0].data[0], 10);
-                assert_eq!(img.surfaces[0][1].data[0], 20);
-                assert_eq!(img.surfaces[0][2].data[0], 30);
-                assert_eq!(img.surfaces[0][3].data[0], 30);
-                assert_eq!(
-                    (img.surfaces[0][3].width, img.surfaces[0][3].height),
-                    (1, 1),
-                );
-            }
-            _ => panic!("expected Raw output"),
-        }
+        assert_eq!(img.surfaces[0].len(), 4, "full chain completed");
+        assert_eq!(img.surfaces[0][0].data[0], 10);
+        assert_eq!(img.surfaces[0][1].data[0], 20);
+        assert_eq!(img.surfaces[0][2].data[0], 30);
+        assert_eq!(img.surfaces[0][3].data[0], 30);
+        assert_eq!(
+            (img.surfaces[0][3].width, img.surfaces[0][3].height),
+            (1, 1),
+        );
     }
 
     #[test]
     fn convert_f32_mipmap_count_truncates_existing_chain() {
-        let out = convert(
+        let img = convert_raw(
             three_mip_rgba8().to_ref(),
             ConvertSettings {
                 format: Some(TargetFormat::Uncompressed(ktx2::Format::R8_UNORM)),
-                container: Container::Raw,
                 mipmap: true,
                 mipmap_count: Some(2),
                 ..Default::default()
             },
         )
         .unwrap();
-        match out {
-            PipelineOutput::Raw(img) => {
-                assert_eq!(img.surfaces[0].len(), 2);
-                assert_eq!(img.surfaces[0][0].data[0], 10);
-                assert_eq!(img.surfaces[0][1].data[0], 20);
-            }
-            _ => panic!("expected Raw output"),
-        }
+        assert_eq!(img.surfaces[0].len(), 2);
+        assert_eq!(img.surfaces[0][0].data[0], 10);
+        assert_eq!(img.surfaces[0][1].data[0], 20);
     }
 
     #[test]
     fn convert_f32_mipmap_count_zero_errors() {
-        let err = convert(
+        let err = convert_raw(
             three_mip_rgba8().to_ref(),
             ConvertSettings {
                 format: Some(TargetFormat::Uncompressed(ktx2::Format::R8_UNORM)),
-                container: Container::Raw,
                 mipmap: true,
                 mipmap_count: Some(0),
                 ..Default::default()
@@ -889,10 +864,9 @@ mod tests {
 
     #[test]
     fn convert_compressed_input_swizzle_errors() {
-        let err = convert(
+        let err = convert_raw(
             bc7_1block_image().to_ref(),
             ConvertSettings {
-                container: Container::Raw,
                 swizzle: Some(Swizzle([
                     processing::SwizzleChannel::B,
                     processing::SwizzleChannel::G,
@@ -911,10 +885,9 @@ mod tests {
 
     #[test]
     fn convert_compressed_input_mipmap_errors() {
-        let err = convert(
+        let err = convert_raw(
             bc7_1block_image().to_ref(),
             ConvertSettings {
-                container: Container::Raw,
                 mipmap: true,
                 ..Default::default()
             },
@@ -928,10 +901,9 @@ mod tests {
 
     #[test]
     fn convert_compressed_input_color_space_change_errors() {
-        let err = convert(
+        let err = convert_raw(
             bc7_1block_image().to_ref(),
             ConvertSettings {
-                container: Container::Raw,
                 output_color_space: Some(ColorSpace::Srgb),
                 ..Default::default()
             },
@@ -945,10 +917,9 @@ mod tests {
 
     #[test]
     fn convert_compressed_input_alpha_change_errors() {
-        let err = convert(
+        let err = convert_raw(
             bc7_1block_image().to_ref(),
             ConvertSettings {
-                container: Container::Raw,
                 output_alpha: Some(AlphaMode::Premultiplied),
                 ..Default::default()
             },
@@ -970,11 +941,10 @@ mod tests {
             ColorSpace::Linear,
             AlphaMode::Opaque,
         );
-        let err = convert(
+        let err = convert_raw(
             image.to_ref(),
             ConvertSettings {
                 format: Some(TargetFormat::Uncompressed(ktx2::Format::R8G8B8A8_UINT)),
-                container: Container::Raw,
                 ..Default::default()
             },
         )
@@ -996,27 +966,22 @@ mod tests {
             ColorSpace::Linear,
             AlphaMode::Opaque,
         );
-        let out = convert(
+        let bytes = convert(
             image.to_ref(),
             ConvertSettings {
                 format: Some(TargetFormat::Compressed {
                     format: ktx2::Format::BC7_UNORM_BLOCK,
                     encoder: crate::encoders::Encoder::Auto,
                 }),
-                container: Container::ktx2(),
                 quality: Quality::UltraFast,
                 ..Default::default()
             },
+            Container::ktx2(),
         )
         .unwrap();
-        match out {
-            PipelineOutput::Encoded(bytes) => {
-                // Verify KTX2 magic.
-                assert!(bytes.len() > 12);
-                assert_eq!(&bytes[0..12], b"\xabKTX 20\xbb\r\n\x1a\n");
-            }
-            _ => panic!("expected Encoded output"),
-        }
+        // Verify KTX2 magic.
+        assert!(bytes.len() > 12);
+        assert_eq!(&bytes[0..12], b"\xabKTX 20\xbb\r\n\x1a\n");
     }
 
     /// Every compiled-in encoder accepts the sRGB variants it lists, requires
@@ -1056,22 +1021,18 @@ mod tests {
                     ColorSpace::Srgb,
                     AlphaMode::Opaque,
                 );
-                let out = convert(
+                let out = convert_raw(
                     image.to_ref(),
                     ConvertSettings {
                         format: Some(TargetFormat::Compressed {
                             format,
                             encoder: crate::format::encoder_for_prefix(info.name),
                         }),
-                        container: Container::Raw,
                         quality: Quality::UltraFast,
                         ..Default::default()
                     },
                 )
                 .unwrap_or_else(|e| panic!("{} {format:?}: {e}", info.name));
-                let PipelineOutput::Raw(out) = out else {
-                    panic!("expected Raw output");
-                };
                 assert_eq!(out.desc.format, format, "encoder {}", info.name);
                 assert_eq!(
                     out.desc.color_space,
@@ -1098,14 +1059,13 @@ mod tests {
                 ColorSpace::Linear,
                 AlphaMode::Opaque,
             );
-            let err = convert(
+            let err = convert_raw(
                 image.to_ref(),
                 ConvertSettings {
                     format: Some(TargetFormat::Compressed {
                         format,
                         encoder: crate::encoders::Encoder::Auto,
                     }),
-                    container: Container::Raw,
                     output_color_space: Some(output_cs),
                     ..Default::default()
                 },
@@ -1128,11 +1088,10 @@ mod tests {
             ColorSpace::Srgb,
             AlphaMode::Opaque,
         );
-        let err = convert(
+        let err = convert_raw(
             image.to_ref(),
             ConvertSettings {
                 format: Some(TargetFormat::Uncompressed(ktx2::Format::R8G8B8A8_UNORM)),
-                container: Container::Raw,
                 ..Default::default()
             },
         )
@@ -1155,18 +1114,14 @@ mod tests {
             ColorSpace::Srgb,
             AlphaMode::Opaque,
         );
-        let out = convert(
+        let out = convert_raw(
             image.to_ref(),
             ConvertSettings {
-                container: Container::Raw,
                 output_color_space: Some(ColorSpace::Linear),
                 ..Default::default()
             },
         )
         .unwrap();
-        let PipelineOutput::Raw(out) = out else {
-            panic!("expected Raw output");
-        };
         assert_eq!(out.desc.format, ktx2::Format::R8G8B8A8_UNORM);
         assert_eq!(out.desc.color_space, ColorSpace::Linear);
     }
@@ -1191,20 +1146,8 @@ mod tests {
                 alpha: AlphaMode::Opaque,
             },
         };
-        let out = convert(
-            image.to_ref(),
-            ConvertSettings {
-                container: Container::Raw,
-                ..Default::default()
-            },
-        )
-        .unwrap();
-        match out {
-            PipelineOutput::Raw(img) => {
-                assert_eq!(img.surfaces[0][0].data, bc7_bytes);
-            }
-            _ => panic!("expected Raw output"),
-        }
+        let img = convert_raw(image.to_ref(), ConvertSettings::default()).unwrap();
+        assert_eq!(img.surfaces[0][0].data, bc7_bytes);
     }
 
     /// Build a 4×2 RGBA8 image whose row stride is `width * 4 + 8` bytes —
@@ -1242,16 +1185,15 @@ mod tests {
         }
     }
 
-    /// Encoding path: padded-stride RGBA8 → swizzle to BGRA → Raw.
+    /// Encoding path: padded-stride RGBA8 → swizzle to BGRA → `convert_raw`.
     /// The store step always writes a tight stride, and no padding byte
     /// (0xCC) should bleed into the output.
     #[test]
     fn convert_padded_stride_swizzle_to_raw_is_tight() {
         let image = padded_rgba8_4x2();
-        let out = convert(
+        let img = convert_raw(
             image.to_ref(),
             ConvertSettings {
-                container: Container::Raw,
                 swizzle: Some(Swizzle([
                     processing::SwizzleChannel::B,
                     processing::SwizzleChannel::G,
@@ -1262,10 +1204,6 @@ mod tests {
             },
         )
         .unwrap();
-        let img = match out {
-            PipelineOutput::Raw(img) => img,
-            _ => panic!("expected Raw output"),
-        };
         let s = &img.surfaces[0][0];
         // Output must be tight.
         assert_eq!(s.stride, 4 * 4);
@@ -1292,24 +1230,44 @@ mod tests {
         let image = padded_rgba8_4x2();
         // 4×2 isn't 4×4-aligned, but tile_to_blocks edge-replicates so this
         // still produces 1×1 blocks (rounded up to 4×4).
-        let out = convert(
+        let bytes = convert(
             image.to_ref(),
             ConvertSettings {
                 format: Some(TargetFormat::Compressed {
                     format: ktx2::Format::BC7_UNORM_BLOCK,
                     encoder: crate::encoders::Encoder::Auto,
                 }),
-                container: Container::ktx2(),
                 quality: Quality::UltraFast,
                 ..Default::default()
             },
+            Container::ktx2(),
         )
         .unwrap();
-        match out {
-            PipelineOutput::Encoded(bytes) => {
-                assert_eq!(&bytes[0..12], b"\xabKTX 20\xbb\r\n\x1a\n");
+        assert_eq!(&bytes[0..12], b"\xabKTX 20\xbb\r\n\x1a\n");
+    }
+
+    /// `convert` gives the same bytes as `convert_raw` followed by
+    /// `encode_container`, on the passthrough path and the pipeline path.
+    #[test]
+    fn convert_matches_convert_raw_then_encode_container() {
+        let image = padded_rgba8_4x2();
+        let swizzle = Swizzle([
+            processing::SwizzleChannel::B,
+            processing::SwizzleChannel::G,
+            processing::SwizzleChannel::R,
+            processing::SwizzleChannel::A,
+        ]);
+        for swizzle in [None, Some(swizzle)] {
+            for container in [Container::Dds, Container::ktx2()] {
+                let settings = || ConvertSettings {
+                    swizzle,
+                    ..Default::default()
+                };
+                let direct = convert(image.to_ref(), settings(), container).unwrap();
+                let raw = convert_raw(image.to_ref(), settings()).unwrap();
+                let two_step = encode_container(raw.to_ref(), container).unwrap();
+                assert_eq!(direct, two_step, "{container:?}, {swizzle:?}");
             }
-            _ => panic!("expected Encoded output"),
         }
     }
 
@@ -1320,18 +1278,12 @@ mod tests {
     #[test]
     fn convert_padded_stride_uncompressed_passthrough_is_tight() {
         let image = padded_rgba8_4x2();
-        let out = convert(
+        let bytes = convert(
             image.to_ref(),
-            ConvertSettings {
-                container: Container::ktx2(),
-                ..Default::default()
-            },
+            ConvertSettings::default(),
+            Container::ktx2(),
         )
         .unwrap();
-        let bytes = match out {
-            PipelineOutput::Encoded(bytes) => bytes,
-            _ => panic!("expected Encoded output"),
-        };
         // Round-trip through the KTX2 decoder; each pixel must match the
         // original padded source row-by-row.
         let decoded = crate::input::ktx2::decode_ktx2_image(&bytes).unwrap();
@@ -1380,18 +1332,12 @@ mod tests {
             },
         };
 
-        let out = convert(
+        let bytes = convert(
             image.to_ref(),
-            ConvertSettings {
-                container: Container::ktx2(),
-                ..Default::default()
-            },
+            ConvertSettings::default(),
+            Container::ktx2(),
         )
         .unwrap();
-        let bytes = match out {
-            PipelineOutput::Encoded(bytes) => bytes,
-            _ => panic!("expected Encoded output"),
-        };
         // Inspect the encoded KTX2 directly: the level index must say 32
         // bytes (2 BC7 blocks, tight), not 48 (which would mean the padding
         // block was written into the file). The decoder discards trailing
@@ -1459,18 +1405,12 @@ mod tests {
             },
         };
 
-        let out = convert(
+        let bytes = convert(
             image.to_ref(),
-            ConvertSettings {
-                container: Container::ktx2(),
-                ..Default::default()
-            },
+            ConvertSettings::default(),
+            Container::ktx2(),
         )
         .unwrap();
-        let bytes = match out {
-            PipelineOutput::Encoded(bytes) => bytes,
-            _ => panic!("expected Encoded output"),
-        };
         let decoded = crate::input::ktx2::decode_ktx2_image(&bytes).unwrap();
         let s = &decoded.surfaces[0][0];
         assert_eq!(s.depth, depth);
@@ -1506,11 +1446,10 @@ mod tests {
             ColorSpace::Linear,
             AlphaMode::Opaque,
         );
-        let out = convert(
+        let img = convert_raw(
             image.to_ref(),
             ConvertSettings {
                 format: Some(TargetFormat::Uncompressed(ktx2::Format::R32G32B32A32_UINT)),
-                container: Container::Raw,
                 swizzle: Some(Swizzle([
                     processing::SwizzleChannel::A,
                     processing::SwizzleChannel::B,
@@ -1521,16 +1460,11 @@ mod tests {
             },
         )
         .unwrap();
-        match out {
-            PipelineOutput::Raw(img) => {
-                let bytes = &img.surfaces[0][0].data;
-                assert_eq!(u32::from_le_bytes(bytes[0..4].try_into().unwrap()), 40);
-                assert_eq!(u32::from_le_bytes(bytes[4..8].try_into().unwrap()), 30);
-                assert_eq!(u32::from_le_bytes(bytes[8..12].try_into().unwrap()), 20);
-                assert_eq!(u32::from_le_bytes(bytes[12..16].try_into().unwrap()), 10);
-            }
-            _ => panic!("expected Raw output"),
-        }
+        let bytes = &img.surfaces[0][0].data;
+        assert_eq!(u32::from_le_bytes(bytes[0..4].try_into().unwrap()), 40);
+        assert_eq!(u32::from_le_bytes(bytes[4..8].try_into().unwrap()), 30);
+        assert_eq!(u32::from_le_bytes(bytes[8..12].try_into().unwrap()), 20);
+        assert_eq!(u32::from_le_bytes(bytes[12..16].try_into().unwrap()), 10);
     }
 
     #[test]
@@ -1569,20 +1503,16 @@ mod tests {
                 ColorSpace::Linear,
                 AlphaMode::Straight,
             );
-            let output = convert(
+            let out = convert_raw(
                 image.to_ref(),
                 ConvertSettings {
                     format: Some(TargetFormat::Uncompressed(ktx2::Format::R32G32B32_SFLOAT)),
                     output_alpha: Some(target_alpha),
-                    container: Container::Raw,
                     ..Default::default()
                 },
             )
             .unwrap();
-            let PipelineOutput::Raw(image) = output else {
-                panic!("expected raw output");
-            };
-            assert_eq!(image.desc.alpha, target_alpha);
+            assert_eq!(out.desc.alpha, target_alpha);
         }
     }
 }
@@ -1621,26 +1551,21 @@ mod bc6h_alpha_tests {
         }
     }
 
-    /// Encode `image` to BC6H (Raw container) and decode the first texel's RGB.
+    /// Encode `image` to BC6H with `convert_raw` and decode the first texel's RGB.
     fn encode_bc6h_first_texel(image: Image, output_alpha: Option<AlphaMode>) -> [f32; 3] {
-        let out = convert(
+        let img = convert_raw(
             image.to_ref(),
             ConvertSettings {
                 format: Some(TargetFormat::Compressed {
                     format: ktx2::Format::BC6H_UFLOAT_BLOCK,
                     encoder: crate::encoders::Encoder::Auto,
                 }),
-                container: Container::Raw,
                 quality: Quality::UltraFast,
                 output_alpha,
                 ..Default::default()
             },
         )
         .unwrap();
-        let img = match out {
-            PipelineOutput::Raw(img) => img,
-            _ => panic!("expected Raw output"),
-        };
         let block: [u8; 16] = img.surfaces[0][0].data.as_slice().try_into().unwrap();
         let texels = ctt_compressonator::bc6h::decompress_block(&block).unwrap();
         [

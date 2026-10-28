@@ -12,9 +12,11 @@
  * exposed:
  *
  *   - Encode / convert: build a `ctt_image` from one or more `ctt_surface`s,
- *     fill in a `ctt_convert_settings`, and call `ctt_convert`. The result
- *     is a `ctt_pipeline_output` carrying either container bytes (KTX2 / DDS)
- *     or, when `Container::Raw` is requested, a freshly-decoded image.
+ *     fill in a `ctt_convert_settings`, and call `ctt_convert` with a
+ *     `ctt_container`. The result is a `ctt_bytes` with the container file
+ *     (KTX2 / DDS). `ctt_convert_raw` returns the processed `ctt_image`
+ *     instead, and `ctt_encode_container` encodes a `ctt_image` into a
+ *     container file.
  *
  *   - Decode: call `ctt_decode_container` (auto-detect from magic bytes) or
  *     `ctt_decode_container_as` (caller specifies KTX2 vs DDS) on a buffer
@@ -39,11 +41,12 @@
  *     };
  *     cfg.mipmap = true;
  *
- *     ctt_pipeline_output *out = NULL;
- *     ctt_status st = ctt_convert(img, &cfg, &out);
+ *     ctt_container container = {.tag = CTT_CONTAINER_KTX2};
+ *     ctt_bytes *out = NULL;
+ *     ctt_status st = ctt_convert(img, &cfg, container, &out);
  *     ctt_image_destroy(img);
- *     // st == CTT_STATUS_OK: `out` carries KTX2 bytes (the default container).
- *     ctt_pipeline_output_destroy(out);
+ *     // st == CTT_STATUS_OK: `out` carries KTX2 bytes.
+ *     ctt_bytes_destroy(out);
  *
  *
  * Memory model
@@ -51,7 +54,7 @@
  *
  * All heap allocation happens on the Rust side, so callers must not free
  * pointers returned by ctt with their own allocator. Each opaque type
- * (`ctt_surface`, `ctt_image`, `ctt_pipeline_output`)
+ * (`ctt_surface`, `ctt_image`, `ctt_bytes`)
  * has a matching `*_destroy` function; passing `NULL` is always safe.
  *
  * APIs that consume an input (e.g. `ctt_image_push_mip`) take
@@ -60,7 +63,7 @@
  * doc comment calls this out.
  *
  * Borrowed pointers returned by accessors (`ctt_surface_data`,
- * `ctt_image_surface_data`, `ctt_pipeline_output_encoded_data`) are valid
+ * `ctt_image_surface_data`, `ctt_bytes_data`) are valid
  * only as long as the owning handle is alive and unmutated. Copy out before
  * destroying the owner.
  *
@@ -137,9 +140,9 @@
  *
  * `ctt_convert_settings` is laid out so that an all-zeroes value
  * (`memset(&cfg, 0, sizeof cfg)`) is a valid settings struct that behaves
- * exactly like `ctt_convert_settings_default()`: input format preserved, KTX2
- * container, `CTT_QUALITY_BASIC`, triangle mipmap filter, and every optional
- * override absent. Calling `ctt_convert_settings_default()` is still
+ * exactly like `ctt_convert_settings_default()`: input format preserved,
+ * `CTT_QUALITY_BASIC`, triangle mipmap filter, and every optional override
+ * absent. Calling `ctt_convert_settings_default()` is still
  * recommended for clarity and forward-compatibility if the defaults change.
  *
  *
@@ -534,30 +537,11 @@ typedef uint8_t ctt_log_level;
 #endif // __cplusplus
 
 /**
- * Tag for [`PipelineOutput`].
+ * Opaque handle to an owned byte buffer, such as an encoded container file.
+ *
+ * Free with [`ctt_bytes_destroy`].
  */
-enum ctt_pipeline_output_kind
-#if defined(__cplusplus) || __STDC_VERSION__ >= 202311L
-  : uint8_t
-#endif // defined(__cplusplus) || __STDC_VERSION__ >= 202311L
- {
-    CTT_PIPELINE_OUTPUT_KIND_ENCODED = 0,
-    CTT_PIPELINE_OUTPUT_KIND_RAW = 1,
-    /**
-     * Not a real output variant: returned by
-     * [`ctt_pipeline_output_get_kind`] only when the handle is `NULL`. A
-     * valid output is never this value. (The `u8` representation cannot hold
-     * `-1`, so the next free discriminant is used as the invalid sentinel.)
-     */
-    CTT_PIPELINE_OUTPUT_KIND_INVALID = 2,
-};
-#ifndef __cplusplus
-#if __STDC_VERSION__ >= 202311L
-typedef enum ctt_pipeline_output_kind ctt_pipeline_output_kind;
-#else
-typedef uint8_t ctt_pipeline_output_kind;
-#endif // __STDC_VERSION__ >= 202311L
-#endif // __cplusplus
+typedef struct ctt_bytes ctt_bytes;
 
 /**
  * Opaque handle to a multi-layer / multi-mip image.
@@ -568,30 +552,6 @@ typedef uint8_t ctt_pipeline_output_kind;
  * (which carries depth on each surface).
  */
 typedef struct ctt_image ctt_image;
-
-/**
- * Opaque handle to a conversion result.
- *
- * The output is one of two variants, distinguished by
- * [`ctt_pipeline_output_get_kind`]:
- *
- * - `CTT_PIPELINE_OUTPUT_KIND_ENCODED` (any `Container` other than `Raw`):
- *   the result is a serialized container file (DDS or KTX2). Read the bytes
- *   with [`ctt_pipeline_output_encoded_data`] / [`ctt_pipeline_output_encoded_len`]
- *   and copy them out (e.g. write to disk) before destroying the output —
- *   the pointer is borrowed and becomes invalid once the output is freed.
- *
- * - `CTT_PIPELINE_OUTPUT_KIND_RAW` (only when `Container::Raw` was requested):
- *   the result is a processed `ctt_image_t`. Call
- *   [`ctt_pipeline_output_take_image`] to transfer ownership to the caller;
- *   from then on, walk the image with `ctt_image_layer_count` /
- *   `ctt_image_mip_count` and the `ctt_image_surface_*` accessors. The taken
- *   image must be freed with `ctt_image_destroy`.
- *
- * Always destroy the output with [`ctt_pipeline_output_destroy`] when done,
- * even after taking the image out of a `Raw` output.
- */
-typedef struct ctt_pipeline_output ctt_pipeline_output;
 
 /**
  * Opaque handle to a single image surface (raw pixels or compressed blocks).
@@ -1049,49 +1009,6 @@ typedef struct {
 } ctt_target_format;
 
 /**
- * Output container format.
- *
- * `Ktx2` writes a plain KTX2 file. `Ktx2Zstd` / `Ktx2Zlib` apply the
- * corresponding KTX2 supercompression scheme; the carried integer is the
- * compression level passed to the underlying codec. `Dds` writes a DDS file.
- * `Raw` returns the processed image without serializing into a file format.
- *
- * `Ktx2` is tag `0` so that a zero-initialized
- * [`ConvertSettings`] selects the same default container as
- * `ctt_convert_settings_default`.
- */
-enum ctt_container_Tag
-#if defined(__cplusplus) || __STDC_VERSION__ >= 202311L
-  : uint8_t
-#endif // defined(__cplusplus) || __STDC_VERSION__ >= 202311L
- {
-    CTT_CONTAINER_KTX2,
-    CTT_CONTAINER_KTX2_ZSTD,
-    CTT_CONTAINER_KTX2_ZLIB,
-    CTT_CONTAINER_DDS,
-    CTT_CONTAINER_RAW,
-};
-#ifndef __cplusplus
-#if __STDC_VERSION__ >= 202311L
-typedef enum ctt_container_Tag ctt_container_Tag;
-#else
-typedef uint8_t ctt_container_Tag;
-#endif // __STDC_VERSION__ >= 202311L
-#endif // __cplusplus
-
-typedef struct {
-    ctt_container_Tag tag;
-    union {
-        struct {
-            int32_t ktx2_zstd;
-        };
-        struct {
-            uint8_t ktx2_zlib;
-        };
-    };
-} ctt_container;
-
-/**
  * Optional [`ColorSpace`] (matches Rust's `Option<ColorSpace>`).
  */
 typedef struct {
@@ -1131,7 +1048,7 @@ typedef struct {
 } ctt_optional_size;
 
 /**
- * Settings controlling a [`ctt_convert`] call.
+ * Settings controlling a [`ctt_convert`] or [`ctt_convert_raw`] call.
  *
  * Build via [`ctt_convert_settings_default`] and overwrite fields, or
  * fill the struct directly. Optional fields have a `present` flag — set
@@ -1140,7 +1057,7 @@ typedef struct {
  * The enum discriminants are chosen so that a fully zero-initialized
  * `ctt_convert_settings` (e.g. via `memset(&cfg, 0, sizeof cfg)`) behaves
  * identically to `ctt_convert_settings_default()`: preserve input format,
- * KTX2 container, `Basic` quality, triangle mipmap filter, and no overrides.
+ * `Basic` quality, triangle mipmap filter, and no overrides.
  * Calling `ctt_convert_settings_default()` is still recommended — it is
  * self-documenting and stays correct if defaults ever change.
  */
@@ -1150,7 +1067,6 @@ typedef struct {
      * [`TargetFormat`].
      */
     ctt_target_format format;
-    ctt_container container;
     ctt_quality quality;
     /**
      * Override the output color space. Not present keeps the input's color
@@ -1171,6 +1087,43 @@ typedef struct {
     ctt_optional_size mipmap_count;
     ctt_mipmap_filter mipmap_filter;
 } ctt_convert_settings;
+
+/**
+ * Output container format.
+ *
+ * `Ktx2` writes a plain KTX2 file. `Ktx2Zstd` / `Ktx2Zlib` apply the
+ * corresponding KTX2 supercompression scheme; the carried integer is the
+ * compression level passed to the underlying codec. `Dds` writes a DDS file.
+ */
+enum ctt_container_Tag
+#if defined(__cplusplus) || __STDC_VERSION__ >= 202311L
+  : uint8_t
+#endif // defined(__cplusplus) || __STDC_VERSION__ >= 202311L
+ {
+    CTT_CONTAINER_KTX2,
+    CTT_CONTAINER_KTX2_ZSTD,
+    CTT_CONTAINER_KTX2_ZLIB,
+    CTT_CONTAINER_DDS,
+};
+#ifndef __cplusplus
+#if __STDC_VERSION__ >= 202311L
+typedef enum ctt_container_Tag ctt_container_Tag;
+#else
+typedef uint8_t ctt_container_Tag;
+#endif // __STDC_VERSION__ >= 202311L
+#endif // __cplusplus
+
+typedef struct {
+    ctt_container_Tag tag;
+    union {
+        struct {
+            int32_t ktx2_zstd;
+        };
+        struct {
+            uint8_t ktx2_zlib;
+        };
+    };
+} ctt_container;
 
 /**
  * How to read the bytes of every surface in an image.
@@ -1437,6 +1390,22 @@ extern "C" {
 #endif // __cplusplus
 
 /**
+ * Destroy a byte buffer. `bytes` may be NULL.
+ */
+ void ctt_bytes_destroy(ctt_bytes *bytes);
+
+/**
+ * Pointer to the bytes. Valid until the handle is destroyed. Returns NULL
+ * when `bytes` is NULL.
+ */
+ const uint8_t *ctt_bytes_data(const ctt_bytes *bytes);
+
+/**
+ * Length of the buffer in bytes, or `0` when `bytes` is NULL.
+ */
+ size_t ctt_bytes_len(const ctt_bytes *bytes);
+
+/**
  * Default settings for the `bc7enc-rdo` encoder.
  */
  ctt_bc7enc_settings ctt_bc7enc_settings_default(void);
@@ -1455,21 +1424,44 @@ extern "C" {
  ctt_encoder ctt_encoder_auto(void);
 
 /**
- * Default-constructed settings: input format preserved, KTX2 container,
- * `Basic` quality, no swizzle / mipmaps / overrides.
+ * Default-constructed settings: input format preserved, `Basic` quality,
+ * triangle mipmap filter, no swizzle / mipmaps / overrides.
  */
  ctt_convert_settings ctt_convert_settings_default(void);
 
 /**
- * Run the conversion pipeline.
+ * Run the conversion pipeline and encode the result into `container`.
  *
- * Does not consume `image`. On success, writes a new `ctt_pipeline_output_t`
- * handle into `*out` (caller frees with `ctt_pipeline_output_destroy`).
+ * Equal to [`ctt_convert_raw`] followed by [`ctt_encode_container`], but
+ * does not copy the input when no conversion is necessary.
+ *
+ * Does not consume `image`. On success, writes a new `ctt_bytes` handle
+ * into `*out` (caller frees with `ctt_bytes_destroy`).
  */
 
 ctt_status ctt_convert(const ctt_image *image,
                        const ctt_convert_settings *settings,
-                       ctt_pipeline_output **out);
+                       ctt_container container,
+                       ctt_bytes **out);
+
+/**
+ * Run the conversion pipeline and return the processed image.
+ *
+ * Does not consume `image`. On success, writes a new `ctt_image` handle
+ * into `*out` (caller frees with `ctt_image_destroy`).
+ */
+
+ctt_status ctt_convert_raw(const ctt_image *image,
+                           const ctt_convert_settings *settings,
+                           ctt_image **out);
+
+/**
+ * Encode an image into a container file.
+ *
+ * Does not consume `image`. On success, writes a new `ctt_bytes` handle
+ * into `*out` (caller frees with `ctt_bytes_destroy`).
+ */
+ ctt_status ctt_encode_container(const ctt_image *image, ctt_container container, ctt_bytes **out);
 
 /**
  * Split a horizontal (4×3) or vertical (3×4) cross-layout atlas into a
@@ -1684,42 +1676,6 @@ ctt_status ctt_decode_container_as(const uint8_t *data,
  void ctt_set_log_level(ctt_log_level level);
 
 /**
- * Destroy a pipeline output. `out` may be NULL.
- */
- void ctt_pipeline_output_destroy(ctt_pipeline_output *out);
-
-/**
- * Return the variant tag of the output.
- *
- * Returns `CTT_PIPELINE_OUTPUT_KIND_INVALID` if `out` is `NULL`; this is
- * never a valid output tag and lets callers distinguish a null handle from a
- * genuine (empty) encoded output.
- */
- ctt_pipeline_output_kind ctt_pipeline_output_get_kind(const ctt_pipeline_output *out);
-
-/**
- * Pointer to the encoded container bytes. Valid until the output is
- * destroyed. Returns NULL when `out` is null or the tag is `Raw`.
- */
- const uint8_t *ctt_pipeline_output_encoded_data(const ctt_pipeline_output *out);
-
-/**
- * Length in bytes of the encoded data, or `0` if the tag is `Raw`.
- */
- size_t ctt_pipeline_output_encoded_len(const ctt_pipeline_output *out);
-
-/**
- * Take the `ctt_image_t` out of a `Raw` output, transferring ownership
- * to the caller. The output handle remains live for tag queries and must
- * still be destroyed via [`ctt_pipeline_output_destroy`], but a second
- * call to this function returns NULL.
- *
- * Returns NULL if `out` is null, the tag is not `Raw`, or the image has
- * already been taken.
- */
- ctt_image *ctt_pipeline_output_take_image(ctt_pipeline_output *out);
-
-/**
  * Create a new surface, copying `data_len` bytes from `data` into Rust's
  * allocator.
  *
@@ -1794,8 +1750,9 @@ ctt_surface *ctt_surface_create(const uint8_t *data,
  * A `count` of zero selects Rayon's platform default. Positive values
  * request exactly that many workers; one worker is effectively serial. The
  * pool is created once per process, so this function may succeed at most
- * once and must be called before the first `ctt_convert`; afterwards it
- * returns `CTT_STATUS_THREAD_POOL_ALREADY_INITIALIZED`.
+ * once and must be called before the first `ctt_convert` or
+ * `ctt_convert_raw`; afterwards it returns
+ * `CTT_STATUS_THREAD_POOL_ALREADY_INITIALIZED`.
  */
  ctt_status ctt_set_thread_count(size_t count);
 

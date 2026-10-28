@@ -12,7 +12,7 @@ use anyhow::Result;
 use ctt::encoders::Encoder;
 use ctt::{
     AlphaMode, ColorSpace, Container, ConvertSettings, Format, FormatDesc, FormatExt, Image,
-    PipelineOutput, Quality, Surface, TargetFormat, TextureKind,
+    Quality, Surface, TargetFormat, TextureKind,
 };
 
 const FACE_COLORS: [[u8; 4]; 6] = [
@@ -150,7 +150,7 @@ fn write_bc7_solid(
 ) -> Result<()> {
     let data = rgba8_solid(w, h, color);
     let image = make_rgba8_image(data, w, h, ColorSpace::Linear, AlphaMode::Opaque);
-    let bytes = match ctt::convert(
+    let bytes = ctt::convert(
         image.to_ref(),
         ConvertSettings {
             format: Some(TargetFormat::Compressed {
@@ -159,30 +159,17 @@ fn write_bc7_solid(
                 // BC7-capable encoders get added to the workspace later.
                 encoder: Encoder::Bc7enc(ctt::encoders::bc7enc::Bc7encSettings::default()),
             }),
-            container,
             quality: Quality::UltraFast,
             ..Default::default()
         },
-    )? {
-        PipelineOutput::Encoded(b) => b,
-        PipelineOutput::Raw(_) => unreachable!(),
-    };
+        container,
+    )?;
     fs::write(dir.join(name), bytes)?;
     Ok(())
 }
 
 fn write_container(path: PathBuf, image: Image, container: Container) -> Result<()> {
-    let bytes = match ctt::convert(
-        image.to_ref(),
-        ConvertSettings {
-            format: None,
-            container,
-            ..Default::default()
-        },
-    )? {
-        PipelineOutput::Encoded(b) => b,
-        PipelineOutput::Raw(_) => unreachable!(),
-    };
+    let bytes = ctt::encode_container(image.to_ref(), container)?;
     fs::write(path, bytes)?;
     Ok(())
 }

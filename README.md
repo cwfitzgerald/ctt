@@ -115,9 +115,8 @@ fn main() -> Result<(), ctt::Error> {
             format: Format::BC7_SRGB_BLOCK,
             encoder: Encoder::Auto,
         }),
-        container: Container::ktx2(),
         ..Default::default()
-    })?;
+    }, Container::ktx2())?;
 
     Ok(())
 }
@@ -131,7 +130,7 @@ The Rust library is serial unless its default-off `rayon` feature is enabled. Wi
 
 ```rust,ignore
 let pool = rayon::ThreadPoolBuilder::new().num_threads(4).build()?;
-let output = pool.install(|| ctt::convert(image, settings))?;
+let ktx2_bytes = pool.install(|| ctt::convert(image, settings, ctt::Container::ktx2()))?;
 ```
 
 Without an explicit `install`, Rayon uses its lazily initialized global pool.

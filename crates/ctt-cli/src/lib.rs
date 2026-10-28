@@ -14,8 +14,8 @@ use ctt::input::{InputOverrides, decode_container};
 use ctt::{
     AlphaMode, ColorSpace, Container, ConvertSettings, CubemapInput, EquirectangularFront,
     EquirectangularOrientation, Error, Format, FormatDesc, FormatExt, Image, Ktx2Supercompression,
-    MipmapFilter, PipelineOutput, Quality, Surface, Swizzle, SwizzleChannel, TargetFormat,
-    TextureKind, format_short_name, parse_format, split_cubemap,
+    MipmapFilter, Quality, Surface, Swizzle, SwizzleChannel, TargetFormat, TextureKind,
+    format_short_name, parse_format, split_cubemap,
 };
 
 pub use args::{
@@ -158,7 +158,6 @@ pub fn run(args: Args) -> Result<(), Box<dyn std::error::Error>> {
 
     let settings = ConvertSettings {
         format: target_format,
-        container,
         quality: map_quality(args.quality),
         output_color_space: args.output_color_space.map(map_color_space),
         output_alpha: args.output_alpha.map(map_alpha_mode),
@@ -169,13 +168,7 @@ pub fn run(args: Args) -> Result<(), Box<dyn std::error::Error>> {
         mipmap_filter: map_mipmap_filter(args.mipmap_filter),
     };
 
-    let converted = install_in(&pool, || ctt::convert(image.to_ref(), settings));
-    let output_bytes = match converted? {
-        PipelineOutput::Encoded(bytes) => bytes,
-        PipelineOutput::Raw(_) => {
-            return Err(Error::OutputEncoding("unexpected raw output from CLI".into()).into());
-        }
-    };
+    let output_bytes = install_in(&pool, || ctt::convert(image.to_ref(), settings, container))?;
 
     fs::write(output_path, &output_bytes).map_err(|e| {
         Error::OutputEncoding(format!("failed to write {}: {e}", output_path.display()))

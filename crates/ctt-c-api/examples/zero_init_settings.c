@@ -43,27 +43,23 @@ static ctt_image *make_image(void) {
  * freshly malloc'd buffer via `*out_buf` / `*out_len`. Returns 0 on success. */
 static int convert_encoded(ctt_image *img, const ctt_convert_settings *cfg,
                            uint8_t **out_buf, size_t *out_len) {
-    ctt_pipeline_output *out = NULL;
-    ctt_status st = ctt_convert(img, cfg, &out);
+    ctt_container container = {.tag = CTT_CONTAINER_KTX2};
+    ctt_bytes *out = NULL;
+    ctt_status st = ctt_convert(img, cfg, container, &out);
     ctt_image_destroy(img);
     if (st != CTT_STATUS_OK) {
         fprintf(stderr, "ctt_convert failed (%d): %s\n", st, ctt_last_error_message());
         return -1;
     }
-    if (ctt_pipeline_output_get_kind(out) != CTT_PIPELINE_OUTPUT_KIND_ENCODED) {
-        fprintf(stderr, "expected encoded output\n");
-        ctt_pipeline_output_destroy(out);
-        return -1;
-    }
-    const uint8_t *bytes = ctt_pipeline_output_encoded_data(out);
-    size_t len = ctt_pipeline_output_encoded_len(out);
+    const uint8_t *bytes = ctt_bytes_data(out);
+    size_t len = ctt_bytes_len(out);
     uint8_t *copy = (uint8_t *)malloc(len ? len : 1);
     if (!copy) {
-        ctt_pipeline_output_destroy(out);
+        ctt_bytes_destroy(out);
         return -1;
     }
     memcpy(copy, bytes, len);
-    ctt_pipeline_output_destroy(out);
+    ctt_bytes_destroy(out);
     *out_buf = copy;
     *out_len = len;
     return 0;

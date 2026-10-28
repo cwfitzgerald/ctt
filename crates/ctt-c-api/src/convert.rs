@@ -1,7 +1,7 @@
+use crate::bytes::Bytes;
 use crate::error::{Status, catch_panic, map_error, set_last_error};
 use crate::formats::to_ctt_format;
 use crate::image::Image;
-use crate::output::PipelineOutput;
 use crate::types::{
     AlphaMode, ColorSpace, Format, MipmapFilter, OptionalAlphaMode, OptionalColorSpace,
     OptionalSize, OptionalSwizzle, Quality,
@@ -687,11 +687,6 @@ impl TargetFormat {
 /// `Ktx2` writes a plain KTX2 file. `Ktx2Zstd` / `Ktx2Zlib` apply the
 /// corresponding KTX2 supercompression scheme; the carried integer is the
 /// compression level passed to the underlying codec. `Dds` writes a DDS file.
-/// `Raw` returns the processed image without serializing into a file format.
-///
-/// `Ktx2` is tag `0` so that a zero-initialized
-/// [`ConvertSettings`] selects the same default container as
-/// `ctt_convert_settings_default`.
 #[repr(C, u8)]
 #[derive(Debug, Clone, Copy)]
 pub enum Container {
@@ -699,7 +694,6 @@ pub enum Container {
     Ktx2Zstd(i32),
     Ktx2Zlib(u8),
     Dds,
-    Raw,
 }
 
 impl From<Container> for ctt::Container {
@@ -713,7 +707,6 @@ impl From<Container> for ctt::Container {
             Container::Ktx2Zlib(level) => {
                 ctt::Container::Ktx2(Some(ctt::Ktx2Supercompression::Zlib { level }))
             }
-            Container::Raw => ctt::Container::Raw,
         }
     }
 }
@@ -722,7 +715,7 @@ impl From<Container> for ctt::Container {
 // ConvertSettings
 // ---------------------------------------------------------------------------
 
-/// Settings controlling a [`ctt_convert`] call.
+/// Settings controlling a [`ctt_convert`] or [`ctt_convert_raw`] call.
 ///
 /// Build via [`ctt_convert_settings_default`] and overwrite fields, or
 /// fill the struct directly. Optional fields have a `present` flag — set
@@ -731,7 +724,7 @@ impl From<Container> for ctt::Container {
 /// The enum discriminants are chosen so that a fully zero-initialized
 /// `ctt_convert_settings` (e.g. via `memset(&cfg, 0, sizeof cfg)`) behaves
 /// identically to `ctt_convert_settings_default()`: preserve input format,
-/// KTX2 container, `Basic` quality, triangle mipmap filter, and no overrides.
+/// `Basic` quality, triangle mipmap filter, and no overrides.
 /// Calling `ctt_convert_settings_default()` is still recommended — it is
 /// self-documenting and stays correct if defaults ever change.
 #[repr(C)]
@@ -740,7 +733,6 @@ pub struct ConvertSettings {
     /// Target format. Must agree with the output color space. See
     /// [`TargetFormat`].
     pub format: TargetFormat,
-    pub container: Container,
     pub quality: Quality,
     /// Override the output color space. Not present keeps the input's color
     /// space.
@@ -758,13 +750,12 @@ pub struct ConvertSettings {
     pub mipmap_filter: MipmapFilter,
 }
 
-/// Default-constructed settings: input format preserved, KTX2 container,
-/// `Basic` quality, no swizzle / mipmaps / overrides.
+/// Default-constructed settings: input format preserved, `Basic` quality,
+/// triangle mipmap filter, no swizzle / mipmaps / overrides.
 #[unsafe(no_mangle)]
 pub extern "C" fn ctt_convert_settings_default() -> ConvertSettings {
     ConvertSettings {
         format: TargetFormat::None,
-        container: Container::Ktx2,
         quality: Quality::Basic,
         output_color_space: OptionalColorSpace {
             present: false,
@@ -795,19 +786,46 @@ pub extern "C" fn ctt_convert_settings_default() -> ConvertSettings {
     }
 }
 
+impl ConvertSettings {
+    /// Convert to [`ctt::ConvertSettings`]. Sets the last error on failure.
+    fn into_inner(self) -> Result<ctt::ConvertSettings, Status> {
+        Ok(ctt::ConvertSettings {
+            format: self.format.into_inner()?,
+            quality: self.quality.into_inner(),
+            output_color_space: self
+                .output_color_space
+                .present
+                .then(|| self.output_color_space.value.into()),
+            output_alpha: self
+                .output_alpha
+                .present
+                .then(|| self.output_alpha.value.into()),
+            allow_discarding_alpha: self.allow_discarding_alpha,
+            swizzle: self.swizzle.present.then(|| self.swizzle.value.into()),
+            mipmap: self.mipmap,
+            mipmap_count: self.mipmap_count.present.then_some(self.mipmap_count.value),
+            mipmap_filter: self.mipmap_filter.into(),
+        })
+    }
+}
+
 // ---------------------------------------------------------------------------
 // convert
 // ---------------------------------------------------------------------------
 
-/// Run the conversion pipeline.
+/// Run the conversion pipeline and encode the result into `container`.
 ///
-/// Does not consume `image`. On success, writes a new `ctt_pipeline_output_t`
-/// handle into `*out` (caller frees with `ctt_pipeline_output_destroy`).
+/// Equal to [`ctt_convert_raw`] followed by [`ctt_encode_container`], but
+/// does not copy the input when no conversion is necessary.
+///
+/// Does not consume `image`. On success, writes a new `ctt_bytes` handle
+/// into `*out` (caller frees with `ctt_bytes_destroy`).
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn ctt_convert(
     image: *const Image,
     settings: *const ConvertSettings,
-    out: *mut *mut PipelineOutput,
+    container: Container,
+    out: *mut *mut Bytes,
 ) -> Status {
     catch_panic(Status::Internal, || {
         let Some(image) = (unsafe { image.as_ref() }) else {
@@ -822,50 +840,100 @@ pub unsafe extern "C" fn ctt_convert(
             set_last_error("ctt_convert: settings is null");
             return Status::NullPointer;
         };
-
-        let format = match settings.format.into_inner() {
-            Ok(f) => f,
+        let inner = match settings.into_inner() {
+            Ok(inner) => inner,
             Err(s) => return s,
         };
 
-        let swizzle = if settings.swizzle.present {
-            Some(settings.swizzle.value.into())
-        } else {
-            None
-        };
-
-        let inner = ctt::ConvertSettings {
-            format,
-            container: settings.container.into(),
-            quality: settings.quality.into_inner(),
-            output_color_space: settings
-                .output_color_space
-                .present
-                .then(|| settings.output_color_space.value.into()),
-            output_alpha: settings
-                .output_alpha
-                .present
-                .then(|| settings.output_alpha.value.into()),
-            allow_discarding_alpha: settings.allow_discarding_alpha,
-            swizzle,
-            mipmap: settings.mipmap,
-            mipmap_count: settings
-                .mipmap_count
-                .present
-                .then_some(settings.mipmap_count.value),
-            mipmap_filter: settings.mipmap_filter.into(),
-        };
-
-        let converted = match crate::threading::install(|| ctt::convert(image.0.to_ref(), inner)) {
+        let converted = match crate::threading::install(|| {
+            ctt::convert(image.0.to_ref(), inner, container.into())
+        }) {
             Ok(converted) => converted,
             Err(status) => return status,
         };
 
         match converted {
-            Ok(output) => {
-                let boxed = Box::into_raw(Box::new(PipelineOutput(Some(output))));
+            Ok(bytes) => {
                 unsafe {
-                    *out = boxed;
+                    *out = Box::into_raw(Box::new(Bytes(bytes)));
+                }
+                Status::Ok
+            }
+            Err(e) => map_error(e),
+        }
+    })
+}
+
+/// Run the conversion pipeline and return the processed image.
+///
+/// Does not consume `image`. On success, writes a new `ctt_image` handle
+/// into `*out` (caller frees with `ctt_image_destroy`).
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ctt_convert_raw(
+    image: *const Image,
+    settings: *const ConvertSettings,
+    out: *mut *mut Image,
+) -> Status {
+    catch_panic(Status::Internal, || {
+        let Some(image) = (unsafe { image.as_ref() }) else {
+            set_last_error("ctt_convert_raw: image is null");
+            return Status::NullPointer;
+        };
+        if out.is_null() {
+            set_last_error("ctt_convert_raw: out is null");
+            return Status::NullPointer;
+        }
+        let Some(settings) = (unsafe { settings.as_ref() }) else {
+            set_last_error("ctt_convert_raw: settings is null");
+            return Status::NullPointer;
+        };
+        let inner = match settings.into_inner() {
+            Ok(inner) => inner,
+            Err(s) => return s,
+        };
+
+        let converted =
+            match crate::threading::install(|| ctt::convert_raw(image.0.to_ref(), inner)) {
+                Ok(converted) => converted,
+                Err(status) => return status,
+            };
+
+        match converted {
+            Ok(converted) => {
+                unsafe {
+                    *out = Box::into_raw(Box::new(Image(converted)));
+                }
+                Status::Ok
+            }
+            Err(e) => map_error(e),
+        }
+    })
+}
+
+/// Encode an image into a container file.
+///
+/// Does not consume `image`. On success, writes a new `ctt_bytes` handle
+/// into `*out` (caller frees with `ctt_bytes_destroy`).
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ctt_encode_container(
+    image: *const Image,
+    container: Container,
+    out: *mut *mut Bytes,
+) -> Status {
+    catch_panic(Status::Internal, || {
+        let Some(image) = (unsafe { image.as_ref() }) else {
+            set_last_error("ctt_encode_container: image is null");
+            return Status::NullPointer;
+        };
+        if out.is_null() {
+            set_last_error("ctt_encode_container: out is null");
+            return Status::NullPointer;
+        }
+
+        match ctt::encode_container(image.0.to_ref(), container.into()) {
+            Ok(bytes) => {
+                unsafe {
+                    *out = Box::into_raw(Box::new(Bytes(bytes)));
                 }
                 Status::Ok
             }
