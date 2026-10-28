@@ -31,9 +31,8 @@
 //!         format: Format::BC7_SRGB_BLOCK,
 //!         encoder: Encoder::Auto,
 //!     }),
-//!     container: Container::ktx2(),
 //!     ..Default::default()
-//! })?;
+//! }, Container::ktx2())?;
 //! # Ok(())
 //! # }
 //! ```
@@ -66,12 +65,14 @@ pub struct ReadmeDoctests;
 pub use ktx2::Format;
 
 pub use alpha::AlphaMode;
-pub use convert::{Container, ConvertSettings, Ktx2Supercompression, convert};
+pub use convert::{
+    Container, ConvertSettings, Ktx2Supercompression, convert, convert_raw, encode_container,
+};
 pub use cubemap::{CubemapInput, split_cubemap};
 pub use error::{Error, Result};
 pub use format::{TargetFormat, format_short_name, parse_format};
 pub use processing::equirectangular::{EquirectangularFront, EquirectangularOrientation};
-pub use processing::{MipmapFilter, PipelineOutput, Swizzle, SwizzleChannel};
+pub use processing::{MipmapFilter, Swizzle, SwizzleChannel};
 pub use quality::Quality;
 pub use surface::{ColorSpace, FormatDesc, Image, ImageRef, Surface, SurfaceRef, TextureKind};
 pub use vk_format::{ChannelKind, FormatExt};

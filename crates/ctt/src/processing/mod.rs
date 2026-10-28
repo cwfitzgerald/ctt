@@ -1,8 +1,8 @@
 //! Internal processing pipeline: load → (swizzle/mipmap/alpha) → store → encode.
 //!
-//! The public entry point is [`crate::convert::convert`]. Everything here is
-//! a collection of plain functions over [`Buffer`][buffer::Buffer] and
-//! [`Surface`][crate::surface::Surface].
+//! The public entry points are [`crate::convert`] and [`crate::convert_raw`].
+//! Everything here is a collection of plain functions over
+//! [`Buffer`][buffer::Buffer] and [`Surface`][crate::surface::Surface].
 //!
 //! Every explicitly vectorized kernel lives behind [`kernels`], which is the
 //! crate's only SIMD-library boundary; see that module for the contract, which
@@ -26,16 +26,7 @@ pub use swizzle::{Swizzle, SwizzleChannel};
 
 use crate::error::Result;
 use crate::format_kind::{FormatFamily, classify};
-use crate::surface::{ColorSpace, Image};
-
-/// Output of [`crate::convert::convert`].
-#[derive(Debug)]
-pub enum PipelineOutput {
-    /// Encoded file bytes (DDS or KTX2).
-    Encoded(Vec<u8>),
-    /// Raw image (when the caller requested [`crate::convert::Container::Raw`]).
-    Raw(Image),
-}
+use crate::surface::ColorSpace;
 
 /// Map a fallible transform over owned items, in parallel with the `rayon`
 /// feature. Output order matches input order.

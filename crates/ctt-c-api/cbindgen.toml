@@ -14,9 +14,11 @@ header = """\
  * exposed:
  *
  *   - Encode / convert: build a `ctt_image` from one or more `ctt_surface`s,
- *     fill in a `ctt_convert_settings`, and call `ctt_convert`. The result
- *     is a `ctt_pipeline_output` carrying either container bytes (KTX2 / DDS)
- *     or, when `Container::Raw` is requested, a freshly-decoded image.
+ *     fill in a `ctt_convert_settings`, and call `ctt_convert` with a
+ *     `ctt_container`. The result is a `ctt_bytes` with the container file
+ *     (KTX2 / DDS). `ctt_convert_raw` returns the processed `ctt_image`
+ *     instead, and `ctt_encode_container` encodes a `ctt_image` into a
+ *     container file.
  *
  *   - Decode: call `ctt_decode_container` (auto-detect from magic bytes) or
  *     `ctt_decode_container_as` (caller specifies KTX2 vs DDS) on a buffer
@@ -41,11 +43,12 @@ header = """\
  *     };
  *     cfg.mipmap = true;
  *
- *     ctt_pipeline_output *out = NULL;
- *     ctt_status st = ctt_convert(img, &cfg, &out);
+ *     ctt_container container = {.tag = CTT_CONTAINER_KTX2};
+ *     ctt_bytes *out = NULL;
+ *     ctt_status st = ctt_convert(img, &cfg, container, &out);
  *     ctt_image_destroy(img);
- *     // st == CTT_STATUS_OK: `out` carries KTX2 bytes (the default container).
- *     ctt_pipeline_output_destroy(out);
+ *     // st == CTT_STATUS_OK: `out` carries KTX2 bytes.
+ *     ctt_bytes_destroy(out);
  *
  *
  * Memory model
@@ -53,7 +56,7 @@ header = """\
  *
  * All heap allocation happens on the Rust side, so callers must not free
  * pointers returned by ctt with their own allocator. Each opaque type
- * (`ctt_surface`, `ctt_image`, `ctt_pipeline_output`)
+ * (`ctt_surface`, `ctt_image`, `ctt_bytes`)
  * has a matching `*_destroy` function; passing `NULL` is always safe.
  *
  * APIs that consume an input (e.g. `ctt_image_push_mip`) take
@@ -62,7 +65,7 @@ header = """\
  * doc comment calls this out.
  *
  * Borrowed pointers returned by accessors (`ctt_surface_data`,
- * `ctt_image_surface_data`, `ctt_pipeline_output_encoded_data`) are valid
+ * `ctt_image_surface_data`, `ctt_bytes_data`) are valid
  * only as long as the owning handle is alive and unmutated. Copy out before
  * destroying the owner.
  *
@@ -139,9 +142,9 @@ header = """\
  *
  * `ctt_convert_settings` is laid out so that an all-zeroes value
  * (`memset(&cfg, 0, sizeof cfg)`) is a valid settings struct that behaves
- * exactly like `ctt_convert_settings_default()`: input format preserved, KTX2
- * container, `CTT_QUALITY_BASIC`, triangle mipmap filter, and every optional
- * override absent. Calling `ctt_convert_settings_default()` is still
+ * exactly like `ctt_convert_settings_default()`: input format preserved,
+ * `CTT_QUALITY_BASIC`, triangle mipmap filter, and every optional override
+ * absent. Calling `ctt_convert_settings_default()` is still
  * recommended for clarity and forward-compatibility if the defaults change.
  *
  *
@@ -187,8 +190,7 @@ item_types = [
 "Surface" = "ctt_surface"
 "Image" = "ctt_image"
 "FormatDesc" = "ctt_format_desc"
-"PipelineOutput" = "ctt_pipeline_output"
-"PipelineOutputKind" = "ctt_pipeline_output_kind"
+"Bytes" = "ctt_bytes"
 "Container" = "ctt_container"
 "TargetFormat" = "ctt_target_format"
 "Encoder" = "ctt_encoder"

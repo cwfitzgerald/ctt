@@ -9,6 +9,7 @@
 
 #![allow(clippy::missing_safety_doc)]
 
+mod bytes;
 mod convert;
 mod cubemap;
 mod error;
@@ -16,11 +17,11 @@ mod formats;
 mod image;
 mod input;
 mod logging;
-mod output;
 mod surface;
 mod threading;
 mod types;
 
+pub use bytes::*;
 pub use convert::*;
 pub use cubemap::*;
 pub use error::*;
@@ -28,7 +29,6 @@ pub use formats::*;
 pub use image::*;
 pub use input::*;
 pub use logging::*;
-pub use output::*;
 pub use surface::*;
 pub use threading::*;
 pub use types::*;

@@ -4,7 +4,7 @@ use std::path::Path;
 
 use ctt::{
     AlphaMode, ColorSpace, Container, ConvertSettings, Format, FormatDesc, FormatExt, Image,
-    PipelineOutput, Surface, TextureKind,
+    Surface, TextureKind,
 };
 
 /// Solid color RGBA8 image data.
@@ -198,38 +198,22 @@ pub fn to_dds(image: Image) -> Vec<u8> {
 
 /// Encode an `Image` into a container, returning the encoded bytes.
 fn encode(image: Image, container: Container) -> Vec<u8> {
-    match ctt::convert(
-        image.to_ref(),
-        ConvertSettings {
-            format: None,
-            container,
-            ..Default::default()
-        },
-    )
-    .expect("ctt::convert succeeded")
-    {
-        PipelineOutput::Encoded(bytes) => bytes,
-        PipelineOutput::Raw(_) => panic!("expected encoded output"),
-    }
+    ctt::encode_container(image.to_ref(), container).expect("ctt::encode_container succeeded")
 }
 
 /// Encode an `Image` with a generated `mip_count`-deep mip chain into KTX2.
 pub fn to_ktx2_with_mips(image: Image, mip_count: usize) -> Vec<u8> {
-    match ctt::convert(
+    ctt::convert(
         image.to_ref(),
         ConvertSettings {
             format: None,
-            container: Container::Ktx2(None),
             mipmap: true,
             mipmap_count: Some(mip_count),
             ..Default::default()
         },
+        Container::Ktx2(None),
     )
     .expect("ctt::convert succeeded")
-    {
-        PipelineOutput::Encoded(bytes) => bytes,
-        PipelineOutput::Raw(_) => panic!("expected encoded output"),
-    }
 }
 
 /// Write a KTX2-encoded image to `path`.

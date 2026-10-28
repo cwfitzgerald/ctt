@@ -37,8 +37,9 @@ fn thread_pool() -> Result<&'static ThreadPool, Status> {
 /// A `count` of zero selects Rayon's platform default. Positive values
 /// request exactly that many workers; one worker is effectively serial. The
 /// pool is created once per process, so this function may succeed at most
-/// once and must be called before the first `ctt_convert`; afterwards it
-/// returns `CTT_STATUS_THREAD_POOL_ALREADY_INITIALIZED`.
+/// once and must be called before the first `ctt_convert` or
+/// `ctt_convert_raw`; afterwards it returns
+/// `CTT_STATUS_THREAD_POOL_ALREADY_INITIALIZED`.
 #[unsafe(no_mangle)]
 pub extern "C" fn ctt_set_thread_count(count: usize) -> Status {
     catch_panic(Status::Internal, || {

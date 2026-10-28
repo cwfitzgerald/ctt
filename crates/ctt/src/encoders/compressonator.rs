@@ -501,22 +501,18 @@ mod tests {
                 alpha: AlphaMode::Opaque,
             },
         };
-        let out = crate::convert(
+        let mut out = crate::convert_raw(
             image.to_ref(),
             crate::ConvertSettings {
                 format: Some(crate::TargetFormat::Compressed {
                     format: target,
                     encoder: crate::encoders::Encoder::Amd(AmdSettings::default()),
                 }),
-                container: crate::Container::Raw,
                 quality: Quality::Slow,
                 ..Default::default()
             },
         )
         .unwrap();
-        let crate::PipelineOutput::Raw(mut out) = out else {
-            panic!("expected Raw output");
-        };
         out.surfaces.remove(0).remove(0).data
     }
 

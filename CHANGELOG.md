@@ -25,6 +25,55 @@ Per Keep a Changelog there are 6 main categories of changes:
 
 ## Unreleased
 
+### Migrating to `convert_raw` and `encode_container`
+
+`convert` returns the container file bytes and takes the container as an argument. `ConvertSettings::container` is removed. `convert_raw` returns the processed `Image`. `encode_container` encodes an `Image` into a container file. `PipelineOutput` and `Container::Raw` are removed. `Container` does not implement `Default`. The old default was `Container::ktx2()`.
+
+#### Rust
+
+```diff
+-let output = convert(image, ConvertSettings {
+-    container: Container::ktx2(),
+-    ..settings
+-})?;
+-let PipelineOutput::Encoded(bytes) = output else { unreachable!() };
++let bytes = convert(image, settings, Container::ktx2())?;
+
+-let output = convert(image, ConvertSettings {
+-    container: Container::Raw,
+-    ..settings
+-})?;
+-let PipelineOutput::Raw(processed) = output else { unreachable!() };
++let processed = convert_raw(image, settings)?;
+```
+
+#### C
+
+`ctt_convert` takes the container as an argument and writes a `ctt_bytes` handle. `ctt_convert_settings` has no `container` field. The old default was `CTT_CONTAINER_KTX2`. `ctt_convert_raw` writes a `ctt_image`. `ctt_encode_container` encodes a `ctt_image` into a `ctt_bytes`. `ctt_pipeline_output`, its functions and `CTT_CONTAINER_RAW` are removed.
+
+```diff
+-cfg.container = (ctt_container){.tag = CTT_CONTAINER_KTX2};
+-ctt_pipeline_output *out = NULL;
+-ctt_status st = ctt_convert(img, &cfg, &out);
+-const uint8_t *data = ctt_pipeline_output_encoded_data(out);
+-size_t len = ctt_pipeline_output_encoded_len(out);
+-ctt_pipeline_output_destroy(out);
++ctt_container container = {.tag = CTT_CONTAINER_KTX2};
++ctt_bytes *out = NULL;
++ctt_status st = ctt_convert(img, &cfg, container, &out);
++const uint8_t *data = ctt_bytes_data(out);
++size_t len = ctt_bytes_len(out);
++ctt_bytes_destroy(out);
+
+-cfg.container = (ctt_container){.tag = CTT_CONTAINER_RAW};
+-ctt_pipeline_output *out = NULL;
+-ctt_status st = ctt_convert(img, &cfg, &out);
+-ctt_image *processed = ctt_pipeline_output_take_image(out);
+-ctt_pipeline_output_destroy(out);
++ctt_image *processed = NULL;
++ctt_status st = ctt_convert_raw(img, &cfg, &processed);
+```
+
 ## v0.6.1
 
 Released 2026-10-28

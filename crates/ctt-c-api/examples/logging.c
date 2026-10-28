@@ -50,16 +50,15 @@ static int drive_conversion(void) {
     }
 
     ctt_convert_settings cfg = ctt_convert_settings_default();
-    cfg.container = (ctt_container){.tag = CTT_CONTAINER_RAW};
 
-    ctt_pipeline_output *out = NULL;
-    ctt_status st = ctt_convert(img, &cfg, &out);
+    ctt_image *out = NULL;
+    ctt_status st = ctt_convert_raw(img, &cfg, &out);
     ctt_image_destroy(img); /* not consumed */
     if (st != CTT_STATUS_OK) {
-        fprintf(stderr, "ctt_convert failed (%d): %s\n", st, ctt_last_error_message());
+        fprintf(stderr, "ctt_convert_raw failed (%d): %s\n", st, ctt_last_error_message());
         return -1;
     }
-    ctt_pipeline_output_destroy(out);
+    ctt_image_destroy(out);
     return 0;
 }
 

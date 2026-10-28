@@ -9,7 +9,7 @@
 #include <string.h>
 
 int main(void) {
-    /* Round-trip a 1x1 RGBA8 pixel through ctt_convert. */
+    /* Round-trip a 1x1 RGBA8 pixel through ctt_convert_raw. */
     uint8_t pixel[4] = {200, 120, 60, 255};
     ctt_surface *s = ctt_surface_create(
         pixel, 4,
@@ -29,44 +29,42 @@ int main(void) {
     /* `s` consumed; do NOT destroy. */
 
     ctt_convert_settings settings = ctt_convert_settings_default();
-    settings.container = (ctt_container){
-        .tag = CTT_CONTAINER_RAW,
-    };
 
-    ctt_pipeline_output *out = NULL;
-    ctt_status st = ctt_convert(img, &settings, &out);
+    ctt_image *raw = NULL;
+    ctt_status st = ctt_convert_raw(img, &settings, &raw);
     ctt_image_destroy(img); /* not consumed */
     if (st != CTT_STATUS_OK) {
-        fprintf(stderr, "ctt_convert failed (%d): %s\n", st, ctt_last_error_message());
+        fprintf(stderr, "ctt_convert_raw failed (%d): %s\n", st, ctt_last_error_message());
         return 4;
     }
 
-    if (ctt_pipeline_output_get_kind(out) != CTT_PIPELINE_OUTPUT_KIND_RAW) {
-        fprintf(stderr, "expected raw output\n");
-        ctt_pipeline_output_destroy(out);
-        return 5;
-    }
-
-    ctt_image *raw = ctt_pipeline_output_take_image(out);
-    if (!raw) {
-        ctt_pipeline_output_destroy(out);
-        return 6;
-    }
     if (ctt_image_layer_count(raw) != 1
         || ctt_image_mip_count(raw, 0) != 1
         || ctt_image_surface_data_len(raw, 0, 0) != 4) {
         ctt_image_destroy(raw);
-        ctt_pipeline_output_destroy(out);
         return 7;
     }
     const uint8_t *bytes = ctt_image_surface_data(raw, 0, 0);
     if (memcmp(bytes, pixel, 4) != 0) {
         ctt_image_destroy(raw);
-        ctt_pipeline_output_destroy(out);
         return 8;
     }
-    ctt_image_destroy(raw);
-    ctt_pipeline_output_destroy(out);
+
+    /* Encode the raw image into a DDS file. */
+    ctt_container container = {.tag = CTT_CONTAINER_DDS};
+    ctt_bytes *dds = NULL;
+    st = ctt_encode_container(raw, container, &dds);
+    ctt_image_destroy(raw); /* not consumed */
+    if (st != CTT_STATUS_OK) {
+        fprintf(stderr, "ctt_encode_container failed (%d): %s\n", st, ctt_last_error_message());
+        return 9;
+    }
+    if (ctt_bytes_len(dds) < 4 || memcmp(ctt_bytes_data(dds), "DDS ", 4) != 0) {
+        fprintf(stderr, "output does not start with DDS magic\n");
+        ctt_bytes_destroy(dds);
+        return 10;
+    }
+    ctt_bytes_destroy(dds);
     printf("ok\n");
     return 0;
 }
