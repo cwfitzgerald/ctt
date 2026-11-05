@@ -16,9 +16,9 @@ struct IsaVariant {
     lib_name: &'static str,
     /// Preprocessor defines to add (name, optional value).
     defines: &'static [(&'static str, Option<&'static str>)],
-    /// Compiler flags for GCC/Clang only.
+    /// Compiler flags for GCC, Clang and clang-cl.
     gnu_flags: &'static [&'static str],
-    /// Compiler flags for MSVC only.
+    /// Compiler flags for cl.exe only.
     msvc_flags: &'static [&'static str],
 }
 
@@ -131,14 +131,13 @@ fn build_variant(variant: &IsaVariant, is_msvc: bool) {
     }
 
     // ISA-specific compiler flags.
-    if is_msvc {
-        for &flag in variant.msvc_flags {
-            build.flag(flag);
-        }
+    let isa_flags = if is_cl_exe() {
+        variant.msvc_flags
     } else {
-        for &flag in variant.gnu_flags {
-            build.flag(flag);
-        }
+        variant.gnu_flags
+    };
+    for &flag in isa_flags {
+        build.flag(flag);
     }
 
     // Generate namespace wrappers for each C++ source file.
@@ -269,4 +268,11 @@ fn build_std_headers(is_msvc: bool, variant_name: &str) -> String {
     }
 
     headers
+}
+
+/// cl.exe compiles intrinsics without flags. clang-cl needs the same `-m` flags
+/// as gcc and clang.
+fn is_cl_exe() -> bool {
+    let tool = cc::Build::new().cpp(true).get_compiler();
+    tool.is_like_msvc() && !tool.is_like_clang_cl()
 }

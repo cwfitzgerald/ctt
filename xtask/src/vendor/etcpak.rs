@@ -35,6 +35,7 @@ pub fn vendor_etcpak(src_dir: &Path) -> Result<()> {
     )?;
 
     patch_constant_simd_tables(&dst_dir.join("Tables.cpp"))?;
+    patch_aligned_block_buffers(&dst_dir.join("ProcessRGB.cpp"))?;
 
     // C source file
     copy_text_file(&src_dir.join("bcdec.c"), &dst_dir.join("bcdec.c"))?;
@@ -129,6 +130,27 @@ fn patch_constant_simd_tables(path: &Path) -> Result<()> {
     replace_required(&mut text, "_mm_setr_epi16(", "CTT_SETR_EPI16(", LABEL)?;
     replace_required(&mut text, "_mm_setr_epi32(", "CTT_SETR_EPI32(", LABEL)?;
     replace_required(&mut text, "_mm256_setr_epi16(", "CTT_SETR256_EPI16(", LABEL)?;
+
+    write_text(path, &text)
+}
+
+/// `_mm_store_si128` needs 16-byte alignment, which these arrays don't have.
+fn patch_aligned_block_buffers(path: &Path) -> Result<()> {
+    const LABEL: &str = "etcpak: aligned block buffers";
+    let mut text = read_text(path)?;
+
+    replace_required(
+        &mut text,
+        "    uint32_t buf[4*4];\n",
+        "    alignas(16) uint32_t buf[4*4];\n",
+        LABEL,
+    )?;
+    replace_required(
+        &mut text,
+        "    uint32_t rgba[4*4];\n    uint8_t alpha[4*4];\n",
+        "    alignas(16) uint32_t rgba[4*4];\n    alignas(16) uint8_t alpha[4*4];\n",
+        LABEL,
+    )?;
 
     write_text(path, &text)
 }

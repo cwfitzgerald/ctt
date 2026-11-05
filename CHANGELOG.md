@@ -25,6 +25,12 @@ Per Keep a Changelog there are 6 main categories of changes:
 
 ## Unreleased
 
+### Fixed
+
+- AMD, etcpak and astcenc encoders build with clang-cl. Their SIMD variants were compiled without the target features clang-cl needs. @stuartparmenter
+- AMD encoder: runs on x86 CPUs without SSE4.1 when built with MSVC. Its baseline code used an SSE4.1 instruction. @stuartparmenter
+- etcpak encoder: ETC1 and ETC2 encoding no longer crashes when a block buffer is not 16-byte aligned. @stuartparmenter
+
 ## v0.6.1
 
 Released 2026-10-28
