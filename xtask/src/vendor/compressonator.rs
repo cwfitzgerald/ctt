@@ -106,6 +106,7 @@ fn patch_compressonator(dst_dir: &Path) -> Result<()> {
     patch_bc1_cmp_h(&dst_dir.join("shaders/bc1_cmp.h"))?;
     patch_bc6_encode_kernel_cpp(&dst_dir.join("shaders/bc6_encode_kernel.cpp"))?;
     patch_bcn_common_api_h(&dst_dir.join("shaders/bcn_common_api.h"))?;
+    patch_cmp_floor(&dst_dir.join("shaders/bcn_common_api.h"))?;
     Ok(())
 }
 
@@ -364,6 +365,28 @@ fn patch_bcn_common_api_h(path: &Path) -> Result<()> {
             "    CGU_INT iQuantized;\n",
         ),
         "bcn_common_api.h: quantize ivalue read (insert)",
+    )?;
+
+    write_text(path, &text)
+}
+
+/// `cmp_floor` uses `_mm_floor_ss` (SSE4.1) on x86 MSVC targets, outside
+/// any CPU feature dispatch: cl.exe emits it unconditionally, so it faults on
+/// CPUs without SSE4.1, and clang-cl rejects it without `-msse4.1`. `floor`
+/// gives the same result.
+fn patch_cmp_floor(path: &Path) -> Result<()> {
+    let mut text = read_text(path)?;
+
+    replace_required(
+        &mut text,
+        concat!(
+            "#if defined(_M_X64) || defined(_M_IX86) || defined(x86_64) || defined(i386)\n",
+            "    __m128 vectorValue = _mm_set_ss(value);\n",
+            "    return _mm_cvtss_f32(_mm_floor_ss(vectorValue, vectorValue));\n",
+            "#elif defined(arm) || defined(_M_ARM) || defined(aarch64)\n",
+        ),
+        "#if defined(arm) || defined(_M_ARM) || defined(aarch64)\n",
+        "bcn_common_api.h: cmp_floor without SSE4.1",
     )?;
 
     write_text(path, &text)

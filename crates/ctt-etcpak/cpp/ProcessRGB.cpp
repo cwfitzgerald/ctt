@@ -3866,7 +3866,7 @@ static etcpak_force_inline uint64_t ProcessAlpha_ETC2( const uint8_t* src )
 void CompressEtc1Rgb( const uint32_t* src, uint64_t* dst, uint32_t blocks, size_t width )
 {
     int w = 0;
-    uint32_t buf[4*4];
+    alignas(16) uint32_t buf[4*4];
     do
     {
 #ifdef __SSE4_1__
@@ -3910,7 +3910,7 @@ void CompressEtc1Rgb( const uint32_t* src, uint64_t* dst, uint32_t blocks, size_
 void CompressEtc1RgbDither( const uint32_t* src, uint64_t* dst, uint32_t blocks, size_t width )
 {
     int w = 0;
-    uint32_t buf[4*4];
+    alignas(16) uint32_t buf[4*4];
     do
     {
 #ifdef __SSE4_1__
@@ -3960,7 +3960,7 @@ void CompressEtc1RgbDither( const uint32_t* src, uint64_t* dst, uint32_t blocks,
 void CompressEtc2Rgb( const uint32_t* src, uint64_t* dst, uint32_t blocks, size_t width, bool useHeuristics )
 {
     int w = 0;
-    uint32_t buf[4*4];
+    alignas(16) uint32_t buf[4*4];
     do
     {
 #ifdef __SSE4_1__
@@ -4004,8 +4004,8 @@ void CompressEtc2Rgb( const uint32_t* src, uint64_t* dst, uint32_t blocks, size_
 void CompressEtc2Rgba( const uint32_t* src, uint64_t* dst, uint32_t blocks, size_t width, bool useHeuristics )
 {
     int w = 0;
-    uint32_t rgba[4*4];
-    uint8_t alpha[4*4];
+    alignas(16) uint32_t rgba[4*4];
+    alignas(16) uint8_t alpha[4*4];
     do
     {
 #ifdef __SSE4_1__
