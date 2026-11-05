@@ -12,13 +12,15 @@
 //! * no exported function is generic over `S: Simd`, so no caller has to name a
 //!   token type or satisfy a SIMD trait bound;
 //! * the only SIMD-flavored type that leaves is the opaque [`Level`] selector,
-//!   re-exported here (with [`Fallback`] and [`constructible_levels`]) purely so
+//!   re-exported here (with [`constructible_levels`]) purely so
 //!   tests and benches can force a specific backend through the `_at` entry
 //!   points. The single exception is
 //!   [`srgb::store_srgb8_f32_avx512_escape`], which takes the concrete
 //!   `Avx512` token so the benches can measure the intrinsic escape against the
 //!   generic kernel; callers obtain it from `Level::as_avx512()`, an inherent
-//!   method, so they still never import `fearless_simd`.
+//!   method. The benches do import `fearless_simd`, but only to make the
+//!   scalar fallback level, which [`constructible_levels`] cannot make outside
+//!   unit tests on x86 and aarch64.
 //!
 //! Inside the boundary the `docs/fearless-simd.md` notes apply in full — in
 //! particular every function between a dispatch point and the vector ops,
@@ -46,7 +48,7 @@ pub(crate) mod srgb;
 
 // `pub` rather than `pub(crate)` only so `crate::bench_internals` can re-export
 // them; `processing` is private, so this widens nothing.
-pub use fearless_simd::{Fallback, Level};
+pub use fearless_simd::Level;
 
 /// Every constructible level on the host, so tests validate and benches measure
 /// each backend. The names are the row IDs the benchmark groups use.
@@ -57,15 +59,25 @@ pub fn constructible_levels() -> Vec<(&'static str, Level)> {
 
     let detected = Level::new();
     let mut out = Vec::new();
-    // `dispatch!` normalizes a level against the compile-time baseline before
-    // matching, so a `Fallback` token only reaches the scalar backend where the
-    // target guarantees no SIMD level. On aarch64 NEON is the architectural
-    // baseline: a "fallback" row there would silently re-run the NEON backend
-    // (with NEON semantics, e.g. NaN-propagating `max`), not scalar code.
-    #[cfg(not(target_arch = "aarch64"))]
-    out.push(("fallback", Level::Fallback(Fallback::new())));
+    // The scalar `Fallback` backend exists only on targets without a SIMD
+    // baseline, or when fearless_simd's `force_support_fallback` feature is on.
+    // The ctt dev-dependency turns that feature on, so unit tests always get a
+    // fallback row. Benches link the non-test library, so on x86 and aarch64
+    // the bench helpers add that row themselves.
+    #[cfg(test)]
+    out.push(("fallback", Level::fallback()));
+    #[cfg(not(any(
+        test,
+        target_arch = "x86",
+        target_arch = "x86_64",
+        target_arch = "aarch64"
+    )))]
+    out.push(("fallback", Level::baseline()));
     #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
     {
+        if let Some(t) = detected.as_sse2() {
+            out.push(("sse2", t.level()));
+        }
         if let Some(t) = detected.as_sse4_2() {
             out.push(("sse4_2", t.level()));
         }

@@ -23,7 +23,6 @@ skip = [
   { crate = "r-efi@5", reason = "getrandom 0.3 uses 5, getrandom 0.4 uses 6" },
   { crate = "smallvec@1", reason = "exr uses 1, facet-reflect uses 2" },
   { crate = "syn@2", reason = "transitive proc-macro dependencies use both 2 and 3" },
-  { crate = "allocator-api2@0.2.21", reason = "hashbrown depends on an old version" },
 ]
 multiple-versions = "deny"
 

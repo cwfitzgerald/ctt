@@ -12,6 +12,11 @@
 //! Every group sweeps the constructible SIMD levels via [`bench_levels`], one
 //! row per level, so the comparison is tier-against-tier on the same host.
 //!
+//! Benches are the one place outside `crates/ctt/src` that name
+//! `fearless_simd`: the library has no fallback row on x86 and aarch64, so
+//! [`levels`] adds one from the dev-dependency's `force_support_fallback`
+//! feature.
+//!
 //! ## Allocation in the timed region
 //!
 //! The packed and sRGB load/store kernels return freshly allocated output
@@ -30,12 +35,21 @@ pub const SIDE: u32 = 1024;
 /// Pixel count of a [`SIDE`]×[`SIDE`] image.
 pub const PIXEL_COUNT: u64 = (SIDE as u64) * (SIDE as u64);
 
-/// Register one bench per constructible SIMD level, emitting the IDs
-/// `fallback{suffix}`, `sse4_2{suffix}`,
-/// `avx2{suffix}`, `avx512{suffix}` (x86/x86_64) and
-/// `neon{suffix}` (aarch64). Levels the host cannot execute are skipped. Pass
-/// `""` for the canonical rows or a suffix such as `"_bgra"` for an additional
-/// channel-order sweep.
+/// Every constructible level on the host, plus the scalar fallback level on
+/// targets where [`constructible_levels`] has no fallback row.
+pub fn levels() -> Vec<(&'static str, Level)> {
+    let mut out = Vec::new();
+    #[cfg(any(target_arch = "x86", target_arch = "x86_64", target_arch = "aarch64"))]
+    out.push(("fallback", fearless_simd::Level::fallback()));
+    out.extend(constructible_levels());
+    out
+}
+
+/// Register one bench per level from [`levels`], emitting the IDs
+/// `fallback{suffix}`, `sse2{suffix}`, `sse4_2{suffix}`, `avx2{suffix}`,
+/// `avx512{suffix}` (x86/x86_64) and `neon{suffix}` (aarch64). Levels the
+/// host cannot execute are skipped. Pass `""` for the canonical rows or a
+/// suffix such as `"_bgra"` for an additional channel-order sweep.
 ///
 /// `run` receives the forced [`Level`] for each row and drives the measurement
 /// (`b.iter(..)`, `b.iter_batched_ref(..)`, etc.).
@@ -44,7 +58,7 @@ pub fn bench_levels<M: Measurement>(
     suffix: &str,
     mut run: impl FnMut(&mut Bencher<'_, M>, Level),
 ) {
-    for (name, level) in constructible_levels() {
+    for (name, level) in levels() {
         g.bench_function(format!("{name}{suffix}"), |b| run(b, level));
     }
 }

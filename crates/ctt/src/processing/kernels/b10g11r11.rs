@@ -9,7 +9,7 @@
 //! # Load side
 //!
 //! The SIMD kernels below are width-generic, running at the backend's native
-//! vector width (128-bit on Fallback/SSE4.2, 256-bit on AVX2, 512-bit on
+//! vector width (128-bit on Fallback/SSE2/SSE4.2, 256-bit on AVX2, 512-bit on
 //! AVX-512), and the decode is exact at every width: the reconstructed value
 //! `(mant_max + mant)·2^(exp−M−15)` carries at most `M + 1` (≤7) significant
 //! mantissa bits, so the product is exact in f32 regardless of FMA fusion.
@@ -89,7 +89,7 @@ pub fn load_b10g11r11_f32_at(level: Level, surface: SurfaceRef<'_>) -> Result<Bu
 #[inline(always)]
 fn load_row<S: Simd>(simd: S, codes: &[u32], dst: &mut [f32]) {
     driver::for_each_block::<_, _, 1, 4>(
-        S::u32s::N,
+        S::u32s::LEN,
         codes.len(),
         codes,
         dst,
@@ -176,7 +176,7 @@ pub fn store_b10g11r11_f32_at(level: Level, buf: &Buffer<f32>) -> Vec<u8> {
 #[inline(always)]
 fn store_rows<S: Simd>(simd: S, src: &[u32], words: &mut [u32]) {
     driver::for_each_block::<_, _, 4, 1>(
-        S::u32s::N,
+        S::u32s::LEN,
         words.len(),
         src,
         words,
@@ -213,7 +213,7 @@ fn encode_codes<S: Simd, const M: u32>(simd: S, bits: S::u32s) -> S::u32s {
     // Subnormal path: `(0x0080_0000 | mantissa) >> (113 - exp)`, zeroed at 32+.
     let numer = (mag & 0x007f_ffffu32) | 0x0080_0000u32;
     let shift = S::u32s::splat(simd, 113) - (mag >> 23);
-    let sub_i = if S::u32s::N >= 8 {
+    let sub_i = if S::u32s::LEN >= 8 {
         // AVX2/AVX-512 `vpsrlvd` yields 0 for counts ≥ 32, matching the guard.
         numer >> shift
     } else {

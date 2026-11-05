@@ -14,7 +14,7 @@
 //! the handle as an `#[inline(always)]` closure literal — a bare function item
 //! goes out-of-line through a `Fn::call` shim. Measured on Zen 5, omitting the
 //! attribute costs 4× (b10g11r11 load) to 7× (a2 unorm store) at AVX-512, and
-//! puts the SIMD tiers behind `Fallback`.
+//! makes the SIMD tiers slower than the scalar backend.
 
 use bytemuck::Pod;
 use fearless_simd::{Simd, prelude::*};
@@ -170,7 +170,7 @@ pub(crate) fn interleave_rgba_f32<S: Simd>(
     a: S::f32s,
     dst: &mut [f32],
 ) {
-    let n = S::f32s::N;
+    let n = S::f32s::LEN;
     let (rb_lo, rb_hi) = r.interleave(b);
     let (ga_lo, ga_hi) = g.interleave(a);
     let (p0, p1) = rb_lo.interleave(ga_lo);
@@ -190,7 +190,7 @@ pub(crate) fn interleave_rgba_u32<S: Simd>(
     a: S::u32s,
     dst: &mut [u32],
 ) {
-    let n = S::u32s::N;
+    let n = S::u32s::LEN;
     let (rb_lo, rb_hi) = r.interleave(b);
     let (ga_lo, ga_hi) = g.interleave(a);
     let (p0, p1) = rb_lo.interleave(ga_lo);
@@ -208,7 +208,7 @@ pub(crate) fn split_rgba_f32<S: Simd>(
     simd: S,
     src: &[f32],
 ) -> (S::f32s, S::f32s, S::f32s, S::f32s) {
-    let n = S::f32s::N;
+    let n = S::f32s::LEN;
     let p0 = S::f32s::from_slice(simd, &src[0..n]);
     let p1 = S::f32s::from_slice(simd, &src[n..2 * n]);
     let p2 = S::f32s::from_slice(simd, &src[2 * n..3 * n]);
@@ -226,7 +226,7 @@ pub(crate) fn split_rgba_u32<S: Simd>(
     simd: S,
     src: &[u32],
 ) -> (S::u32s, S::u32s, S::u32s, S::u32s) {
-    let n = S::u32s::N;
+    let n = S::u32s::LEN;
     let p0 = S::u32s::from_slice(simd, &src[0..n]);
     let p1 = S::u32s::from_slice(simd, &src[n..2 * n]);
     let p2 = S::u32s::from_slice(simd, &src[2 * n..3 * n]);

@@ -147,7 +147,7 @@ fn band<S: Simd>(
     let params = ProjectParams::new(pyr, face_size);
     let nf = face_size as usize;
     let inv_n = 1.0 / face_size as f32;
-    let nl = S::f32s::N;
+    let nl = S::f32s::LEN;
 
     // Reused across every lane bundle: `coords` overwrites lanes `[..nl]` and
     // `get(i)` reads only `i < count ≤ nl`, so stale tail lanes never leak.
@@ -172,7 +172,7 @@ fn band<S: Simd>(
     }
 }
 
-/// Coordinate phase for `S::f32s::N` consecutive texels of one face row. Results
+/// Coordinate phase for `S::f32s::LEN` consecutive texels of one face row. Results
 /// spill into the first `N` lanes of `cmds`.
 ///
 /// Per lane: the face coordinate `a` and the row-constant `axis + b·v` give the
@@ -192,7 +192,7 @@ fn coords<S: Simd>(
     inv_n: f32,
     cmds: &mut LaneCmds<16>,
 ) {
-    let nl = S::f32s::N;
+    let nl = S::f32s::LEN;
     // a = (2·(x0+lane) + 1)/n − 1
     let ramp = S::f32s::from_fn(simd, |i| i as f32);
     let a = ramp.mul_add(2.0 * inv_n, (2.0 * x0 + 1.0) * inv_n - 1.0);
@@ -424,19 +424,18 @@ fn bilinear<S: Simd>(simd: S, lv: &LevelInfo<'_>, u: f32, v: f32) -> f32x4<S> {
     let w = lv.w as usize;
     let row0 = y0 * w;
     let row1 = y1 * w;
-    // Load each texel straight from the slice by reference (`load_array_ref_f32x4`
-    // transmute-copies in place; `simd_into` on the `[f32; 4]` place would copy it
-    // out by value first).
+    // Load each texel straight from the slice by reference with
+    // `f32x4::load_array_ref`.
     // `get_unchecked` drops the four bounds-check branches that otherwise serialize
     // the loads — the wrap/clamp above keeps every index in `[0, w)`×`[0, h)`, so
     // `row0/row1 + x0/x1` is always in bounds of the level's pixel slice.
     // SAFETY: x0/x1 < w and y0/y1 < h by the wrap/clamp above.
     let (p00, p01, p10, p11) = unsafe {
         (
-            simd.load_array_ref_f32x4(lv.px.get_unchecked(row0 + x0)),
-            simd.load_array_ref_f32x4(lv.px.get_unchecked(row0 + x1)),
-            simd.load_array_ref_f32x4(lv.px.get_unchecked(row1 + x0)),
-            simd.load_array_ref_f32x4(lv.px.get_unchecked(row1 + x1)),
+            f32x4::load_array_ref(simd, lv.px.get_unchecked(row0 + x0)),
+            f32x4::load_array_ref(simd, lv.px.get_unchecked(row0 + x1)),
+            f32x4::load_array_ref(simd, lv.px.get_unchecked(row1 + x0)),
+            f32x4::load_array_ref(simd, lv.px.get_unchecked(row1 + x1)),
         )
     };
     let top = (p01 - p00).mul_add(fx, p00);
@@ -453,7 +452,7 @@ mod tests {
 
     #[inline(always)]
     fn atan2_block<S: Simd>(simd: S, y: &[f32], x: &[f32], out: &mut [f32]) {
-        let n = S::f32s::N;
+        let n = S::f32s::LEN;
         for ((yc, xc), oc) in y
             .chunks_exact(n)
             .zip(x.chunks_exact(n))
@@ -467,7 +466,7 @@ mod tests {
 
     #[inline(always)]
     fn log2_block<S: Simd>(simd: S, x: &[f32], out: &mut [f32]) {
-        let n = S::f32s::N;
+        let n = S::f32s::LEN;
         for (xc, oc) in x.chunks_exact(n).zip(out.chunks_exact_mut(n)) {
             let xv = S::f32s::from_slice(simd, xc);
             log2_generic(simd, xv).store_slice(oc);

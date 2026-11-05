@@ -16,6 +16,7 @@ Per Keep a Changelog there are 6 main categories of changes:
 #### Table of Contents
 
 - [Unreleased](#unreleased)
+- [v0.6.1](#v061)
 - [v0.6.0](#v060)
 - [v0.5.0](#v050)
 - [v0.4.0](#v040)
@@ -31,6 +32,10 @@ Per Keep a Changelog there are 6 main categories of changes:
 ### Changed
 
 - **BREAKING:** `ConvertSettings` has a new `mipmap_alpha_cutoff` field. Struct literals that list every field need `mipmap_alpha_cutoff: None` or `..Default::default()`. @stuartparmenter
+
+## v0.6.1
+
+Released 2026-10-28
 
 ### Fixed
 
@@ -335,7 +340,8 @@ Released 2026-03-31
 
 ## Diffs
 
-- [Unreleased](https://github.com/cwfitzgerald/ctt/compare/v0.6.0...HEAD)
+- [Unreleased](https://github.com/cwfitzgerald/ctt/compare/v0.6.1...HEAD)
+- [v0.6.1](https://github.com/cwfitzgerald/ctt/compare/v0.6.0...v0.6.1)
 - [v0.6.0](https://github.com/cwfitzgerald/ctt/compare/v0.5.0...v0.6.0)
 - [v0.5.0](https://github.com/cwfitzgerald/ctt/compare/v0.4.0...v0.5.0)
 - [v0.4.0](https://github.com/cwfitzgerald/ctt/compare/v0.3.0...v0.4.0)

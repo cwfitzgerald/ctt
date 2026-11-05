@@ -356,9 +356,8 @@ const CROSS_LEVEL_TOL: f32 = 5e-3;
 /// Every backend must agree with the lowest constructible one. Not tautological:
 /// the tiers run different vector widths, FMA availability, and (on the store
 /// side of other kernels) different instruction sequences, and the tail handling
-/// differs per width. The base is taken from `constructible_levels` rather than
-/// a hand-built `Fallback` token, which `dispatch!` would normalize to the
-/// baseline backend on targets like aarch64.
+/// differs per width. The base is the first entry of `constructible_levels`,
+/// which is the scalar fallback level in unit tests.
 #[test]
 fn levels_agree_across_backends() {
     let pyr = EquirectangularPyramid::new(smooth_equirect(128, 64)).unwrap();
