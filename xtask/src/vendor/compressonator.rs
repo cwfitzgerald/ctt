@@ -370,10 +370,7 @@ fn patch_bcn_common_api_h(path: &Path) -> Result<()> {
     write_text(path, &text)
 }
 
-/// `cmp_floor` uses `_mm_floor_ss` (SSE4.1) on x86 MSVC targets, outside
-/// any CPU feature dispatch: cl.exe emits it unconditionally, so it faults on
-/// CPUs without SSE4.1, and clang-cl rejects it without `-msse4.1`. `floor`
-/// gives the same result.
+/// `cmp_floor` uses an SSE4.1 instruction in code that runs on any x86 CPU.
 fn patch_cmp_floor(path: &Path) -> Result<()> {
     let mut text = read_text(path)?;
 

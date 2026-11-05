@@ -134,11 +134,7 @@ fn patch_constant_simd_tables(path: &Path) -> Result<()> {
     write_text(path, &text)
 }
 
-/// Align the block buffers in `ProcessRGB.cpp` that `_mm_store_si128` writes.
-///
-/// They are plain `uint32_t` and `uint8_t` arrays, so only 4- and 1-byte
-/// alignment is guaranteed, and an aligned store to them faults when the
-/// compiler places them off a 16-byte boundary, as clang-cl does.
+/// `_mm_store_si128` needs 16-byte alignment, which these arrays don't have.
 fn patch_aligned_block_buffers(path: &Path) -> Result<()> {
     const LABEL: &str = "etcpak: aligned block buffers";
     let mut text = read_text(path)?;

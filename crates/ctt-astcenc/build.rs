@@ -259,9 +259,8 @@ fn build_variant(variant: &IsaVariant, is_msvc: bool) {
     build.compile(variant.lib_name);
 }
 
-/// Whether the C++ compiler is cl.exe, which compiles any intrinsic without
-/// flags and takes `/arch:`. clang-cl, like gcc and clang, only compiles an
-/// intrinsic with its target feature enabled, through the same `-m` flags.
+/// cl.exe compiles intrinsics without flags. clang-cl needs the same `-m` flags
+/// as gcc and clang.
 fn is_cl_exe() -> bool {
     let tool = cc::Build::new().cpp(true).get_compiler();
     tool.is_like_msvc() && !tool.is_like_clang_cl()
