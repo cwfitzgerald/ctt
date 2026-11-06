@@ -82,10 +82,10 @@ cargo add ctt --no-default-features --features encoder-bc7enc,encoder-intel,ispc
 
 ## Library usage
 
-The library API mirrors the CLI. Borrow your pixel bytes in a `SurfaceRef`, wrap it in an `ImageRef` with a `FormatDesc` that tells how to read the bytes, and call `convert`. An owned `Image` (for example, from a decoder) gives an `ImageRef` with `Image::to_ref`.
+The library API mirrors the CLI. Borrow your pixel bytes in a `SurfaceRef`, wrap it in an `ImageRef` with a `FormatDesc` that tells how to read the bytes, and call `convert_and_encode`. An owned `Image` (for example, from a decoder) gives an `ImageRef` with `Image::to_ref`.
 
 ```rust,no_run
-use ctt::{convert, ConvertSettings, Container, TargetFormat, Format};
+use ctt::{convert_and_encode, ConvertSettings, Container, TargetFormat, Format};
 use ctt::{FormatDesc, ImageRef, SurfaceRef, ColorSpace, AlphaMode, TextureKind};
 use ctt::encoders::Encoder;
 
@@ -110,14 +110,13 @@ fn main() -> Result<(), ctt::Error> {
         },
     };
 
-    let _ktx2_bytes = convert(image, ConvertSettings {
+    let _ktx2_bytes = convert_and_encode(image, ConvertSettings {
         format: Some(TargetFormat::Compressed {
             format: Format::BC7_SRGB_BLOCK,
             encoder: Encoder::Auto,
         }),
-        container: Container::ktx2(),
         ..Default::default()
-    })?;
+    }, Container::ktx2())?;
 
     Ok(())
 }
@@ -131,7 +130,7 @@ The Rust library is serial unless its default-off `rayon` feature is enabled. Wi
 
 ```rust,ignore
 let pool = rayon::ThreadPoolBuilder::new().num_threads(4).build()?;
-let output = pool.install(|| ctt::convert(image, settings))?;
+let ktx2_bytes = pool.install(|| ctt::convert_and_encode(image, settings, ctt::Container::ktx2()))?;
 ```
 
 Without an explicit `install`, Rayon uses its lazily initialized global pool.
