@@ -6,7 +6,7 @@ use crate::error::{Error, Result};
 use crate::format::TargetFormat;
 use crate::processing::{
     self, Buffer, Swizzle, Variant, alpha_coverage, encode, load, map_nested, mipmap, par_map,
-    passthrough, store, swizzle,
+    store, swizzle,
 };
 use crate::surface::{ColorSpace, FormatDesc, Image, ImageRef, SurfaceRef};
 use crate::vk_format::FormatExt;
@@ -224,7 +224,7 @@ fn convert_inner(image: ImageRef<'_>, mut settings: ConvertSettings) -> Result<C
 
     if formats_match && input_cs == target_cs && input_alpha == target_alpha && no_pixel_work {
         log::debug!("convert: taking passthrough path (format and processing match)");
-        return passthrough::run(image, final_target_fmt).map(Converted::Borrowed);
+        return Ok(Converted::Borrowed(image));
     }
 
     // Compressed inputs that didn't qualify for passthrough have nowhere to
@@ -246,11 +246,10 @@ fn convert_inner(image: ImageRef<'_>, mut settings: ConvertSettings) -> Result<C
                     .into(),
             ));
         }
-        log::debug!(
-            "convert: compressed input did not qualify for passthrough; \
-             falling back to passthrough format check"
-        );
-        return passthrough::run(image, final_target_fmt).map(Converted::Borrowed);
+        return Err(Error::UnsupportedConversion(format!(
+            "cannot convert compressed {input_fmt:?} to {final_target_fmt:?}; decode it to an \
+             uncompressed format first"
+        )));
     }
 
     // 3D textures only flow through the passthrough fast path. The f32/u32
