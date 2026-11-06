@@ -25,13 +25,69 @@ Per Keep a Changelog there are 6 main categories of changes:
 
 ## Unreleased
 
+### Migrating to `convert_and_encode`, `convert` and `encode`
+
+The container moved from `ConvertSettings` to an argument of `convert_and_encode`. The old default was `Container::ktx2()`.
+
+#### Rust
+
+```diff
+-let output = convert(image, ConvertSettings {
+-    container: Container::ktx2(),
+-    ..settings
+-})?;
+-let PipelineOutput::Encoded(bytes) = output else { unreachable!() };
++let bytes = convert_and_encode(image, settings, Container::ktx2())?;
+
+-let output = convert(image, ConvertSettings {
+-    container: Container::Raw,
+-    ..settings
+-})?;
+-let PipelineOutput::Raw(processed) = output else { unreachable!() };
++let processed = convert(image, settings)?;
+```
+
+#### C
+
+The container moved from `ctt_convert_settings` to an argument of `ctt_convert_and_encode`. The old default was `CTT_CONTAINER_KTX2`.
+
+```diff
+-cfg.container = (ctt_container){.tag = CTT_CONTAINER_KTX2};
+-ctt_pipeline_output *out = NULL;
+-ctt_status st = ctt_convert(img, &cfg, &out);
+-const uint8_t *data = ctt_pipeline_output_encoded_data(out);
+-size_t len = ctt_pipeline_output_encoded_len(out);
+-ctt_pipeline_output_destroy(out);
++ctt_container container = {.tag = CTT_CONTAINER_KTX2};
++ctt_bytes *out = NULL;
++ctt_status st = ctt_convert_and_encode(img, &cfg, container, &out);
++const uint8_t *data = ctt_bytes_data(out);
++size_t len = ctt_bytes_len(out);
++ctt_bytes_destroy(out);
+
+-cfg.container = (ctt_container){.tag = CTT_CONTAINER_RAW};
+-ctt_pipeline_output *out = NULL;
+-ctt_status st = ctt_convert(img, &cfg, &out);
+-ctt_image *processed = ctt_pipeline_output_take_image(out);
+-ctt_pipeline_output_destroy(out);
++ctt_image *processed = NULL;
++ctt_status st = ctt_convert(img, &cfg, &processed);
+```
+
 ### Added
 
 - Mipmaps that keep an alpha-tested texture's coverage, so foliage no longer thins out and vanishes with distance. Each generated level's alpha is scaled so the share of it passing the cutoff, sampled bilinearly, matches the base level's (Castaño, "Computing Alpha Mipmaps"). Supplied levels are kept as they are. Rust: `ConvertSettings::mipmap_alpha_cutoff`. CLI: `--mipmap-alpha-cutoff`. C API: `ctt_convert_settings::mipmap_alpha_cutoff`. @stuartparmenter
+- `encode` encodes an image into a container file. C API: `ctt_encode` and the `ctt_bytes` handle. @cwfitzgerald
 
 ### Changed
 
 - **BREAKING:** `ConvertSettings` has a new `mipmap_alpha_cutoff` field. Struct literals that list every field need `mipmap_alpha_cutoff: None` or `..Default::default()`. @stuartparmenter
+- **BREAKING:** `convert` is renamed to `convert_and_encode` and takes the container as an argument. The new `convert` returns the processed `Image`. In the C API, `ctt_convert` is renamed to `ctt_convert_and_encode`, and the new `ctt_convert` writes a `ctt_image`. See [Migrating to `convert_and_encode`, `convert` and `encode`](#migrating-to-convert_and_encode-convert-and-encode). @cwfitzgerald
+
+### Removed
+
+- **BREAKING:** `PipelineOutput`, `Container::Raw`, `ConvertSettings::container` and `impl Default for Container`. @cwfitzgerald
+- **BREAKING:** C API: `ctt_pipeline_output` and its functions, `CTT_CONTAINER_RAW` and `ctt_convert_settings::container`. @cwfitzgerald
 
 ### Fixed
 
