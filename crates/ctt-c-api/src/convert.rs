@@ -756,6 +756,13 @@ pub struct ConvertSettings {
     pub mipmap: bool,
     pub mipmap_count: OptionalSize,
     pub mipmap_filter: MipmapFilter,
+    /// Alpha test cutoff to keep coverage of in generated mips, in `(0, 1]`.
+    /// Ignored when `mipmap` is false or there is no alpha to scale. Not
+    /// present leaves generated alpha as filtered.
+    ///
+    /// Each generated level's alpha is scaled so the share of it passing the
+    /// cutoff is as near the base level's as its alpha values allow.
+    pub mipmap_alpha_cutoff: OptionalF32,
 }
 
 /// Default-constructed settings: input format preserved, KTX2 container,
@@ -792,6 +799,10 @@ pub extern "C" fn ctt_convert_settings_default() -> ConvertSettings {
             value: 0,
         },
         mipmap_filter: MipmapFilter::Triangle,
+        mipmap_alpha_cutoff: OptionalF32 {
+            present: false,
+            value: 0.0,
+        },
     }
 }
 
@@ -854,6 +865,10 @@ pub unsafe extern "C" fn ctt_convert(
                 .present
                 .then_some(settings.mipmap_count.value),
             mipmap_filter: settings.mipmap_filter.into(),
+            mipmap_alpha_cutoff: settings
+                .mipmap_alpha_cutoff
+                .present
+                .then_some(settings.mipmap_alpha_cutoff.value),
         };
 
         let converted = match crate::threading::install(|| ctt::convert(image.0.to_ref(), inner)) {

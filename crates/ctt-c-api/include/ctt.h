@@ -1170,6 +1170,15 @@ typedef struct {
     bool mipmap;
     ctt_optional_size mipmap_count;
     ctt_mipmap_filter mipmap_filter;
+    /**
+     * Alpha test cutoff to keep coverage of in generated mips, in `(0, 1]`.
+     * Ignored when `mipmap` is false or there is no alpha to scale. Not
+     * present leaves generated alpha as filtered.
+     *
+     * Each generated level's alpha is scaled so the share of it passing the
+     * cutoff is as near the base level's as its alpha values allow.
+     */
+    ctt_optional_f32 mipmap_alpha_cutoff;
 } ctt_convert_settings;
 
 /**

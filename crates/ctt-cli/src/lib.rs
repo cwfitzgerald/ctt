@@ -167,6 +167,7 @@ pub fn run(args: Args) -> Result<(), Box<dyn std::error::Error>> {
         mipmap: args.mipmap,
         mipmap_count: args.mipmap_count,
         mipmap_filter: map_mipmap_filter(args.mipmap_filter),
+        mipmap_alpha_cutoff: args.mipmap_alpha_cutoff,
     };
 
     let converted = install_in(&pool, || ctt::convert(image.to_ref(), settings));

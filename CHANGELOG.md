@@ -25,6 +25,14 @@ Per Keep a Changelog there are 6 main categories of changes:
 
 ## Unreleased
 
+### Added
+
+- Mipmaps that keep an alpha-tested texture's coverage, so foliage no longer thins out and vanishes with distance. Each generated level's alpha is scaled so the share of it passing the cutoff, sampled bilinearly, matches the base level's (Castaño, "Computing Alpha Mipmaps"). Supplied levels are kept as they are. Rust: `ConvertSettings::mipmap_alpha_cutoff`. CLI: `--mipmap-alpha-cutoff`. C API: `ctt_convert_settings::mipmap_alpha_cutoff`. @stuartparmenter
+
+### Changed
+
+- **BREAKING:** `ConvertSettings` has a new `mipmap_alpha_cutoff` field. Struct literals that list every field need `mipmap_alpha_cutoff: None` or `..Default::default()`. @stuartparmenter
+
 ### Fixed
 
 - AMD, etcpak and astcenc encoders build with clang-cl. Their SIMD variants were compiled without the target features clang-cl needs. @stuartparmenter
