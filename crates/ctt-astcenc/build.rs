@@ -45,9 +45,9 @@ struct IsaVariant {
     name: &'static str,
     lib_name: &'static str,
     defines: &'static [(&'static str, &'static str)],
-    /// Compiler flags for GCC/Clang only.
+    /// Compiler flags for GCC, Clang and clang-cl.
     gnu_flags: &'static [&'static str],
-    /// Compiler flags for MSVC only.
+    /// Compiler flags for cl.exe only.
     msvc_flags: &'static [&'static str],
 }
 
@@ -161,16 +161,19 @@ fn build_variant(variant: &IsaVariant, is_msvc: bool) {
     }
 
     // ISA-specific compiler flags.
+    let isa_flags = if is_cl_exe() {
+        variant.msvc_flags
+    } else {
+        variant.gnu_flags
+    };
+    for &flag in isa_flags {
+        build.flag(flag);
+    }
+
+    // FP contraction for non-invariant builds.
     if is_msvc {
-        for &flag in variant.msvc_flags {
-            build.flag(flag);
-        }
-        // FP contraction for non-invariant builds.
         build.flag("/fp:precise");
     } else {
-        for &flag in variant.gnu_flags {
-            build.flag(flag);
-        }
         build.flag("-ffp-contract=fast");
     }
 
@@ -254,4 +257,11 @@ fn build_variant(variant: &IsaVariant, is_msvc: bool) {
     }
 
     build.compile(variant.lib_name);
+}
+
+/// cl.exe compiles intrinsics without flags. clang-cl needs the same `-m` flags
+/// as gcc and clang.
+fn is_cl_exe() -> bool {
+    let tool = cc::Build::new().cpp(true).get_compiler();
+    tool.is_like_msvc() && !tool.is_like_clang_cl()
 }

@@ -21,6 +21,7 @@ fn main() {
     let target_arch = env::var("CARGO_CFG_TARGET_ARCH").unwrap();
     let is_msvc = env::var("CARGO_CFG_TARGET_ENV").unwrap_or_default() == "msvc";
     let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
+    let cl_exe = is_cl_exe();
 
     // Main build — all source files except SIMD variants.
     let mut main_build = cc::Build::new();
@@ -50,21 +51,21 @@ fn main() {
             "sse",
             "cmp_core_sse",
             "cpp/source/core_simd_sse.cpp",
-            if is_msvc { &[] } else { &["-msse4.1"] },
+            if cl_exe { &[] } else { &["-msse4.1"] },
             &out_dir,
         );
         build_simd(
             "avx",
             "cmp_core_avx",
             "cpp/source/core_simd_avx.cpp",
-            if is_msvc { &["/arch:AVX"] } else { &["-mavx"] },
+            if cl_exe { &["/arch:AVX"] } else { &["-mavx"] },
             &out_dir,
         );
         build_simd(
             "avx512",
             "cmp_core_avx512",
             "cpp/source/core_simd_avx512.cpp",
-            if is_msvc {
+            if cl_exe {
                 &["/arch:AVX512"]
             } else {
                 &["-mavx512f"]
@@ -93,4 +94,11 @@ fn build_simd(name: &str, lib_name: &str, source: &str, flags: &[&str], out_dir:
     }
 
     build.compile(lib_name);
+}
+
+/// cl.exe compiles intrinsics without flags. clang-cl needs the same `-m` flags
+/// as gcc and clang.
+fn is_cl_exe() -> bool {
+    let tool = cc::Build::new().cpp(true).get_compiler();
+    tool.is_like_msvc() && !tool.is_like_clang_cl()
 }
