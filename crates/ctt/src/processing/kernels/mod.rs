@@ -14,11 +14,7 @@
 //! * the only SIMD-flavored type that leaves is the opaque [`Level`] selector,
 //!   re-exported here (with [`constructible_levels`]) purely so
 //!   tests and benches can force a specific backend through the `_at` entry
-//!   points. The single exception is
-//!   [`srgb::store_srgb8_f32_avx512_escape`], which takes the concrete
-//!   `Avx512` token so the benches can measure the intrinsic escape against the
-//!   generic kernel; callers obtain it from `Level::as_avx512()`, an inherent
-//!   method. The benches do import `fearless_simd`, but only to make the
+//!   points. The benches do import `fearless_simd`, but only to make the
 //!   scalar fallback level, which [`constructible_levels`] cannot make outside
 //!   unit tests on x86 and aarch64.
 //!
