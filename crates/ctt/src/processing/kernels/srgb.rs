@@ -14,8 +14,9 @@
 //! The SIMD kernels evaluate the EOTF through a branchless minimax fit,
 //! `(a·x + b)² · (c·x + √x)` on the curve segment and a linear ramp below
 //! [`EOTF_LINEAR_MAX`], staying within ±0.5/255 of the exact curve so a decoded
-//! color lane lands on the same u8 as its [`EOTF_LUT`] entry. Color lanes go
-//! through the curve; alpha is a straight unorm on the u8 load and preserved
+//! color lane lands on the same u8 as its [`EOTF_LUT`] entry. Its multiply-adds
+//! are fused on every level, so every level decodes to the same f32. Color lanes
+//! go through the curve; alpha is a straight unorm on the u8 load and preserved
 //! bit-exactly on the in-place pass. `BGRA` selects the surface byte order.
 //!
 //! # Store side
@@ -33,16 +34,13 @@
 //! takes. The `srgb_oetf_minimax_within_half_lsb` test pins the curve's absolute
 //! accuracy within ±0.5/255 of the exact sRGB OETF.
 //!
-//! The reciprocal is a refined `rcp14` estimate on the 512-bit path (where the
-//! divider is the throughput bottleneck) and an exact divide on narrower
-//! widths. The reciprocal-sqrt has no portable estimate, so the generic path
-//! computes `recip(sqrt(x))`; an AVX-512 escape hatch swaps in a direct
-//! `rsqrt14` + Newton-Raphson via a `kernel!` block, avoiding the extra `sqrt`.
+//! The curve takes its reciprocals and reciprocal square roots with an exact
+//! divide and `sqrt` at every width. A hardware estimate (`rcp14`, `rsqrt14`)
+//! would be faster on the 512-bit path, but its rounding differs from the exact
+//! op and between CPUs, and it moved a byte for some inputs.
 
 use std::sync::LazyLock;
 
-#[cfg(target_arch = "x86_64")]
-use fearless_simd::Avx512;
 use fearless_simd::{Level, Simd, dispatch, prelude::*};
 
 use crate::error::Result;
@@ -197,11 +195,15 @@ fn decode_words<S: Simd, const BGRA: bool>(
 
 /// Piecewise sRGB EOTF over `x ∈ [0, 1]`, using the minimax fit
 /// `(a·x + b)^2 · (c·x + sqrt(x))`.
+///
+/// The multiply-adds are fused on every level: one instruction where the CPU
+/// has FMA, an exact emulation where it does not. A plain `mul_add` rounds
+/// twice on the latter, and the decoded value would depend on the CPU.
 #[inline(always)]
 fn srgb_eotf<S: Simd>(simd: S, x: S::f32s) -> S::f32s {
     let t = x.sqrt();
-    let u = x.mul_add(S::f32s::splat(simd, EOTF_A), S::f32s::splat(simd, EOTF_B));
-    let v = x.mul_add(S::f32s::splat(simd, EOTF_C), t);
+    let u = x.mul_add_precise(S::f32s::splat(simd, EOTF_A), S::f32s::splat(simd, EOTF_B));
+    let v = x.mul_add_precise(S::f32s::splat(simd, EOTF_C), t);
     let curve = u * u * v;
     let linear = x * EOTF_INV_LINEAR_SLOPE;
 
@@ -295,66 +297,28 @@ pub fn store_bgr8_srgb_f32(buf: &Buffer<f32>) -> Vec<u8> {
 // ---- linear-f32 → sRGB8 RGBA/BGRA SIMD store ----
 
 /// SIMD kernel behind [`store_srgb8_f32`] and [`store_bgra8_srgb_f32`], at a
-/// caller-chosen [`Level`] so benches can force each backend. AVX-512 routes
-/// through the intrinsic rsqrt escape; every other level runs the generic
-/// kernel. `BGRA` selects the byte order.
+/// caller-chosen [`Level`] so tests and benches can force each backend. Every
+/// level writes the same bytes. `BGRA` selects the byte order.
 #[doc(hidden)]
 pub fn store_srgb8_f32_at<const BGRA: bool>(level: Level, buf: &Buffer<f32>) -> Vec<u8> {
-    #[cfg(target_arch = "x86_64")]
-    if let Some(avx512) = level.as_avx512() {
-        return store_srgb8_f32_avx512_escape::<BGRA>(avx512, buf);
-    }
-    store_srgb8_f32_generic_at::<BGRA>(level, buf)
+    dispatch!(level, simd => store_with_token::<_, BGRA>(simd, buf))
 }
 
-/// The store kernel with the pure-generic transcendentals (no AVX-512 escape) at
-/// a caller-chosen [`Level`], so benches can measure the generic rsqrt path even
-/// where AVX-512 is available.
-#[doc(hidden)]
-pub fn store_srgb8_f32_generic_at<const BGRA: bool>(level: Level, buf: &Buffer<f32>) -> Vec<u8> {
-    dispatch!(level, simd => store_with_token::<_, BGRA, RsqrtGeneric>(simd, buf))
-}
-
-/// AVX-512 escape configuration: the reciprocal-sqrt routes through a direct
-/// `rsqrt14` + Newton-Raphson; every other op stays generic. Runs at a
-/// caller-chosen backend for benches.
-#[cfg(target_arch = "x86_64")]
-#[doc(hidden)]
-pub fn store_srgb8_f32_avx512_escape<const BGRA: bool>(
-    avx512: Avx512,
-    buf: &Buffer<f32>,
-) -> Vec<u8> {
-    avx512.vectorize(
-        #[inline(always)]
-        || store_with_token::<Avx512, BGRA, RsqrtAvx512Escape>(avx512, buf),
-    )
-}
-
-/// The whole store loop lives behind this `#[inline(always)]` boundary. The
-/// reciprocal-sqrt is a zero-sized `R: RsqrtKernel<S>` type parameter (not a
-/// bare `impl Fn` value) so the AVX-512 escape's substitution inlines instead
-/// of routing through an out-of-line `Fn::call`.
+/// The whole store loop lives behind this `#[inline(always)]` boundary.
 #[inline(always)]
-fn store_with_token<S: Simd, const BGRA: bool, R: RsqrtKernel<S>>(
-    simd: S,
-    buf: &Buffer<f32>,
-) -> Vec<u8> {
+fn store_with_token<S: Simd, const BGRA: bool>(simd: S, buf: &Buffer<f32>) -> Vec<u8> {
     let src: &[f32] = bytemuck::cast_slice(&buf.pixels);
     driver::store_packed32(
         simd,
         src,
         #[inline(always)]
-        |s, src, words| store_rows::<_, BGRA, R>(s, src, words),
+        |s, src, words| store_rows::<_, BGRA>(s, src, words),
     )
 }
 
 /// Encode every pixel of `src` (4 f32 each) into one packed `u32` word each.
 #[inline(always)]
-fn store_rows<S: Simd, const BGRA: bool, R: RsqrtKernel<S>>(
-    simd: S,
-    src: &[f32],
-    words: &mut [u32],
-) {
+fn store_rows<S: Simd, const BGRA: bool>(simd: S, src: &[f32], words: &mut [u32]) {
     driver::for_each_block::<_, _, 4, 1>(
         S::f32s::LEN,
         words.len(),
@@ -362,7 +326,7 @@ fn store_rows<S: Simd, const BGRA: bool, R: RsqrtKernel<S>>(
         words,
         #[inline(always)]
         |cin, cout| {
-            let block = encode_block::<S, BGRA, R>(simd, cin);
+            let block = encode_block::<S, BGRA>(simd, cin);
             block.store_slice(cout);
         },
     );
@@ -371,85 +335,29 @@ fn store_rows<S: Simd, const BGRA: bool, R: RsqrtKernel<S>>(
 /// Encode `n` interleaved `[R, G, B, A]` pixels into `n` packed little-endian
 /// words. `BGRA = false` → byte order `R, G, B, A`; `BGRA = true` → `B, G, R, A`.
 #[inline(always)]
-fn encode_block<S: Simd, const BGRA: bool, R: RsqrtKernel<S>>(simd: S, src: &[f32]) -> S::u32s {
+fn encode_block<S: Simd, const BGRA: bool>(simd: S, src: &[f32]) -> S::u32s {
     let (r, g, b, a) = driver::split_rgba_f32(simd, src);
 
-    let r8 = to_byte::<S>(srgb_oetf::<S, R>(simd, clamp01(simd, r)));
-    let g8 = to_byte::<S>(srgb_oetf::<S, R>(simd, clamp01(simd, g)));
-    let b8 = to_byte::<S>(srgb_oetf::<S, R>(simd, clamp01(simd, b)));
+    let r8 = to_byte::<S>(srgb_oetf::<S>(simd, clamp01(simd, r)));
+    let g8 = to_byte::<S>(srgb_oetf::<S>(simd, clamp01(simd, g)));
+    let b8 = to_byte::<S>(srgb_oetf::<S>(simd, clamp01(simd, b)));
     let a8 = to_byte::<S>(clamp01(simd, a));
 
     let (byte0, byte2) = if BGRA { (b8, r8) } else { (r8, b8) };
     byte0 | (g8 << 8) | (byte2 << 16) | (a8 << 24)
 }
 
-/// `1 / x`, refined to within f32 ε.
-///
-/// A refined hardware reciprocal estimate only beats an exact divide once the
-/// divider is the throughput bottleneck, which on this target is the 512-bit
-/// path. Narrower widths divide exactly — measurably faster there, since the
-/// Newton-Raphson multiplies otherwise just add work (and on the fallback
-/// `approximate_recip` is itself an exact divide). The lane count is a
-/// monomorphization constant, so only one arm survives per backend.
+/// Piecewise sRGB OETF over `x ∈ [0, 1]`, with exact divides and square roots
+/// (see the module docs).
 #[inline(always)]
-fn recip<S: Simd>(simd: S, x: S::f32s) -> S::f32s {
-    if S::f32s::LEN >= 16 {
-        // NR step `y' = y·(2 − x·y)` over the `rcp14` estimate, squaring its
-        // ~2⁻¹⁴ error below f32 ε.
-        let y = x.approximate_recip();
-        y * (S::f32s::splat(simd, 2.0) - x * y)
-    } else {
-        S::f32s::splat(simd, 1.0) / x
-    }
-}
-
-/// Portable reciprocal-sqrt `1 / sqrt(x)`: exact `sqrt` fed through [`recip`].
-/// The 512-bit AVX-512 escape substitutes a direct `rsqrt14` estimate instead.
-#[inline(always)]
-fn rsqrt_generic<S: Simd>(simd: S, x: S::f32s) -> S::f32s {
-    recip(simd, x.sqrt())
-}
-
-/// Reciprocal-sqrt evaluated on a full native vector. A zero-sized dispatch
-/// type rather than a bare `impl Fn` parameter, so the estimate/escape choice
-/// inlines into the hot loop instead of going out-of-line through `Fn::call`.
-trait RsqrtKernel<S: Simd> {
-    fn rsqrt(simd: S, x: S::f32s) -> S::f32s;
-}
-
-/// Portable reciprocal-sqrt: exact `sqrt` fed through [`recip`]. Used by every
-/// generic (non-escape) entry.
-struct RsqrtGeneric;
-impl<S: Simd> RsqrtKernel<S> for RsqrtGeneric {
-    #[inline(always)]
-    fn rsqrt(simd: S, x: S::f32s) -> S::f32s {
-        rsqrt_generic(simd, x)
-    }
-}
-
-/// AVX-512 escape: a direct `rsqrt14` + Newton-Raphson, avoiding the generic
-/// path's extra `sqrt`. Used only by the concrete AVX-512 escape entry.
-#[cfg(target_arch = "x86_64")]
-struct RsqrtAvx512Escape;
-#[cfg(target_arch = "x86_64")]
-impl RsqrtKernel<Avx512> for RsqrtAvx512Escape {
-    #[inline(always)]
-    fn rsqrt(simd: Avx512, x: <Avx512 as Simd>::f32s) -> <Avx512 as Simd>::f32s {
-        escape::rsqrt_escape(simd, x)
-    }
-}
-
-/// Piecewise sRGB OETF over `x ∈ [0, 1]`. The reciprocal-sqrt is a type
-/// parameter so the AVX-512 escape can substitute an intrinsic `rsqrt14` + NR
-/// estimate.
-#[inline(always)]
-fn srgb_oetf<S: Simd, R: RsqrtKernel<S>>(simd: S, x: S::f32s) -> S::f32s {
+fn srgb_oetf<S: Simd>(simd: S, x: S::f32s) -> S::f32s {
+    let one = S::f32s::splat(simd, 1.0);
     let quarter = x.sqrt().sqrt();
     let diff = quarter - OETF_A;
-    let r3 = R::rsqrt(simd, diff);
+    let r3 = one / diff.sqrt();
     let inner = r3 - OETF_B;
     let cube = inner * inner * inner;
-    let curve = recip(simd, cube) - OETF_C;
+    let curve = one / cube - OETF_C;
     let linear = x * OETF_LINEAR_SLOPE;
 
     x.simd_le(S::f32s::splat(simd, OETF_LINEAR_MAX))
@@ -465,7 +373,7 @@ fn to_byte<S: Simd>(x: S::f32s) -> S::u32s {
 }
 
 /// Scalar counterpart of [`srgb_oetf`], replicating its op sequence exactly so
-/// the exact-divide backends encode bit-for-bit against it: clamp to `[0, 1]`,
+/// every backend encodes bit-for-bit against it: clamp to `[0, 1]`,
 /// then the piecewise minimax curve with plain f32 mul/div (no FMA, no `powf`).
 /// Callers quantize the result with `round_ties_even`, as [`to_byte`] does.
 fn srgb_oetf_scalar(x: f32) -> f32 {
@@ -476,32 +384,6 @@ fn srgb_oetf_scalar(x: f32) -> f32 {
     let r3 = 1.0 / (x.sqrt().sqrt() - OETF_A).sqrt();
     let inner = r3 - OETF_B;
     1.0 / (inner * inner * inner) - OETF_C
-}
-
-// ---- AVX-512 escape hatch: intrinsic reciprocal-sqrt ----
-
-#[cfg(target_arch = "x86_64")]
-mod escape {
-    use fearless_simd::{Avx512, f32x16, prelude::*};
-    use std::arch::x86_64::*;
-
-    // `rsqrt14ps` (~2⁻¹⁴ initial error) refined by one Newton-Raphson step
-    // `y' = y·(1.5 − 0.5·x·y²)`, squaring the error below f32 ε.
-    fearless_simd::kernel!(
-        #[inline(always)]
-        fn rsqrt_raw(token: Avx512, x: __m512) -> __m512 {
-            let y = _mm512_rsqrt14_ps(x);
-            let y_sq = _mm512_mul_ps(y, y);
-            let half_x = _mm512_mul_ps(_mm512_set1_ps(0.5), x);
-            let correction = _mm512_fnmadd_ps(half_x, y_sq, _mm512_set1_ps(1.5));
-            _mm512_mul_ps(y, correction)
-        }
-    );
-
-    #[inline(always)]
-    pub fn rsqrt_escape(simd: Avx512, x: f32x16<Avx512>) -> f32x16<Avx512> {
-        rsqrt_raw(simd, x.into()).simd_into(simd)
-    }
 }
 
 // ---- in-place f32 OETF pre-pass ----
@@ -521,14 +403,12 @@ pub fn srgb_oetf_in_place_f32(pixels: &mut [[f32; 4]]) {
     srgb_oetf_in_place_f32_at(Level::new(), pixels);
 }
 
-/// sRGB OETF (linear → encoded) for the store-side pre-pass. Uses the portable
-/// reciprocal-sqrt; the in-place passes feed non-u8 formats and are not on the
-/// benchmarked u8 hot path.
+/// sRGB OETF (linear → encoded) for the store-side pre-pass.
 struct Oetf;
 impl CurveKernel for Oetf {
     #[inline(always)]
     fn curve<S: Simd>(simd: S, x: S::f32s) -> S::f32s {
-        srgb_oetf::<S, RsqrtGeneric>(simd, x)
+        srgb_oetf(simd, x)
     }
 }
 
@@ -829,6 +709,67 @@ mod load_tests {
             }
         }
     }
+
+    /// Every level decodes to the same f32 bits as the scalar fallback, which
+    /// has no FMA instruction: the u8 load in both byte orders for every byte
+    /// value, and the in-place EOTF over a dense sweep of `[0, 1]`.
+    #[test]
+    fn every_level_decodes_to_the_same_bits() {
+        let bits = |pixels: &[[f32; 4]]| -> Vec<u32> {
+            pixels.iter().flatten().map(|v| v.to_bits()).collect()
+        };
+        let assert_bits_eq = |got: Vec<u32>, want: &[u32], label: &str| {
+            if let Some(i) = got.iter().zip(want).position(|(a, b)| a != b) {
+                panic!(
+                    "{label}: lane {i} got {:#010x} want {:#010x}",
+                    got[i], want[i]
+                );
+            }
+        };
+        let levels = constructible_levels();
+        let (name, fallback) = levels[0];
+        assert_eq!(name, "fallback");
+        let s = full_domain_surface();
+        let sweep: Vec<[f32; 4]> = (0..=1u32 << 16)
+            .map(|i| {
+                let x = i as f32 / (1u32 << 16) as f32;
+                [x, 1.0 - x, x * x, x]
+            })
+            .collect();
+        let want_rgba = bits(
+            &load_srgb8_f32_at::<false>(fallback, s.as_ref())
+                .unwrap()
+                .pixels,
+        );
+        let want_bgra = bits(
+            &load_srgb8_f32_at::<true>(fallback, s.as_ref())
+                .unwrap()
+                .pixels,
+        );
+        let mut want_sweep = sweep.clone();
+        srgb_eotf_in_place_f32_at(fallback, &mut want_sweep);
+        for (label, level) in levels {
+            let rgba = load_srgb8_f32_at::<false>(level, s.as_ref()).unwrap();
+            assert_bits_eq(
+                bits(&rgba.pixels),
+                &want_rgba,
+                &format!("{label} rgba load"),
+            );
+            let bgra = load_srgb8_f32_at::<true>(level, s.as_ref()).unwrap();
+            assert_bits_eq(
+                bits(&bgra.pixels),
+                &want_bgra,
+                &format!("{label} bgra load"),
+            );
+            let mut got = sweep.clone();
+            srgb_eotf_in_place_f32_at(level, &mut got);
+            assert_bits_eq(
+                bits(&got),
+                &bits(&want_sweep),
+                &format!("{label} in-place EOTF"),
+            );
+        }
+    }
 }
 
 #[cfg(test)]
@@ -899,9 +840,7 @@ mod store_tests {
         }
     }
 
-    /// Two production configurations of the same kernel must agree byte-for-byte.
-    /// Only the AVX-512 generic/escape pair (x86_64) has two configurations.
-    #[cfg(target_arch = "x86_64")]
+    /// Two stores of the same pixels must agree byte-for-byte.
     fn assert_bytes_eq(actual: &[u8], reference: &[u8], label: &str) {
         assert_eq!(actual.len(), reference.len(), "{label}: length");
         for (i, (&got, &want)) in actual.iter().zip(reference).enumerate() {
@@ -917,9 +856,9 @@ mod store_tests {
 
     /// The minimax OETF the SIMD store evaluates stays within ±0.5/255 of the
     /// exact curve over a dense `[0, 1]` grid, which is what bounds the store
-    /// bytes to within ±1 of the exactly-encoded value. Runs the generic
-    /// (exact-sqrt/divide) path via the fallback backend, representative of the
-    /// narrow-width kernels.
+    /// bytes to within ±1 of the exactly-encoded value. Runs the fallback
+    /// backend; every level gives the same bits
+    /// (`every_level_stores_the_same_bytes`).
     #[test]
     fn srgb_oetf_minimax_within_half_lsb() {
         let simd = fearless_simd::Fallback::new();
@@ -930,7 +869,7 @@ mod store_tests {
         for i in 0..=steps {
             let x = i as f32 / steps as f32;
             let v = <fearless_simd::Fallback as Simd>::f32s::splat(simd, x);
-            let out = srgb_oetf::<_, RsqrtGeneric>(simd, clamp01(simd, v));
+            let out = srgb_oetf(simd, clamp01(simd, v));
             let mut buf = [0.0f32; driver::MAX_LANES];
             out.store_slice(&mut buf[..n]);
             let err = (buf[0] - oetf_exact(x)).abs() as f64;
@@ -1041,63 +980,84 @@ mod store_tests {
         }
     }
 
-    /// The `constructible_levels()` loop above routes AVX-512 through the escape
-    /// via `_at`; this pins the pure-generic AVX-512 path (which that routing
-    /// skips) and re-checks the escape directly. Both 512-bit configurations are
-    /// checked against the exact-curve oracle, and against each other
-    /// byte-for-byte — the `rsqrt14` + Newton-Raphson escape must not move a
-    /// single byte (its ~1 ULP intermediate drift only reaches a byte within
-    /// ~1e-7 of a quantization midpoint).
-    #[cfg(target_arch = "x86_64")]
+    /// Inputs (f32 bits) where the AVX-512 store's former `rcp14`/`rsqrt14`
+    /// estimates wrote a different byte from the exact path.
+    const ESTIMATE_MOVED_A_BYTE: [u32; 20] = [
+        0x3b78_bd34,
+        0x3b78_bd3c,
+        0x3c73_838f,
+        0x3ced_d0b6,
+        0x3d05_3fa3,
+        0x3d62_4e99,
+        0x3d9d_c0fe,
+        0x3dc5_0146,
+        0x3e2a_1f72,
+        0x3e69_905e,
+        0x3e8b_2084,
+        0x3ed1_65f2,
+        0x3ed4_202d,
+        0x3f0a_bc22,
+        0x3f17_e935,
+        0x3f2b_301b,
+        0x3f45_b4b0,
+        0x3f4b_aeaf,
+        0x3f66_ccfb,
+        0x3f7d_07c8,
+    ];
+
+    /// Every level stores the same bytes as the scalar twin, and the in-place
+    /// OETF gives the twin's bits: over the grid, a dense sweep of `[0, 1]`, and
+    /// inputs where a hardware estimate once moved a byte.
     #[test]
-    fn simd_avx512_generic_and_escape_match_oracle() {
-        let Some(avx512) = Level::new().as_avx512() else {
-            eprintln!("skipping: no avx512");
-            return;
+    fn every_level_stores_the_same_bytes() {
+        let mut pixels = grid_pixels();
+        pixels.extend((0..=1u32 << 16).map(|i| {
+            let x = i as f32 / (1u32 << 16) as f32;
+            [x, 1.0 - x, x * x, x]
+        }));
+        pixels.extend(ESTIMATE_MOVED_A_BYTE.iter().map(|&bits| {
+            let x = f32::from_bits(bits);
+            [x, x, x, x]
+        }));
+        let buf = buf_from(pixels);
+        let twin = |p: &[f32; 4], bgra: bool| {
+            let (c0, c2) = if bgra { (p[2], p[0]) } else { (p[0], p[2]) };
+            let byte = |x: f32| (x * 255.0).round_ties_even() as u8;
+            [
+                byte(srgb_oetf_scalar(c0)),
+                byte(srgb_oetf_scalar(p[1])),
+                byte(srgb_oetf_scalar(c2)),
+                byte(p[3].clamp(0.0, 1.0)),
+            ]
         };
-        let level = avx512.level();
-        let buf = buf_from(grid_pixels());
-        let rgba_ref = oracle_bytes::<false>(&buf.pixels);
-        let bgra_ref = oracle_bytes::<true>(&buf.pixels);
-
-        let generic_rgba = store_srgb8_f32_generic_at::<false>(level, &buf);
-        let generic_bgra = store_srgb8_f32_generic_at::<true>(level, &buf);
-        let escape_rgba = store_srgb8_f32_avx512_escape::<false>(avx512, &buf);
-        let escape_bgra = store_srgb8_f32_avx512_escape::<true>(avx512, &buf);
-
-        for (label, got, reference) in [
-            ("avx512 generic rgba", &generic_rgba, &rgba_ref),
-            ("avx512 generic bgra", &generic_bgra, &bgra_ref),
-            ("avx512 escape rgba", &escape_rgba, &rgba_ref),
-            ("avx512 escape bgra", &escape_bgra, &bgra_ref),
-        ] {
-            assert_bytes_close(got, reference, label);
-        }
-        assert_bytes_eq(&escape_rgba, &generic_rgba, "avx512 escape vs generic rgba");
-        assert_bytes_eq(&escape_bgra, &generic_bgra, "avx512 escape vs generic bgra");
-    }
-
-    /// Exact u8 round-trip for both 512-bit configurations.
-    #[cfg(target_arch = "x86_64")]
-    #[test]
-    fn simd_avx512_generic_and_escape_roundtrip_exact() {
-        let Some(avx512) = Level::new().as_avx512() else {
-            eprintln!("skipping: no avx512");
-            return;
-        };
-        let level = avx512.level();
-        let buf = buf_from(u8_roundtrip_pixels());
-        for bytes in [
-            store_srgb8_f32_generic_at::<false>(level, &buf),
-            store_srgb8_f32_generic_at::<true>(level, &buf),
-            store_srgb8_f32_avx512_escape::<false>(avx512, &buf),
-            store_srgb8_f32_avx512_escape::<true>(avx512, &buf),
-        ] {
-            for b in 0..=255u8 {
-                let base = b as usize * 4;
-                for (lane, &byte) in bytes[base..base + 4].iter().enumerate() {
-                    assert_eq!(byte, b, "lane {lane} roundtrip for value {b}");
-                }
+        let rgba_ref: Vec<u8> = buf.pixels.iter().flat_map(|p| twin(p, false)).collect();
+        let bgra_ref: Vec<u8> = buf.pixels.iter().flat_map(|p| twin(p, true)).collect();
+        let curve_ref: Vec<u32> = buf
+            .pixels
+            .iter()
+            .flat_map(|p| {
+                [
+                    srgb_oetf_scalar(p[0]),
+                    srgb_oetf_scalar(p[1]),
+                    srgb_oetf_scalar(p[2]),
+                    p[3],
+                ]
+            })
+            .map(f32::to_bits)
+            .collect();
+        for (label, level) in constructible_levels() {
+            let rgba = store_srgb8_f32_at::<false>(level, &buf);
+            assert_bytes_eq(&rgba, &rgba_ref, &format!("{label} rgba"));
+            let bgra = store_srgb8_f32_at::<true>(level, &buf);
+            assert_bytes_eq(&bgra, &bgra_ref, &format!("{label} bgra"));
+            let mut curve = buf.pixels.clone();
+            srgb_oetf_in_place_f32_at(level, &mut curve);
+            let curve: Vec<u32> = curve.iter().flatten().map(|v| v.to_bits()).collect();
+            if let Some(i) = curve.iter().zip(&curve_ref).position(|(a, b)| a != b) {
+                panic!(
+                    "{label} in-place OETF: lane {i} got {:#010x} want {:#010x}",
+                    curve[i], curve_ref[i]
+                );
             }
         }
     }

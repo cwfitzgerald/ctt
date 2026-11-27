@@ -38,6 +38,7 @@ Per Keep a Changelog there are 6 main categories of changes:
 - AMD, etcpak and astcenc encoders build with clang-cl. Their SIMD variants were compiled without the target features clang-cl needs. @stuartparmenter
 - AMD encoder: runs on x86 CPUs without SSE4.1 when built with MSVC. Its baseline code used an SSE4.1 instruction. @stuartparmenter
 - etcpak encoder: ETC1 and ETC2 encoding no longer crashes when a block buffer is not 16-byte aligned. @stuartparmenter
+- sRGB8 loads and stores give the same result on every CPU, so a texture's mipmaps no longer differ from one machine to another. On AVX-512 the 4-channel store used `rcp14`/`rsqrt14` estimates and wrote some values one step off. Without FMA the 4-channel load and the 16-bit sRGB decode rounded their multiply-adds twice. @no-materials
 
 ## v0.6.1
 

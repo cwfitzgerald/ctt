@@ -9,9 +9,8 @@
 //!   * `srgb_load_*` — 4-channel sRGB8 → linear f32, `_bgra` for the swapped
 //!     byte order, plus `bgr8` for the 3-channel scalar production path (no
 //!     packed-word kernel exists at 3 bytes per pixel).
-//!   * `srgb_store_*` — the inverse, with the AVX-512 tier split into the
-//!     generic-rsqrt kernel and the `rsqrt14` intrinsic escape, and `bgr8` for
-//!     the 3-channel scalar production path.
+//!   * `srgb_store_*` — the inverse, plus `bgr8` for the 3-channel scalar
+//!     production path.
 //!   * `srgb_{oetf,eotf}_in_place` — the f32 curve passes used by the 16+ bit
 //!     formats.
 //!
@@ -121,7 +120,12 @@ fn bench_store(c: &mut Criterion) {
     let mut g = c.benchmark_group(format!("srgb_store_{SIDE}x{SIDE}"));
     g.throughput(Throughput::Elements(PIXEL_COUNT));
 
-    bench_srgb_store(&mut g, &buf);
+    common::bench_levels(&mut g, "_rgba", |b, level| {
+        b.iter(|| k::store_srgb8_f32_at::<false>(level, black_box(&buf)));
+    });
+    common::bench_levels(&mut g, "_bgra", |b, level| {
+        b.iter(|| k::store_srgb8_f32_at::<true>(level, black_box(&buf)));
+    });
 
     // 3 bytes per pixel is not one packed word, so this production path is
     // per-pixel scalar at every level — one row, not a level sweep.
@@ -131,50 +135,6 @@ fn bench_store(c: &mut Criterion) {
     });
 
     g.finish();
-}
-
-/// sRGB store per-level sweep for both channel orders. Emits `_rgba` and
-/// `_bgra` variants of `fallback`, `sse2`, `sse4_2`, `avx2` (x86/x86_64) and
-/// `neon` (aarch64). The AVX-512 tier is deliberately split into the
-/// generic-rsqrt kernel (`avx512_generic_*`) and the `rsqrt14` intrinsic escape
-/// (`avx512_escape_*`, x86_64 only) rather than a single `avx512_*` row, since
-/// comparing those two is the point of keeping the escape.
-fn bench_srgb_store<M: criterion::measurement::Measurement>(
-    g: &mut criterion::BenchmarkGroup<'_, M>,
-    buf: &Buffer<f32>,
-) {
-    use ctt::bench_internals::store_srgb8_f32_at;
-
-    for (name, level) in common::levels() {
-        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
-        if name == "avx512" {
-            use ctt::bench_internals::store_srgb8_f32_generic_at;
-            g.bench_function("avx512_generic_rgba", |b| {
-                b.iter(|| store_srgb8_f32_generic_at::<false>(level, black_box(buf)));
-            });
-            g.bench_function("avx512_generic_bgra", |b| {
-                b.iter(|| store_srgb8_f32_generic_at::<true>(level, black_box(buf)));
-            });
-            #[cfg(target_arch = "x86_64")]
-            if let Some(avx512) = level.as_avx512() {
-                use ctt::bench_internals::store_srgb8_f32_avx512_escape;
-                g.bench_function("avx512_escape_rgba", |b| {
-                    b.iter(|| store_srgb8_f32_avx512_escape::<false>(avx512, black_box(buf)));
-                });
-                g.bench_function("avx512_escape_bgra", |b| {
-                    b.iter(|| store_srgb8_f32_avx512_escape::<true>(avx512, black_box(buf)));
-                });
-            }
-            continue;
-        }
-
-        g.bench_function(format!("{name}_rgba"), |b| {
-            b.iter(|| store_srgb8_f32_at::<false>(level, black_box(buf)));
-        });
-        g.bench_function(format!("{name}_bgra"), |b| {
-            b.iter(|| store_srgb8_f32_at::<true>(level, black_box(buf)));
-        });
-    }
 }
 
 /// Bench an in-place pass: one row per forced level. The pass mutates its input,

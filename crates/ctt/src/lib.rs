@@ -104,11 +104,8 @@ pub mod bench_internals {
 
     // ---- sRGB ----
 
-    #[cfg(target_arch = "x86_64")]
-    pub use crate::processing::kernels::srgb::store_srgb8_f32_avx512_escape;
     pub use crate::processing::kernels::srgb::{
-        load_srgb8_f32_at, srgb_eotf_in_place_f32_at, srgb_oetf_in_place_f32_at,
-        store_srgb8_f32_at, store_srgb8_f32_generic_at,
+        load_srgb8_f32_at, srgb_eotf_in_place_f32_at, srgb_oetf_in_place_f32_at, store_srgb8_f32_at,
     };
     pub use crate::processing::load_kernels::{
         load_bgr8_srgb_f32, load_bgra8_srgb_f32, load_srgb8_f32, srgb_eotf_in_place_f32,
