@@ -121,6 +121,11 @@ fn parse_compressed(lower: &str, original: &str) -> Result<ktx2::Format, Error> 
         "eac_rg" | "etc2_rg" | "etc2_rg11" => Ok(F::EAC_R11G11_UNORM_BLOCK),
         other => {
             if let Some(rest) = other.strip_prefix("astc_") {
+                // `astc_WxH_hdr` selects the SFLOAT (HDR) variant.
+                let (rest, hdr) = match rest.strip_suffix("_hdr") {
+                    Some(rest) => (rest, true),
+                    None => (rest, false),
+                };
                 let (w, h) = rest
                     .split_once('x')
                     .ok_or_else(|| Error::UnsupportedFormat(original.into()))?;
@@ -130,7 +135,7 @@ fn parse_compressed(lower: &str, original: &str) -> Result<ktx2::Format, Error> 
                 let block_height: u8 = h
                     .parse()
                     .map_err(|_| Error::UnsupportedFormat(original.into()))?;
-                astc_format(block_width, block_height)
+                astc_format(block_width, block_height, hdr)
                     .ok_or_else(|| Error::UnsupportedFormat(original.into()))
             } else {
                 Err(Error::UnsupportedFormat(original.into()))
@@ -139,25 +144,26 @@ fn parse_compressed(lower: &str, original: &str) -> Result<ktx2::Format, Error> 
     }
 }
 
-fn astc_format(block_width: u8, block_height: u8) -> Option<ktx2::Format> {
+fn astc_format(block_width: u8, block_height: u8, hdr: bool) -> Option<ktx2::Format> {
     use ktx2::Format as F;
-    Some(match (block_width, block_height) {
-        (4, 4) => F::ASTC_4x4_UNORM_BLOCK,
-        (5, 4) => F::ASTC_5x4_UNORM_BLOCK,
-        (5, 5) => F::ASTC_5x5_UNORM_BLOCK,
-        (6, 5) => F::ASTC_6x5_UNORM_BLOCK,
-        (6, 6) => F::ASTC_6x6_UNORM_BLOCK,
-        (8, 5) => F::ASTC_8x5_UNORM_BLOCK,
-        (8, 6) => F::ASTC_8x6_UNORM_BLOCK,
-        (8, 8) => F::ASTC_8x8_UNORM_BLOCK,
-        (10, 5) => F::ASTC_10x5_UNORM_BLOCK,
-        (10, 6) => F::ASTC_10x6_UNORM_BLOCK,
-        (10, 8) => F::ASTC_10x8_UNORM_BLOCK,
-        (10, 10) => F::ASTC_10x10_UNORM_BLOCK,
-        (12, 10) => F::ASTC_12x10_UNORM_BLOCK,
-        (12, 12) => F::ASTC_12x12_UNORM_BLOCK,
+    let (unorm, sfloat) = match (block_width, block_height) {
+        (4, 4) => (F::ASTC_4x4_UNORM_BLOCK, F::ASTC_4x4_SFLOAT_BLOCK),
+        (5, 4) => (F::ASTC_5x4_UNORM_BLOCK, F::ASTC_5x4_SFLOAT_BLOCK),
+        (5, 5) => (F::ASTC_5x5_UNORM_BLOCK, F::ASTC_5x5_SFLOAT_BLOCK),
+        (6, 5) => (F::ASTC_6x5_UNORM_BLOCK, F::ASTC_6x5_SFLOAT_BLOCK),
+        (6, 6) => (F::ASTC_6x6_UNORM_BLOCK, F::ASTC_6x6_SFLOAT_BLOCK),
+        (8, 5) => (F::ASTC_8x5_UNORM_BLOCK, F::ASTC_8x5_SFLOAT_BLOCK),
+        (8, 6) => (F::ASTC_8x6_UNORM_BLOCK, F::ASTC_8x6_SFLOAT_BLOCK),
+        (8, 8) => (F::ASTC_8x8_UNORM_BLOCK, F::ASTC_8x8_SFLOAT_BLOCK),
+        (10, 5) => (F::ASTC_10x5_UNORM_BLOCK, F::ASTC_10x5_SFLOAT_BLOCK),
+        (10, 6) => (F::ASTC_10x6_UNORM_BLOCK, F::ASTC_10x6_SFLOAT_BLOCK),
+        (10, 8) => (F::ASTC_10x8_UNORM_BLOCK, F::ASTC_10x8_SFLOAT_BLOCK),
+        (10, 10) => (F::ASTC_10x10_UNORM_BLOCK, F::ASTC_10x10_SFLOAT_BLOCK),
+        (12, 10) => (F::ASTC_12x10_UNORM_BLOCK, F::ASTC_12x10_SFLOAT_BLOCK),
+        (12, 12) => (F::ASTC_12x12_UNORM_BLOCK, F::ASTC_12x12_SFLOAT_BLOCK),
         _ => return None,
-    })
+    };
+    Some(if hdr { sfloat } else { unorm })
 }
 
 // ---------------------------------------------------------------------------
@@ -341,6 +347,20 @@ mod tests {
             TargetFormat::Uncompressed(f) => assert_eq!(f, F::R8G8B8A8_UNORM),
             _ => panic!("expected uncompressed"),
         }
+    }
+
+    #[test]
+    fn parse_astc_ldr_and_hdr() {
+        assert_eq!(
+            parse_compressed("astc_6x5", "astc_6x5").unwrap(),
+            F::ASTC_6x5_UNORM_BLOCK
+        );
+        assert_eq!(
+            parse_compressed("astc_6x5_hdr", "astc_6x5_hdr").unwrap(),
+            F::ASTC_6x5_SFLOAT_BLOCK
+        );
+        assert!(parse_compressed("astc_7x7_hdr", "astc_7x7_hdr").is_err());
+        assert!(parse_compressed("astc_hdr", "astc_hdr").is_err());
     }
 
     #[test]

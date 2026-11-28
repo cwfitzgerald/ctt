@@ -676,9 +676,61 @@ impl FormatExt for ktx2::Format {
     }
 }
 
+/// Whether `format` stores floating-point color: the SFLOAT and UFLOAT
+/// formats, compressed or not. GPUs never sRGB-decode these, so they hold
+/// linear values.
+pub fn is_float_color(format: ktx2::Format) -> bool {
+    use ktx2::Format as F;
+    matches!(
+        format,
+        F::R16_SFLOAT
+            | F::R16G16_SFLOAT
+            | F::R16G16B16_SFLOAT
+            | F::R16G16B16A16_SFLOAT
+            | F::R32_SFLOAT
+            | F::R32G32_SFLOAT
+            | F::R32G32B32_SFLOAT
+            | F::R32G32B32A32_SFLOAT
+            | F::R64_SFLOAT
+            | F::R64G64_SFLOAT
+            | F::R64G64B64_SFLOAT
+            | F::R64G64B64A64_SFLOAT
+            | F::B10G11R11_UFLOAT_PACK32
+            | F::E5B9G9R9_UFLOAT_PACK32
+            | F::BC6H_UFLOAT_BLOCK
+            | F::BC6H_SFLOAT_BLOCK
+    )
+        // ASTC SFLOAT (VK_EXT_texture_compression_astc_hdr)
+        || (1000066000..=1000066013).contains(&format.value())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn float_color_formats() {
+        use ktx2::Format as F;
+        for f in [
+            F::R16G16B16A16_SFLOAT,
+            F::R32_SFLOAT,
+            F::B10G11R11_UFLOAT_PACK32,
+            F::BC6H_UFLOAT_BLOCK,
+            F::ASTC_4x4_SFLOAT_BLOCK,
+            F::ASTC_12x12_SFLOAT_BLOCK,
+        ] {
+            assert!(is_float_color(f), "{f:?}");
+        }
+        for f in [
+            F::R8G8B8A8_UNORM,
+            F::R16_UNORM,
+            F::BC7_UNORM_BLOCK,
+            F::ASTC_4x4_UNORM_BLOCK,
+            F::ASTC_12x12_SRGB_BLOCK,
+        ] {
+            assert!(!is_float_color(f), "{f:?}");
+        }
+    }
     use ktx2::Format as F;
 
     #[test]

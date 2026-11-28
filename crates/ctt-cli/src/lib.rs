@@ -385,7 +385,7 @@ pub fn encoder_table_string() -> String {
     );
     let _ = writeln!(
         out,
-        "ASTC formats use astc_WxH (e.g. astc_4x4, astc_8x8, astc_12x12)."
+        "ASTC formats use astc_WxH (e.g. astc_4x4, astc_8x8, astc_12x12), or astc_WxH_hdr for HDR."
     );
     let _ = writeln!(
         out,

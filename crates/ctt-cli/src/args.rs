@@ -20,7 +20,8 @@ pub struct Args {
     pub output: Option<PathBuf>,
 
     /// Target format. Bare (bc1, bc7) or prefixed with encoder (intel_bc7, bc7e_bc7).
-    /// ASTC formats use astc_WxH (e.g. astc_4x4, astc_8x8, astc_12x12).
+    /// ASTC formats use astc_WxH (e.g. astc_4x4, astc_8x8, astc_12x12), or
+    /// astc_WxH_hdr for HDR.
     /// Uncompressed formats use WebGPU (rgba8unorm) or Vulkan (r8g8b8a8_unorm) names.
     /// If omitted, the input format is preserved without compression.
     #[arg(short, long)]
@@ -90,7 +91,9 @@ pub struct Args {
     #[arg(long, visible_alias = "ia")]
     pub input_alpha: Option<AlphaModeArg>,
 
-    /// Desired color space of the output. If omitted, matches the input.
+    /// Desired color space of the output. If omitted, matches the input,
+    /// except that float formats (bc6h, astc_WxH_hdr, rgba16float, ...)
+    /// are always linear.
     #[arg(long, visible_alias = "oc")]
     pub output_color_space: Option<ColorSpaceArg>,
 

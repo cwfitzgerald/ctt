@@ -52,6 +52,7 @@ astcenc    6            astc
 | EAC R | `eac_r` | Single channel 11-bit. |
 | EAC RG | `eac_rg` | Two channel 11-bit. |
 | ASTC | `astc_WxH` | Adaptive scalable texture compression. Variable block sizes (4x4 to 12x12). |
+| ASTC HDR | `astc_WxH_hdr` | ASTC with HDR blocks, in the `ASTC_*_SFLOAT_BLOCK` formats. KTX2 only; DDS has no ASTC HDR format. Needs a GPU with ASTC HDR support. |
 
 Compression accepts a quality preset from `ultra-fast` to `very-slow` (default `basic`); each encoder maps presets onto its native effort levels.
 

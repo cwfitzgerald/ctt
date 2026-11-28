@@ -19,6 +19,9 @@ pub struct Opts {
     /// Texture role; drives profile, flags, and swizzle.
     /// One of: color, normal-map, single-channel, two-channel,
     /// hdr-rgb, hdr-rgba, rgbm.
+    /// hdr-rgb and hdr-rgba need an astc_WxH_hdr format. With an
+    /// astc_WxH_hdr format, color encodes as hdr-rgb, and the other
+    /// usages are rejected: they need an astc_WxH format.
     pub usage: Usage,
 
     /// Normal-map input layout. Only meaningful when usage=normal-map.
@@ -41,7 +44,8 @@ pub struct Opts {
 
     /// Tune for the decode_unorm8 ASTC decode mode. Set when the
     /// texture will be sampled as unorm8 at runtime (common on mobile
-    /// and most desktop pipelines).
+    /// and most desktop pipelines). Not allowed for HDR: hdr-rgb,
+    /// hdr-rgba, or color with an astc_WxH_hdr format.
     pub decode_unorm8: bool,
 
     /// Per-channel error weights [r, g, b, a]. Higher = more bits

@@ -180,6 +180,7 @@ fn required_input_for(encoder: &Encoder, target: ktx2::Format) -> Result<ktx2::F
         #[cfg(feature = "encoder-astcenc")]
         Encoder::Astcenc(s) => {
             require_supports(AstcencEncoder::supported_formats(), target, "astcenc")?;
+            AstcencEncoder::validate(target, s)?;
             Ok(AstcencEncoder::required_input_format(target, s))
         }
     }

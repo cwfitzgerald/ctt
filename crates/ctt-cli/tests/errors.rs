@@ -29,6 +29,85 @@ fn dds_etc_rejected() {
     );
 }
 
+/// Run the linear RGBA8 golden through the CLI to `out_name` with `extra`
+/// args and return the error message.
+fn astc_error(out_name: &str, extra: &[&str]) -> String {
+    let f = TestFixture::new();
+    let input = f.data_file("rgba8_16x16_linear.ktx2");
+    let output = f.output_file(out_name);
+    let mut argv = vec![
+        "ctt",
+        input.to_str().unwrap(),
+        "-o",
+        output.to_str().unwrap(),
+    ];
+    argv.extend_from_slice(extra);
+    run_cli(argv)
+        .expect_err("command should be rejected")
+        .to_string()
+}
+
+/// DDS has no ASTC HDR (SFLOAT) format.
+#[test]
+fn dds_astc_hdr_rejected() {
+    let msg = astc_error("out.dds", &["-f", "astc_4x4_hdr"]);
+    assert!(
+        msg.contains("not supported in DDS"),
+        "error should explain ASTC HDR is unsupported by DDS, got: {msg}"
+    );
+}
+
+/// HDR usages write HDR blocks, which need an SFLOAT target.
+#[test]
+fn astc_hdr_usage_with_ldr_target_rejected() {
+    for usage in ["hdr-rgb", "hdr-rgba"] {
+        let opts = format!("usage={usage}");
+        let msg = astc_error("out.ktx2", &["-f", "astc_4x4", "--astcenc-opts", &opts]);
+        assert!(
+            msg.contains("astc_4x4_hdr") && msg.contains("magenta"),
+            "{usage}: error should point to an SFLOAT target, got: {msg}"
+        );
+    }
+}
+
+/// astcenc rejects decode_unorm8 for HDR; say so before converting pixels.
+#[test]
+fn astc_hdr_with_decode_unorm8_rejected() {
+    let msg = astc_error(
+        "out.ktx2",
+        &["-f", "astc_4x4_hdr", "--astcenc-opts", "decode-unorm8=true"],
+    );
+    assert!(
+        msg.contains("decode_unorm8"),
+        "error should name decode_unorm8, got: {msg}"
+    );
+}
+
+/// LDR usages gain nothing from an SFLOAT target and lose GPU support.
+#[test]
+fn astc_ldr_usage_with_hdr_target_rejected() {
+    let msg = astc_error(
+        "out.ktx2",
+        &["-f", "astc_8x8_hdr", "--astcenc-opts", "usage=normal-map"],
+    );
+    assert!(
+        msg.contains("astc_8x8"),
+        "error should point to the LDR format, got: {msg}"
+    );
+}
+
+/// Float formats always hold linear values.
+#[test]
+fn float_target_with_srgb_output_rejected() {
+    for format in ["astc_4x4_hdr", "bc6h", "rgba16float"] {
+        let msg = astc_error("out.ktx2", &["-f", format, "--oc", "srgb"]);
+        assert!(
+            msg.contains("linear"),
+            "{format}: error should explain float formats are linear, got: {msg}"
+        );
+    }
+}
+
 /// `--cubemap` requires either 1 or 6 inputs. Five inputs must error.
 #[test]
 fn cubemap_with_five_inputs_rejected() {
