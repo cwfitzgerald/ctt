@@ -744,6 +744,7 @@ enum ctt_astcenc_usage_Tag
  {
     /**
      * Generic color (LDR or LDR sRGB based on the image's color space).
+     * Encodes as `HdrRgb` for an ASTC SFLOAT target.
      */
     CTT_ASTCENC_USAGE_COLOR,
     /**
@@ -759,11 +760,11 @@ enum ctt_astcenc_usage_Tag
      */
     CTT_ASTCENC_USAGE_TWO_CHANNEL,
     /**
-     * HDR RGB + LDR alpha. Requires fp16 input.
+     * HDR RGB + LDR alpha. Requires fp16 input and an ASTC SFLOAT target.
      */
     CTT_ASTCENC_USAGE_HDR_RGB,
     /**
-     * All-HDR RGBA. Requires fp16 input.
+     * All-HDR RGBA. Requires fp16 input and an ASTC SFLOAT target.
      */
     CTT_ASTCENC_USAGE_HDR_RGBA,
     /**
@@ -922,8 +923,9 @@ typedef struct {
      *
      * Set this when the texture will be sampled as a unorm8 texel format
      * at runtime — the common case for color textures on mobile and most
-     * modern desktop pipelines. Leave it off for HDR content sampled as
-     * fp16. LDR sRGB always decodes via unorm8 regardless, so this flag
+     * modern desktop pipelines. Leave it off for HDR usages, including
+     * `Color` with an ASTC SFLOAT target: conversion returns an error.
+     * LDR sRGB always decodes via unorm8 regardless, so this flag
      * is a no-op for sRGB color usages.
      */
     bool decode_unorm8;
@@ -1440,6 +1442,34 @@ typedef void (*ctt_log_callback)(ctt_log_level level, const char *message, void 
 #define CTT_FORMAT_ASTC_12X12_UNORM_BLOCK 183
 
 #define CTT_FORMAT_ASTC_12X12_SRGB_BLOCK 184
+
+#define CTT_FORMAT_ASTC_4X4_SFLOAT_BLOCK 1000066000
+
+#define CTT_FORMAT_ASTC_5X4_SFLOAT_BLOCK 1000066001
+
+#define CTT_FORMAT_ASTC_5X5_SFLOAT_BLOCK 1000066002
+
+#define CTT_FORMAT_ASTC_6X5_SFLOAT_BLOCK 1000066003
+
+#define CTT_FORMAT_ASTC_6X6_SFLOAT_BLOCK 1000066004
+
+#define CTT_FORMAT_ASTC_8X5_SFLOAT_BLOCK 1000066005
+
+#define CTT_FORMAT_ASTC_8X6_SFLOAT_BLOCK 1000066006
+
+#define CTT_FORMAT_ASTC_8X8_SFLOAT_BLOCK 1000066007
+
+#define CTT_FORMAT_ASTC_10X5_SFLOAT_BLOCK 1000066008
+
+#define CTT_FORMAT_ASTC_10X6_SFLOAT_BLOCK 1000066009
+
+#define CTT_FORMAT_ASTC_10X8_SFLOAT_BLOCK 1000066010
+
+#define CTT_FORMAT_ASTC_10X10_SFLOAT_BLOCK 1000066011
+
+#define CTT_FORMAT_ASTC_12X10_SFLOAT_BLOCK 1000066012
+
+#define CTT_FORMAT_ASTC_12X12_SFLOAT_BLOCK 1000066013
 
 #ifdef __cplusplus
 extern "C" {

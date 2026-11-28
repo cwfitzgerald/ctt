@@ -30,10 +30,16 @@ pub enum NormalSwizzle {
 ///
 /// Picking the right usage is the single most important quality lever: it
 /// avoids spending encoding bits on components you don't actually need.
+///
+/// `ASTC_*_SFLOAT_BLOCK` (HDR) targets take `Color`, `HdrRgb` or `HdrRgba`.
+/// The other usages are LDR and need a UNORM or sRGB target.
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub enum AstcencUsage {
     /// Generic color texture. Uses LDR or LDR sRGB profile based on the
     /// image's color space; passes RGBA through unchanged.
+    ///
+    /// For an `ASTC_*_SFLOAT_BLOCK` target this encodes as
+    /// [`AstcencUsage::HdrRgb`].
     #[default]
     Color,
     /// 2-channel tangent-space normal map. Sets `MAP_NORMAL`, optimizes for
@@ -46,9 +52,10 @@ pub enum AstcencUsage {
     /// Two-channel mask data (e.g. metallic+roughness). Uses the `rrrg`
     /// swizzle so only red and green are encoded.
     TwoChannel,
-    /// HDR RGB with LDR alpha — the recommended HDR mode. Requires fp16 input.
+    /// HDR RGB with LDR alpha — the recommended HDR mode. Requires fp16 input
+    /// and an `ASTC_*_SFLOAT_BLOCK` target.
     HdrRgb,
-    /// All-HDR RGBA. Requires fp16 input.
+    /// All-HDR RGBA. Requires fp16 input and an `ASTC_*_SFLOAT_BLOCK` target.
     HdrRgba,
     /// HDR data preprocessed into LDR RGBM form.
     ///
@@ -103,8 +110,9 @@ pub struct AstcencSettings {
     ///
     /// Set this when the texture will be sampled as a unorm8 texel format
     /// at runtime — the common case for color textures on mobile and most
-    /// modern desktop pipelines. Leave it off for HDR content sampled as
-    /// fp16. LDR sRGB always decodes via unorm8 regardless, so this flag
+    /// modern desktop pipelines. Leave it off for HDR usages, including
+    /// [`AstcencUsage::Color`] with an SFLOAT target.
+    /// LDR sRGB always decodes via unorm8 regardless, so this flag
     /// is a no-op for sRGB color usages.
     pub decode_unorm8: bool,
     /// Custom per-channel error weights `[r, g, b, a]`. Higher values make
@@ -119,7 +127,7 @@ pub struct AstcencSettings {
     pub rgbm_m_scale: Option<f32>,
 }
 
-/// All 14 valid ASTC 2D block sizes.
+/// All 14 valid ASTC 2D block sizes, as UNORM, sRGB and SFLOAT (HDR).
 const SUPPORTED_FORMATS: &[ktx2::Format] = &[
     ktx2::Format::ASTC_4x4_UNORM_BLOCK,
     ktx2::Format::ASTC_4x4_SRGB_BLOCK,
@@ -149,9 +157,80 @@ const SUPPORTED_FORMATS: &[ktx2::Format] = &[
     ktx2::Format::ASTC_12x10_SRGB_BLOCK,
     ktx2::Format::ASTC_12x12_UNORM_BLOCK,
     ktx2::Format::ASTC_12x12_SRGB_BLOCK,
+    ktx2::Format::ASTC_4x4_SFLOAT_BLOCK,
+    ktx2::Format::ASTC_5x4_SFLOAT_BLOCK,
+    ktx2::Format::ASTC_5x5_SFLOAT_BLOCK,
+    ktx2::Format::ASTC_6x5_SFLOAT_BLOCK,
+    ktx2::Format::ASTC_6x6_SFLOAT_BLOCK,
+    ktx2::Format::ASTC_8x5_SFLOAT_BLOCK,
+    ktx2::Format::ASTC_8x6_SFLOAT_BLOCK,
+    ktx2::Format::ASTC_8x8_SFLOAT_BLOCK,
+    ktx2::Format::ASTC_10x5_SFLOAT_BLOCK,
+    ktx2::Format::ASTC_10x6_SFLOAT_BLOCK,
+    ktx2::Format::ASTC_10x8_SFLOAT_BLOCK,
+    ktx2::Format::ASTC_10x10_SFLOAT_BLOCK,
+    ktx2::Format::ASTC_12x10_SFLOAT_BLOCK,
+    ktx2::Format::ASTC_12x12_SFLOAT_BLOCK,
 ];
 
+/// Whether `format` is one of the `ASTC_*_SFLOAT_BLOCK` formats, the only
+/// ASTC formats in which every GPU decodes HDR blocks.
+///
+/// In a UNORM or sRGB format, a GPU without ASTC HDR support renders HDR
+/// blocks as solid magenta.
+fn is_sfloat(format: ktx2::Format) -> bool {
+    // VK_EXT_texture_compression_astc_hdr: ASTC 4x4 SFLOAT through 12x12 SFLOAT.
+    (1000066000..=1000066013).contains(&format.value())
+}
+
+/// The usage to encode with for `format`. A plain color texture with an
+/// SFLOAT target encodes as HDR; every other combination keeps its usage.
+fn effective_usage(usage: AstcencUsage, format: ktx2::Format) -> AstcencUsage {
+    match usage {
+        AstcencUsage::Color if is_sfloat(format) => AstcencUsage::HdrRgb,
+        usage => usage,
+    }
+}
+
+fn is_hdr(usage: AstcencUsage) -> bool {
+    matches!(usage, AstcencUsage::HdrRgb | AstcencUsage::HdrRgba)
+}
+
 pub struct AstcencEncoder;
+
+impl AstcencEncoder {
+    /// Reject settings that can't produce a usable `format` texture. The
+    /// pipeline calls this before converting any pixels, and `compress`
+    /// calls it again for direct callers.
+    pub fn validate(format: ktx2::Format, settings: &AstcencSettings) -> Result<()> {
+        let usage = effective_usage(settings.usage, format);
+        if is_hdr(usage) && !is_sfloat(format) {
+            return Err(crate::error::Error::UnsupportedConversion(format!(
+                "astcenc usage {usage:?} writes HDR blocks, which need an ASTC SFLOAT \
+                 format such as astc_4x4_hdr; in {format:?} they can render as solid magenta"
+            )));
+        }
+        if !is_hdr(usage) && is_sfloat(format) {
+            // Legal ASTC, but the file is no better than the UNORM format
+            // and only loads on GPUs with ASTC HDR support.
+            let ldr = format
+                .block_size()
+                .map_or_else(String::new, |(w, h)| format!(" such as astc_{w}x{h}"));
+            return Err(crate::error::Error::UnsupportedConversion(format!(
+                "astcenc usage {usage:?} is for LDR data; use an LDR ASTC format{ldr} \
+                 instead of {format:?}, which only loads on GPUs with ASTC HDR support"
+            )));
+        }
+        if is_hdr(usage) && settings.decode_unorm8 {
+            return Err(crate::error::Error::UnsupportedConversion(format!(
+                "astcenc decode_unorm8 only applies to LDR textures, but {format:?} with \
+                 usage {:?} encodes HDR; turn decode_unorm8 off",
+                settings.usage
+            )));
+        }
+        Ok(())
+    }
+}
 
 impl Encoder for AstcencEncoder {
     type Settings = AstcencSettings;
@@ -164,10 +243,11 @@ impl Encoder for AstcencEncoder {
         SUPPORTED_FORMATS
     }
 
-    fn required_input_format(_format: ktx2::Format, settings: &AstcencSettings) -> ktx2::Format {
-        match settings.usage {
-            AstcencUsage::HdrRgb | AstcencUsage::HdrRgba => ktx2::Format::R16G16B16A16_SFLOAT,
-            _ => ktx2::Format::R8G8B8A8_UNORM,
+    fn required_input_format(format: ktx2::Format, settings: &AstcencSettings) -> ktx2::Format {
+        if is_hdr(effective_usage(settings.usage, format)) {
+            ktx2::Format::R16G16B16A16_SFLOAT
+        } else {
+            ktx2::Format::R8G8B8A8_UNORM
         }
     }
 
@@ -188,11 +268,14 @@ impl Encoder for AstcencEncoder {
         // rather than risking overflow there.
         check_i32_dims(surface.width, surface.height)?;
 
-        let profile = profile_for(settings.usage, color_space);
+        Self::validate(format, settings)?;
+        let usage = effective_usage(settings.usage, format);
+
+        let profile = profile_for(usage, color_space);
         let preset = settings.preset.unwrap_or_else(|| default_preset(quality));
-        let flags = flags_for(settings);
-        let swizzle = swizzle_for(settings.usage);
-        let data_type = data_type_for(settings.usage);
+        let flags = flags_for(usage, settings);
+        let swizzle = swizzle_for(usage);
+        let data_type = data_type_for(usage);
 
         let mut config = astc::config_init(
             profile,
@@ -270,12 +353,12 @@ fn profile_for(usage: AstcencUsage, color_space: ColorSpace) -> astc::Profile {
     }
 }
 
-fn flags_for(settings: &AstcencSettings) -> astc::Flags {
+fn flags_for(usage: AstcencUsage, settings: &AstcencSettings) -> astc::Flags {
     // SELF_DECOMPRESS_ONLY is a pure compression-side optimization (smaller
     // lookup tables, faster context creation) — safe to always set because
     // ctt never decompresses through this codec instance.
     let mut flags = astc::Flags::SELF_DECOMPRESS_ONLY;
-    match settings.usage {
+    match usage {
         AstcencUsage::NormalMap { .. } => flags |= astc::Flags::MAP_NORMAL,
         AstcencUsage::Rgbm => flags |= astc::Flags::MAP_RGBM,
         _ => {}
@@ -462,6 +545,217 @@ mod tests {
         )
         .unwrap();
         assert_eq!(a, b, "padded-stride encode must match tight encode");
+    }
+
+    const HDR_DESC: FormatDesc = FormatDesc {
+        format: ktx2::Format::R16G16B16A16_SFLOAT,
+        color_space: ColorSpace::Linear,
+        alpha: AlphaMode::Opaque,
+    };
+
+    /// RGBA16F pixels whose RGB climbs smoothly from 0.05 to ~200: well
+    /// past the 1.0 that LDR blocks can store.
+    fn hdr_pixels(width: u32, height: u32) -> Vec<[f32; 4]> {
+        (0..height)
+            .flat_map(|y| {
+                (0..width).map(move |x| {
+                    let t = (x + y * width) as f32 / (width * height - 1) as f32;
+                    let v = 0.05 * 4000f32.powf(t);
+                    [v, v * 0.5, v * 0.25, 1.0]
+                })
+            })
+            .collect()
+    }
+
+    fn f16_surface(pixels: &[[f32; 4]], width: u32, height: u32) -> Surface {
+        let data = pixels
+            .iter()
+            .flatten()
+            .flat_map(|&c| half::f16::from_f32(c).to_le_bytes())
+            .collect();
+        Surface {
+            data,
+            width,
+            height,
+            depth: 1,
+            stride: width * 8,
+            slice_stride: 0,
+        }
+    }
+
+    /// Decode ASTC blocks to RGBA f32 with astcenc's own decoder.
+    fn decode_hdr(blocks: &[u8], width: u32, height: u32) -> Vec<[f32; 4]> {
+        let config = astc::config_init(
+            astc::Profile::HdrRgbLdrA,
+            4,
+            4,
+            1,
+            astc::Preset::Medium,
+            astc::Flags::DECOMPRESS_ONLY,
+        )
+        .unwrap();
+        let mut ctx = astc::Context::new(&config).unwrap();
+        let mut out = vec![[0f32; 4]; (width * height) as usize];
+        let mut data_ptr = out.as_mut_ptr() as *mut std::ffi::c_void;
+        let mut img = astc::bindings::astcenc_image {
+            dim_x: width,
+            dim_y: height,
+            dim_z: 1,
+            data_type: astc::bindings::astcenc_type_ASTCENC_TYPE_F32,
+            data: &mut data_ptr,
+        };
+        ctx.decompress(blocks, &mut img, astc::Swizzle::IDENTITY)
+            .unwrap();
+        out
+    }
+
+    /// RMS error between `want` and `got` RGB, in stops (log2 units).
+    fn rms_log2_error(want: &[[f32; 4]], got: &[[f32; 4]]) -> f32 {
+        let sum: f32 = want
+            .iter()
+            .zip(got)
+            .flat_map(|(w, g)| (0..3).map(move |c| (g[c].max(1e-4).log2() - w[c].log2()).powi(2)))
+            .sum();
+        (sum / (want.len() * 3) as f32).sqrt()
+    }
+
+    /// Both HDR usages (`Color` promoted to `HdrRgb`, and `HdrRgba`) keep
+    /// values far above 1.0 through an SFLOAT target.
+    #[test]
+    fn sfloat_target_round_trips_hdr() {
+        let (width, height) = (16, 16);
+        let pixels = hdr_pixels(width, height);
+        let surface = f16_surface(&pixels, width, height);
+        let format = ktx2::Format::ASTC_4x4_SFLOAT_BLOCK;
+
+        for usage in [AstcencUsage::Color, AstcencUsage::HdrRgba] {
+            let settings = AstcencSettings {
+                usage,
+                ..Default::default()
+            };
+            assert_eq!(
+                AstcencEncoder::required_input_format(format, &settings),
+                ktx2::Format::R16G16B16A16_SFLOAT,
+                "{usage:?}"
+            );
+
+            let blocks = AstcencEncoder::compress(
+                surface.as_ref(),
+                HDR_DESC,
+                format,
+                Quality::Fast,
+                &settings,
+            )
+            .unwrap();
+            let decoded = decode_hdr(&blocks, width, height);
+
+            // Loose bounds: astcenc's output differs slightly between SIMD
+            // backends. A clamped or LDR encode is off by several stops.
+            let rms = rms_log2_error(&pixels, &decoded);
+            assert!(rms < 0.1, "{usage:?}: RMS error {rms} stops");
+            assert!(
+                decoded.iter().any(|p| p[0] > 100.0),
+                "{usage:?}: HDR range was clamped"
+            );
+        }
+    }
+
+    #[test]
+    fn hdr_usage_rejects_ldr_target() {
+        let surface = f16_surface(&hdr_pixels(4, 4), 4, 4);
+        for format in [
+            ktx2::Format::ASTC_4x4_UNORM_BLOCK,
+            ktx2::Format::ASTC_4x4_SRGB_BLOCK,
+        ] {
+            for usage in [AstcencUsage::HdrRgb, AstcencUsage::HdrRgba] {
+                let err = AstcencEncoder::compress(
+                    surface.as_ref(),
+                    HDR_DESC,
+                    format,
+                    Quality::Fast,
+                    &AstcencSettings {
+                        usage,
+                        ..Default::default()
+                    },
+                )
+                .unwrap_err();
+                assert!(
+                    matches!(err, crate::error::Error::UnsupportedConversion(_)),
+                    "{format:?}/{usage:?}: {err:?}"
+                );
+            }
+        }
+    }
+
+    /// The pipeline asks for the required input format before loading or
+    /// mipmapping anything, so bad settings must fail there.
+    #[test]
+    fn pipeline_rejects_hdr_usage_before_pixel_work() {
+        let step = crate::processing::encode::EncoderStep {
+            target_format: ktx2::Format::ASTC_4x4_UNORM_BLOCK,
+            quality: Quality::Fast,
+            encoder: crate::encoders::Encoder::Astcenc(AstcencSettings {
+                usage: AstcencUsage::HdrRgb,
+                ..Default::default()
+            }),
+        };
+        assert!(matches!(
+            step.required_input(),
+            Err(crate::error::Error::UnsupportedConversion(_))
+        ));
+    }
+
+    #[test]
+    fn hdr_rejects_decode_unorm8() {
+        let format = ktx2::Format::ASTC_4x4_SFLOAT_BLOCK;
+        for usage in [
+            AstcencUsage::Color,
+            AstcencUsage::HdrRgb,
+            AstcencUsage::HdrRgba,
+        ] {
+            let settings = AstcencSettings {
+                usage,
+                decode_unorm8: true,
+                ..Default::default()
+            };
+            let err = AstcencEncoder::validate(format, &settings).unwrap_err();
+            assert!(
+                matches!(err, crate::error::Error::UnsupportedConversion(_)),
+                "{usage:?}: {err:?}"
+            );
+        }
+        // LDR targets still accept it.
+        let ldr = AstcencSettings {
+            decode_unorm8: true,
+            ..Default::default()
+        };
+        AstcencEncoder::validate(ktx2::Format::ASTC_4x4_UNORM_BLOCK, &ldr).unwrap();
+    }
+
+    /// LDR usages in an SFLOAT texture would only narrow which GPUs can load
+    /// it, so they are rejected and pointed at the matching LDR format.
+    #[test]
+    fn ldr_usages_reject_sfloat_target() {
+        for usage in [
+            AstcencUsage::NormalMap {
+                swizzle: NormalSwizzle::AstcDefault,
+            },
+            AstcencUsage::SingleChannel,
+            AstcencUsage::TwoChannel,
+            AstcencUsage::Rgbm,
+        ] {
+            let settings = AstcencSettings {
+                usage,
+                ..Default::default()
+            };
+            let err = AstcencEncoder::validate(ktx2::Format::ASTC_6x5_SFLOAT_BLOCK, &settings)
+                .unwrap_err();
+            assert!(
+                matches!(&err, crate::error::Error::UnsupportedConversion(m) if m.contains("astc_6x5")),
+                "{usage:?}: {err:?}"
+            );
+            AstcencEncoder::validate(ktx2::Format::ASTC_6x5_UNORM_BLOCK, &settings).unwrap();
+        }
     }
 
     #[cfg(feature = "rayon")]

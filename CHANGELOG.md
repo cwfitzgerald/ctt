@@ -28,9 +28,13 @@ Per Keep a Changelog there are 6 main categories of changes:
 ### Added
 
 - Mipmaps that keep an alpha-tested texture's coverage, so foliage no longer thins out and vanishes with distance. Each generated level's alpha is scaled so the share of it passing the cutoff, sampled bilinearly, matches the base level's (Castaño, "Computing Alpha Mipmaps"). Supplied levels are kept as they are. Rust: `ConvertSettings::mipmap_alpha_cutoff`. CLI: `--mipmap-alpha-cutoff`. C API: `ctt_convert_settings::mipmap_alpha_cutoff`. @stuartparmenter
+- ASTC HDR output in the `ASTC_*_SFLOAT_BLOCK` formats. astcenc encodes them with fp16 input, and the default `Color` usage uses the HDR RGB + LDR alpha profile for them. CLI: `astc_WxH_hdr`, for example `astc_4x4_hdr`. C API: `CTT_FORMAT_ASTC_*_SFLOAT_BLOCK`. @JMS55
+- A warning when an image with values above 1.0 is converted to a format that can't store them, such as `bc7` or `astc_4x4` from an `.exr`. The values are clamped to 1.0, which usually means an HDR format was meant. @JMS55
 
 ### Changed
 
+- **BREAKING:** astcenc: the `HdrRgb` and `HdrRgba` usages need an `ASTC_*_SFLOAT_BLOCK` target, and return an error with a UNORM or sRGB target. They used to write HDR blocks into UNORM and sRGB formats, which render as solid magenta on GPUs without ASTC HDR support. The other usages (`NormalMap`, `SingleChannel`, `TwoChannel`, `Rgbm`) return an error with an `ASTC_*_SFLOAT_BLOCK` target, which would only limit which GPUs can load the texture. `decode_unorm8` with an HDR usage also returns an error before any pixels are converted, instead of failing inside astcenc. @JMS55
+- **BREAKING:** Float target formats (`BC6H`, ASTC SFLOAT, `R16G16B16A16_SFLOAT` and the other SFLOAT and UFLOAT formats) always hold linear values. sRGB input is converted to linear for them, and asking for sRGB output with one is an error. Before, sRGB input such as a PNG was stored sRGB-encoded in these formats, which GPUs read as linear, so it rendered washed out. @JMS55
 - **BREAKING:** `ConvertSettings` has a new `mipmap_alpha_cutoff` field. Struct literals that list every field need `mipmap_alpha_cutoff: None` or `..Default::default()`. @stuartparmenter
 
 ### Fixed

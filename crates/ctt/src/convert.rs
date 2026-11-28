@@ -1,5 +1,7 @@
 //! High-level conversion entry point.
 
+use std::sync::atomic::{AtomicBool, Ordering};
+
 use crate::alpha::AlphaMode;
 use crate::encoders::Quality;
 use crate::error::{Error, Result};
@@ -67,7 +69,11 @@ pub struct ConvertSettings {
     /// Encoder quality preset for compressed targets. Ignored for
     /// uncompressed output.
     pub quality: Quality,
-    /// Override the output color space. `None` keeps the input's color space.
+    /// Override the output color space. `None` keeps the input's color space,
+    /// except for a float target format (such as `BC6H_UFLOAT_BLOCK`,
+    /// `ASTC_4x4_SFLOAT_BLOCK` or `R16G16B16A16_SFLOAT`): those always hold
+    /// linear values, so sRGB input is converted to linear, and `Srgb` here
+    /// is an error.
     ///
     /// Limits which target formats are valid. See [`ConvertSettings::format`].
     pub output_color_space: Option<ColorSpace>,
@@ -121,6 +127,25 @@ pub fn convert(image: ImageRef<'_>, mut settings: ConvertSettings) -> Result<Pip
     let input_fmt = image.desc.format;
     let input_cs = image.desc.color_space;
     let input_alpha = image.desc.alpha;
+
+    // Float formats hold linear values: GPUs never sRGB-decode them. Convert
+    // sRGB input to linear for them, rather than storing sRGB-encoded values
+    // that render washed out.
+    let explicit_target = match &settings.format {
+        Some(TargetFormat::Compressed { format, .. } | TargetFormat::Uncompressed(format)) => {
+            Some(*format)
+        }
+        None => None,
+    };
+    if let Some(target) = explicit_target.filter(|&f| crate::vk_format::is_float_color(f)) {
+        if settings.output_color_space == Some(ColorSpace::Srgb) {
+            return Err(Error::UnsupportedConversion(format!(
+                "{target:?} is a float format, which always holds linear values; \
+                 output color space srgb is not possible"
+            )));
+        }
+        settings.output_color_space = Some(ColorSpace::Linear);
+    }
 
     let target_cs = settings.output_color_space.unwrap_or(input_cs);
     let target_alpha = settings.output_alpha.unwrap_or(input_alpha);
@@ -264,6 +289,12 @@ fn alpha_cutoff(
     Ok(Some(cutoff))
 }
 
+/// Whether any channel of `buf` is above 1.0, the most a UNORM or LDR
+/// compressed format can store.
+fn exceeds_ldr_range(buf: &Buffer<f32>) -> bool {
+    buf.pixels.iter().flatten().any(|&v| v > 1.0)
+}
+
 /// Whether to warn that a meaningful straight alpha is being dropped.
 ///
 /// The warning fires only when the source has alpha, the final output format
@@ -366,6 +397,20 @@ fn convert_f32(
         ..target_desc
     };
 
+    // A float source going into a non-float target loses every value above
+    // 1.0. That is usually a forgotten HDR format, so note whether it happens.
+    let final_fmt = encoder_step
+        .as_ref()
+        .map_or(target_fmt, |step| step.target_format);
+    let check_hdr_clamp = crate::vk_format::is_float_color(input_desc.format)
+        && !crate::vk_format::is_float_color(final_fmt);
+    let hdr_clamped = AtomicBool::new(false);
+    let note_hdr = |buf: &Buffer<f32>| {
+        if check_hdr_clamp && exceeds_ldr_range(buf) {
+            hdr_clamped.store(true, Ordering::Relaxed);
+        }
+    };
+
     let out_layers = if settings.mipmap {
         // Layers run in parallel; within a layer, loads and stores of
         // individual mips run in parallel around the inherently serial
@@ -385,6 +430,7 @@ fn convert_f32(
                     if let Some(sw) = &settings.swizzle {
                         swizzle::apply_f32(&mut buf, sw);
                     }
+                    note_hdr(&buf);
                     Ok(buf)
                 },
             )?;
@@ -406,9 +452,18 @@ fn convert_f32(
             if let Some(sw) = &settings.swizzle {
                 swizzle::apply_f32(&mut buf, sw);
             }
+            note_hdr(&buf);
             store::store_f32(buf, store_desc)
         })?
     };
+
+    if hdr_clamped.load(Ordering::Relaxed) {
+        log::warn!(
+            "{:?} has values above 1.0, which {final_fmt:?} clamps to 1.0. For HDR output use \
+             a float format such as bc6h, astc_4x4_hdr or rgba16float.",
+            input_desc.format
+        );
+    }
 
     let processed = Image {
         surfaces: out_layers,
@@ -1350,6 +1405,80 @@ mod tests {
         };
         assert_eq!(out.desc.format, ktx2::Format::R8G8B8A8_UNORM);
         assert_eq!(out.desc.color_space, ColorSpace::Linear);
+    }
+
+    /// sRGB input to a float target is converted to linear: float formats
+    /// are never sRGB-decoded by the GPU.
+    #[test]
+    fn float_target_linearizes_srgb_input() {
+        let image = make_image(
+            vec![188u8, 188, 188, 255],
+            1,
+            1,
+            ktx2::Format::R8G8B8A8_SRGB,
+            ColorSpace::Srgb,
+            AlphaMode::Opaque,
+        );
+        let out = convert(
+            image.to_ref(),
+            ConvertSettings {
+                format: Some(TargetFormat::Uncompressed(
+                    ktx2::Format::R32G32B32A32_SFLOAT,
+                )),
+                container: Container::Raw,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let PipelineOutput::Raw(out) = out else {
+            panic!("expected Raw output");
+        };
+        assert_eq!(out.desc.color_space, ColorSpace::Linear);
+        let r = f32::from_le_bytes(out.surfaces[0][0].data[0..4].try_into().unwrap());
+        // sRGB 188/255 is linear ~0.5.
+        assert!((r - 0.5).abs() < 0.01, "expected linear ~0.5, got {r}");
+    }
+
+    #[test]
+    fn float_target_rejects_srgb_output() {
+        for format in [
+            TargetFormat::Uncompressed(ktx2::Format::R16G16B16A16_SFLOAT),
+            TargetFormat::Compressed {
+                format: ktx2::Format::BC6H_UFLOAT_BLOCK,
+                encoder: crate::encoders::Encoder::Auto,
+            },
+        ] {
+            let image = make_image(
+                vec![128u8; 4],
+                1,
+                1,
+                ktx2::Format::R8G8B8A8_UNORM,
+                ColorSpace::Linear,
+                AlphaMode::Opaque,
+            );
+            let err = convert(
+                image.to_ref(),
+                ConvertSettings {
+                    format: Some(format),
+                    container: Container::Raw,
+                    output_color_space: Some(ColorSpace::Srgb),
+                    ..Default::default()
+                },
+            )
+            .unwrap_err();
+            assert!(matches!(err, Error::UnsupportedConversion(_)), "{err:?}");
+        }
+    }
+
+    #[test]
+    fn exceeds_ldr_range_detects_hdr_values() {
+        let buf = |v: f32| Buffer {
+            pixels: vec![[0.5, v, 0.25, 1.0]],
+            width: 1,
+            height: 1,
+        };
+        assert!(!exceeds_ldr_range(&buf(1.0)));
+        assert!(exceeds_ldr_range(&buf(1.5)));
     }
 
     #[test]

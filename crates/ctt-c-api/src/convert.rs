@@ -262,6 +262,7 @@ pub enum AstcencNormalSwizzle {
 #[derive(Debug, Clone, Copy)]
 pub enum AstcencUsage {
     /// Generic color (LDR or LDR sRGB based on the image's color space).
+    /// Encodes as `HdrRgb` for an ASTC SFLOAT target.
     Color,
     /// 2-channel tangent-space normal map. Sets `MAP_NORMAL`.
     NormalMap(AstcencNormalSwizzle),
@@ -269,9 +270,9 @@ pub enum AstcencUsage {
     SingleChannel,
     /// Two-channel mask (e.g. metallic+roughness); only red and green are encoded.
     TwoChannel,
-    /// HDR RGB + LDR alpha. Requires fp16 input.
+    /// HDR RGB + LDR alpha. Requires fp16 input and an ASTC SFLOAT target.
     HdrRgb,
-    /// All-HDR RGBA. Requires fp16 input.
+    /// All-HDR RGBA. Requires fp16 input and an ASTC SFLOAT target.
     HdrRgba,
     /// HDR data preprocessed into LDR RGBM form. Sets `MAP_RGBM`.
     ///
@@ -368,8 +369,9 @@ pub struct AstcencSettings {
     ///
     /// Set this when the texture will be sampled as a unorm8 texel format
     /// at runtime — the common case for color textures on mobile and most
-    /// modern desktop pipelines. Leave it off for HDR content sampled as
-    /// fp16. LDR sRGB always decodes via unorm8 regardless, so this flag
+    /// modern desktop pipelines. Leave it off for HDR usages, including
+    /// `Color` with an ASTC SFLOAT target: conversion returns an error.
+    /// LDR sRGB always decodes via unorm8 regardless, so this flag
     /// is a no-op for sRGB color usages.
     pub decode_unorm8: bool,
     /// Custom per-channel error weights. Higher values spend more bits on

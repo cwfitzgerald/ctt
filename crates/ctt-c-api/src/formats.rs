@@ -133,6 +133,22 @@ pub const CTT_FORMAT_ASTC_12X10_SRGB_BLOCK: Format = 182;
 pub const CTT_FORMAT_ASTC_12X12_UNORM_BLOCK: Format = 183;
 pub const CTT_FORMAT_ASTC_12X12_SRGB_BLOCK: Format = 184;
 
+// ASTC HDR (VK_EXT_texture_compression_astc_hdr)
+pub const CTT_FORMAT_ASTC_4X4_SFLOAT_BLOCK: Format = 1000066000;
+pub const CTT_FORMAT_ASTC_5X4_SFLOAT_BLOCK: Format = 1000066001;
+pub const CTT_FORMAT_ASTC_5X5_SFLOAT_BLOCK: Format = 1000066002;
+pub const CTT_FORMAT_ASTC_6X5_SFLOAT_BLOCK: Format = 1000066003;
+pub const CTT_FORMAT_ASTC_6X6_SFLOAT_BLOCK: Format = 1000066004;
+pub const CTT_FORMAT_ASTC_8X5_SFLOAT_BLOCK: Format = 1000066005;
+pub const CTT_FORMAT_ASTC_8X6_SFLOAT_BLOCK: Format = 1000066006;
+pub const CTT_FORMAT_ASTC_8X8_SFLOAT_BLOCK: Format = 1000066007;
+pub const CTT_FORMAT_ASTC_10X5_SFLOAT_BLOCK: Format = 1000066008;
+pub const CTT_FORMAT_ASTC_10X6_SFLOAT_BLOCK: Format = 1000066009;
+pub const CTT_FORMAT_ASTC_10X8_SFLOAT_BLOCK: Format = 1000066010;
+pub const CTT_FORMAT_ASTC_10X10_SFLOAT_BLOCK: Format = 1000066011;
+pub const CTT_FORMAT_ASTC_12X10_SFLOAT_BLOCK: Format = 1000066012;
+pub const CTT_FORMAT_ASTC_12X12_SFLOAT_BLOCK: Format = 1000066013;
+
 /// Convert a [`Format`] to `ctt::Format` if it is a known/valid value.
 /// Returns `None` for `0` (VK_FORMAT_UNDEFINED).
 pub(crate) fn to_ctt_format(f: Format) -> Option<ctt::Format> {

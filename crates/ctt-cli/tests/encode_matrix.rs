@@ -133,6 +133,16 @@ fn encode_astc_4x4() {
     assert_encode("astc_4x4", F::ASTC_4x4_UNORM_BLOCK);
 }
 
+#[test]
+fn encode_astc_4x4_hdr() {
+    assert_encode("astc_4x4_hdr", F::ASTC_4x4_SFLOAT_BLOCK);
+}
+
+#[test]
+fn encode_astcenc_astc_8x8_hdr() {
+    assert_encode("astcenc_astc_8x8_hdr", F::ASTC_8x8_SFLOAT_BLOCK);
+}
+
 // --- Uncompressed `-f` name spellings (test f) ---
 
 #[test]
